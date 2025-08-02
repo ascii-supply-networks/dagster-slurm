@@ -1,0 +1,26 @@
+[project]
+name = "dagster-slurm-workspace"
+version = "0.0.1"
+description = "Workspace root - not published"
+readme = "README.md"
+authors = [
+    { name = "geoheil", email = "georg.heiler@ascii.ac.at" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false 
+
+[tool.uv.workspace]
+members = ["projects/*"]
+
+[build-system]
+requires = ["uv_build>=0.7.20,<0.8.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyrefly>=0.23.1",
+    "ruff>=0.12.3",
+]

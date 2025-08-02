@@ -1,0 +1,21 @@
+[project]
+name = "dagster-slurm"
+version = "0.0.1"
+description = "dagster integration with slurm"
+readme = "README.md"
+authors = [
+    { name = "geoheil", email = "georg.heiler@ascii.ac.at" }
+]
+requires-python = ">=3.12"
+dependencies = [
+]
+
+[tool.uv.sources]
+feray = { workspace = true }    
+
+[tool.uv.build-backend]
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.7.20,<0.8.0"]
+build-backend = "uv_build"
