@@ -14,5 +14,3 @@ We are looking for more hands to join in - or review the task list so that we ca
 
 - Tasks for implementation: https://github.com/orgs/ascii-supply-networks/projects/4
 - Project lives here https://github.com/ascii-supply-networks/dagster-slurm
-
-
