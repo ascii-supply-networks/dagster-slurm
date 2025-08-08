@@ -1613,7 +1613,7 @@ packages:
 - pypi: ./
   name: dagster-slurm-example
   version: 1.0.0
-  sha256: 37a7c0a0946ac2b8c3860febe1048a9249fd8ebf2b683385b0e7974a5b5b1943
+  sha256: 444639f70cc6561dfa1c62b91e46b98a31cd740b5e493ed0cd8f720f2eaa2957
   requires_python: '>=3.12,<3.14'
   editable: true
 - pypi: https://files.pythonhosted.org/packages/44/d5/c6d851adab60a3042917994565e942d0f3e0aa2ef4bd60a1320bab0f5efe/dagster_webserver-1.11.5-py3-none-any.whl

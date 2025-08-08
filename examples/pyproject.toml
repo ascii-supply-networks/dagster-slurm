@@ -108,13 +108,13 @@ description = "Validate formatting and type check python files"
 cmd = "pixi run -e dev --frozen pytest -m 'not data' ."
 description = "Run only unit tests (excluding data tests)"
 
-#[tool.pixi.tasks.pre-commit-install]
-#cmd = "pre-commit install"
-#description = "install pre-commit hooks"
+[tool.pixi.tasks.pre-commit-install]
+cmd = "pre-commit install"
+description = "install pre-commit hooks"
 
-#[tool.pixi.tasks.pre-commit-run]
-#cmd = "pre-commit run --all-files"
-#description = "run pre-commit on all files"
+[tool.pixi.tasks.pre-commit-run]
+cmd = "pre-commit run --all-files"
+description = "run pre-commit on all files"
 
 [tool.dagster]
 module_name = "dagster_slurm_example"
@@ -147,20 +147,11 @@ filterwarnings = [
   "ignore::DeprecationWarning:dagster.*",
   "ignore::DeprecationWarning:pydantic.*",
 ]
-markers = [
-  "data: tests using real input data",
-]
+markers = ["data: tests using real input data"]
 
 
 [tool.pyrefly]
-project-includes = [
-    "dagster_slurm_example",
-]
-project-excludes = [
-    "dagster_slurm_example/build",
-]
-search-path = [
-    "dagster_slurm_example",
-]
+project-includes = ["dagster_slurm_example"]
+project-excludes = ["dagster_slurm_example/build"]
+search-path = ["dagster_slurm_example"]
 python-version = "3.13.5"
-
