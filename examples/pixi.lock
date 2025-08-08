@@ -1607,7 +1607,7 @@ packages:
 - pypi: ../projects/dagster-slurm
   name: dagster-slurm
   version: 0.0.1
-  sha256: 57f2fa417f23c4a36d79824195debc5b7603c1378c8a4577a0fda19e5853c54a
+  sha256: 3659be423bb0d681a9efe00c8e61f1e806b2c07ed236afdb0f3d948d5eb8e0cf
   requires_python: '>=3.12'
   editable: true
 - pypi: ./
