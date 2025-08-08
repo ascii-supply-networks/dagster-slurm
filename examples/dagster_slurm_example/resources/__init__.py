@@ -2,14 +2,16 @@ import os
 
 import dagster as dg
 
-RESOURCES_LOCAL = {}
+pipes_subprocess_client = dg.PipesSubprocessClient()
 
-RESOURCES_STAGING = {}
+RESOURCES_LOCAL = {"pipes_subprocess_client": pipes_subprocess_client}
 
-RESOURCES_PROD = {}
+RESOURCES_STAGING = {"pipes_subprocess_client": pipes_subprocess_client}
+
+RESOURCES_PROD = {"pipes_subprocess_client": pipes_subprocess_client}
 resource_defs_by_deployment_name = {
-    "dev-local": RESOURCES_LOCAL,
-    "staging-local-run-cluster": RESOURCES_STAGING,
+    "dev": RESOURCES_LOCAL,
+    "staging": RESOURCES_STAGING,
     "prod": RESOURCES_PROD,
 }
 
