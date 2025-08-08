@@ -1,10 +1,14 @@
 import os
 
 import dagster as dg
+from dagster_ray import LocalRay
 
 pipes_subprocess_client = dg.PipesSubprocessClient()
 
-RESOURCES_LOCAL = {"pipes_subprocess_client": pipes_subprocess_client}
+RESOURCES_LOCAL = {
+    "pipes_subprocess_client": pipes_subprocess_client,
+    "ray_cluster": LocalRay(ray_init_options={"ignore_reinit_error": True}),
+}
 
 RESOURCES_STAGING = {"pipes_subprocess_client": pipes_subprocess_client}
 

@@ -6,7 +6,8 @@ authors = [{ name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" }]
 requires-python = ">=3.12,<3.14"
 
 [tool.pixi.project]
-platforms = ["linux-64", "osx-arm64", "osx-64", "win-64", "linux-aarch64"]
+# not supported  "win-64", due to pip ray
+platforms = ["linux-64", "osx-arm64", "osx-64", "linux-aarch64"]
 channels = ["conda-forge"]
 
 [build-system]
@@ -56,6 +57,7 @@ dagster-webserver = ">=1.11.0,<1.12"
 [tool.pixi.feature.my-infrastructure.dependencies]
 [tool.pixi.feature.my-infrastructure.pypi-dependencies]
 dagster-slurm-example = { path = ".", editable = true }
+dagster-ray = ">=0.0.20,<1"
 
 [tool.pixi.feature.submission.dependencies]
 [tool.pixi.feature.submission.pypi-dependencies]
@@ -64,6 +66,7 @@ dagster-slurm-example = { path = ".", editable = true }
 pandas = ">=2.3.1,<3"
 dagster-pipes = "~=1.11.5"
 [tool.pixi.feature.cluster.pypi-dependencies]
+ray = { version = "~=2.48.0", extras = ["data", "default"] }
 # During live development
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
 # when consuming the released package

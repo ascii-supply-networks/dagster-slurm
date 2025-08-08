@@ -26,7 +26,8 @@ dev = [
 ]
 
 [tool.pixi.project]
-platforms = ["linux-64", "osx-arm64", "osx-64", "win-64", "linux-aarch64"]
+# not supported  "win-64", due to pip ray
+platforms = ["linux-64", "osx-arm64", "osx-64", "linux-aarch64"]
 channels = ["conda-forge"]
 
 [tool.pixi.environments]

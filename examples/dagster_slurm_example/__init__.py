@@ -9,7 +9,8 @@ warnings.filterwarnings("ignore", category=dg.PreviewWarning)
 from pathlib import Path
 
 from dagster_slurm_example import defs as example_defs
-from dagster_slurm_example.defs.shared import example_defs_prefix
+from dagster_slurm_example.defs import ray as ray_defs
+from dagster_slurm_example.defs import shell as shell_defs
 from dagster_slurm_example.resources import get_resources_for_deployment
 
 
@@ -20,10 +21,16 @@ def defs():
     all_assets = dg.with_source_code_references(
         [
             *dg.load_assets_from_package_module(
-                example_defs,
+                shell_defs,
                 automation_condition=dg.AutomationCondition.eager()
                 | dg.AutomationCondition.on_missing(),
-                group_name=example_defs_prefix,
+                group_name="shell_example",
+            ),
+            *dg.load_assets_from_package_module(
+                ray_defs,
+                automation_condition=dg.AutomationCondition.eager()
+                | dg.AutomationCondition.on_missing(),
+                group_name="ray_example",
             ),
         ]
     )
