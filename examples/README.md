@@ -15,6 +15,8 @@
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm/examples
 
+pixi shell -e dev
+ray start --head --port=6379
 make start
 ```
 

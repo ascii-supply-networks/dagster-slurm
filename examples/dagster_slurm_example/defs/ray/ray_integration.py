@@ -1,5 +1,5 @@
 import dagster as dg
-from dagster_ray import RayResource
+from dagster_ray import PipesRayJobClient, RayResource
 
 
 @dg.asset
@@ -39,3 +39,17 @@ def ray_minithing(  # noqa:C901
             "num_failed": len(failed_tasks),
         }
     )
+
+
+@dg.asset
+def my_external_asset(
+    context: dg.AssetExecutionContext, pipes_ray_job_client: PipesRayJobClient
+):
+    fp = dg.file_relative_path(__file__, "ray_external.py")
+    return pipes_ray_job_client.run(
+        context=context,
+        submit_job_params={
+            "entrypoint": f"python {fp}",
+        },
+        extras={"param": "value"},
+    ).get_results()
