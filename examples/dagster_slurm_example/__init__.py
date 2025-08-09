@@ -2,9 +2,10 @@
 import warnings
 
 import dagster as dg
+from dagster._utils import warnings as dagster_warnings
 
-warnings.filterwarnings("ignore", category=dg._utils.warnings.BetaWarning)
-warnings.filterwarnings("ignore", category=dg.PreviewWarning)
+warnings.filterwarnings("ignore", category=dagster_warnings.BetaWarning)
+warnings.filterwarnings("ignore", category=dagster_warnings.PreviewWarning)
 
 from pathlib import Path
 

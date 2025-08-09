@@ -10,9 +10,11 @@ def main():
     context.log.info(f"Running subprocess with extras: {context.extras}")
 
     orders_df = pd.DataFrame({"order_id": [1, 2], "item_id": [432, 878]})
+    # has_no_nulls = orders_df[["item_id"]].notnull().all().item()
+    has_no_nulls = bool(orders_df["item_id"].notnull().all())
     context.report_asset_check(
         asset_key=f"{example_defs_prefix}/orders",
-        passed=orders_df[["item_id"]].notnull().all().item(),
+        passed=has_no_nulls,
         check_name="no_empty_order_check",
         severity="WARN",
     )

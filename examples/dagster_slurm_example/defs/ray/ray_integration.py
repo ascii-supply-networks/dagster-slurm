@@ -22,7 +22,7 @@ def ray_minithing(  # noqa:C901
     failed_tasks = []
 
     while futures:
-        ready, futures = ray.wait(futures, num_returns=1)
+        ready, futures = ray.wait(futures, num_returns=1)  # type: ignore[unexpected-keyword]
 
         for fut in ready:
             try:

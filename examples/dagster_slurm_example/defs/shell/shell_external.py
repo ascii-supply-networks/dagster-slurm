@@ -15,7 +15,7 @@ def main():
 
     orders_df = pd.DataFrame({"order_id": [1, 2], "item_id": [432, 878]})
     total_orders = len(orders_df)
-    total_items = orders_df["item_id"].nunique()
+    total_items = int(orders_df["item_id"].nunique())
 
     context.log.info(f"Total orders: {total_orders}, Total items: {total_items}")
 
