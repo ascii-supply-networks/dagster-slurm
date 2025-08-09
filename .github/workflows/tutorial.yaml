@@ -50,8 +50,6 @@ jobs:
         with:
             pixi-version: v0.50.2
             cache: true
-            # auth-host: prefix.dev
-            # auth-token: ${{ secrets.PREFIX_DEV_TOKEN }}
       - run: pixi run -e ci-basics --frozen fmt
 
       - run: pixi run -e dev --frozen lint
