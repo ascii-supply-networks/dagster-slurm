@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "geoheil", email = "georg.heiler@ascii.ac.at" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = []
 
 [tool.uv]

@@ -3,7 +3,7 @@ name = "dagster-slurm-example"
 version = "1.0.0"
 description = "Example project how to use dagster with slurm"
 authors = [{ name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" }]
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.12,<3.13"
 
 [tool.pixi.project]
 # not supported  "win-64", due to pip ray
