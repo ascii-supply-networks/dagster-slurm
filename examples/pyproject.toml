@@ -32,8 +32,15 @@ dev = { features = [
   "dagster-webserver",
   "submission",
   "cluster",
+  "cluster-dev",
   "ci-basics",
 ], solve-group = "dagster-slurm-example" }
+
+packaged-cluster = { features = [
+  "submission",
+  "cluster",
+  "cluster-prod",
+], solve-group = "dagster-slurm-example-cluster-submission" }
 
 [tool.pixi.feature.ci-basics.dependencies]
 yamllint = ">=1.35.1,<2"
@@ -67,9 +74,10 @@ pandas = ">=2.3.1,<3"
 dagster-pipes = "~=1.11.5"
 [tool.pixi.feature.cluster.pypi-dependencies]
 ray = { version = "~=2.48.0", extras = ["data", "default"] }
-# During live development
+
+[tool.pixi.feature.cluster-dev.pypi-dependencies]
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
-# when consuming the released package
+[tool.pixi.feature.cluster-prod.pypi-dependencies]
 # dagster-slurm = ">=0.0.1,<1"
 
 [tool.pixi.feature.secops.dependencies]
@@ -87,6 +95,11 @@ cmd = "pixi run -e dev --locked dagster dev"
 cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
+
+[tool.pixi.tasks.pack]
+# --ignore-pypi-non-wheel
+cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  pyproject.toml"
+description = "Start Pack dev environment"
 
 [tool.pixi.feature.secops.tasks.secrets-encrypt]
 cmd = "./scripts/encrypt_secrets.sh"
@@ -159,4 +172,4 @@ markers = ["data: tests using real input data"]
 project-includes = ["dagster_slurm_example"]
 project-excludes = ["dagster_slurm_example/build"]
 search-path = ["dagster_slurm_example"]
-python-version = "3.13.5"
+python-version = "3.12.11"
