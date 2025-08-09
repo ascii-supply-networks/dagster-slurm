@@ -1,16 +1,25 @@
 import os
 
 import dagster as dg
-from dagster_ray import LocalRay, PipesRayJobClient
-from ray.job_submission import JobSubmissionClient
+from dagster_ray import LocalRay
+
+from dagster_slurm_example.resources.lazy_local_ray import (
+    PipesRayJobClientLazyLocalResource,
+)
 
 pipes_subprocess_client = dg.PipesSubprocessClient()
-local_ray = LocalRay(ray_init_options={"ignore_reinit_error": True})
+local_ray = LocalRay(
+    ray_init_options={
+        "ignore_reinit_error": True,
+        "dashboard_host": "127.0.0.1",
+        "dashboard_port": 8265,
+    }
+)
 
 RESOURCES_LOCAL = {
     "pipes_subprocess_client": pipes_subprocess_client,
     "ray_cluster": local_ray,
-    "pipes_ray_job_client": PipesRayJobClient(client=JobSubmissionClient()),
+    "pipes_ray_job_client": PipesRayJobClientLazyLocalResource(ray_cluster=local_ray),
 }
 
 RESOURCES_STAGING = {"pipes_subprocess_client": pipes_subprocess_client}

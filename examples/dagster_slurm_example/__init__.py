@@ -19,8 +19,6 @@ from dagster_slurm_example.resources import get_resources_for_deployment
 def defs():
     resource_defs = get_resources_for_deployment()
 
-    print(f"🔧 Loading resources: {list(resource_defs.keys())}")
-
     all_assets = dg.with_source_code_references(
         [
             *dg.load_assets_from_package_module(
