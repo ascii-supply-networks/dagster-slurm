@@ -2092,7 +2092,7 @@ packages:
 - pypi: ./
   name: dagster-slurm-example
   version: 1.0.0
-  sha256: c8e3f865485be48b2d7918652f7bb7d84130b5536f64bcff330d52d841adfb5a
+  sha256: 8eccaab038aacb960d4bef959bfe9e9198eb7dd5a9a31f4cdb8688698425b891
   requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: https://files.pythonhosted.org/packages/44/d5/c6d851adab60a3042917994565e942d0f3e0aa2ef4bd60a1320bab0f5efe/dagster_webserver-1.11.5-py3-none-any.whl

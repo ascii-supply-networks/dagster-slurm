@@ -21,7 +21,6 @@ secops = { features = [
 opstooling = { features = [
   "opstooling",
 ], solve-group = "opstooling", no-default-feature = true }
-
 ci-basics = { features = [
   "ci-basics",
   "opstooling",
