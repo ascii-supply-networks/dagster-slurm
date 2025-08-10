@@ -11,18 +11,6 @@ on:
     paths:
       - 'projects/**'
   workflow_dispatch:
-    inputs:
-      release_type:
-        description: 'Release type'
-        required: true
-        default: 'prerelease'
-        type: choice
-        options:
-          - prerelease
-          - release
-          - patch
-          - minor
-          - major
 
 concurrency:
   group: library-main-${{ github.ref }}
@@ -217,28 +205,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
-          case "${{ github.event.inputs.release_type }}" in
-            "patch")
-              # Force patch version
-              SEMANTIC_RELEASE_VERSION_PATCH=true uv run semantic-release version
-              ;;
-            "minor") 
-              # Force minor version
-              SEMANTIC_RELEASE_VERSION_MINOR=true uv run semantic-release version
-              ;;
-            "major")
-              # Force major version  
-              SEMANTIC_RELEASE_VERSION_MAJOR=true uv run semantic-release version
-              ;;
-            "prerelease")
-              # Create prerelease
-              uv run semantic-release version --as-prerelease
-              ;;
-            "release")
-              # Let semantic-release decide based on commits
-              uv run semantic-release version
-              ;;
-          esac
+          uv run semantic-release version
+          
           git push origin main
           git push --tags
           uv run semantic-release publish
