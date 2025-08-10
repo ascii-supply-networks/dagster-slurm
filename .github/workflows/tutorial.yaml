@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   validation:
-    name: Validation
+    name: Validate tutorial
     runs-on: ubuntu-latest
     # TODO: Eventually specify a slurm cluster here for CI/CD via a (single) docker container so we can validate in CI/CD
     # services:
