@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.0-rc.4 (2025-08-10)
+
+### Bug Fixes
+
+- Update lockfile version
+  ([`f59d682`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f59d6826974013b352db339d4d3080ed24c284f8))
+
+
 ## v1.1.0-rc.3 (2025-08-10)
 
 ### Bug Fixes
