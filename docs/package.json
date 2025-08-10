@@ -6,7 +6,7 @@
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
     "build": "docusaurus build",
-    "build:api": "sphinx-build sphinx/source sphinx/build/markdown -b markdown && rm -rf ./docs/api && mv sphinx/build/markdown ./docs/api",
+    "build:api": "sphinx-build sphinx/source sphinx/build/markdown -b markdown && rm -f sphinx/build/markdown/index.md && rm -rf ./docs/api && mv sphinx/build/markdown ./docs/api",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
