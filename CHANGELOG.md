@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.1.0-rc.2 (2025-08-10)
+
+### Bug Fixes
+
+- Full-retrigger
+  ([`0630685`](https://github.com/ascii-supply-networks/dagster-slurm/commit/06306850446b8a5e8ba35097e586a4bb57508344))
+
+### Chores
+
+- Update dagster-slurm lockfile entry [skip ci]
+  ([`c51f115`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c51f1158e823118deebbeaa3df3bae23c7aaff5c))
+
+
 ## v1.1.0-rc.1 (2025-08-10)
 
 ### Chores
