@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.2-rc.1 (2025-08-10)
+
+### Bug Fixes
+
+- Cleanup
+  ([`40d9431`](https://github.com/ascii-supply-networks/dagster-slurm/commit/40d94315db25d25c7f6c8d9c2e9a4c337017661b))
+
+
 ## v1.1.2 (2025-08-10)
 
 
