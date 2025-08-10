@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1-rc.1 (2025-08-10)
+
+### Bug Fixes
+
+- Refine automated full release
+  ([`c3dd953`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c3dd953cdf2a91377664299126d165a4eae7f3c9))
+
+
 ## v1.1.1 (2025-08-10)
 
 
