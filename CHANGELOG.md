@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.3-rc.3 (2025-08-10)
+
+### Chores
+
+- Refine readme
+  ([`6c743fe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6c743fe98f95ff6752d350e611b3334ffd0e6183))
+
+
 ## v1.1.3-rc.2 (2025-08-10)
 
 ### Chores
