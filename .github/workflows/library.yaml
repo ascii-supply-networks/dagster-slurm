@@ -78,6 +78,7 @@ jobs:
         with:
             pixi-version: v0.50.2
             cache: true
+            frozen: true
       - run: pixi run -e build --frozen lint
 
       - run: pixi run -e build --frozen test
@@ -123,6 +124,7 @@ jobs:
         with:
             pixi-version: v0.50.2
             cache: true
+            frozen: true
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -196,6 +198,7 @@ jobs:
         with:
             pixi-version: v0.50.2
             cache: true
+            frozen: true
 
       - run: pixi run -e build --frozen sync
 
