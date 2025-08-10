@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.0.1-rc.7 (2025-08-10)
+
+### Bug Fixes
+
+- Main release no automatic rewrite -> idempotency
+  ([`dc3db38`](https://github.com/ascii-supply-networks/dagster-slurm/commit/dc3db381762484b96abb7d6abe80f6ec099d7eae))
+
+
 ## v0.0.1-rc.6 (2025-08-10)
 
 ### Chores
