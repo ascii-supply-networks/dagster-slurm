@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.3-rc.1 (2025-08-10)
+
+### Bug Fixes
+
+- Test version increment
+  ([`9cdb848`](https://github.com/ascii-supply-networks/dagster-slurm/commit/9cdb848a61557b011975be9cd91c56faef00414b))
+
+
 ## v1.1.3 (2025-08-10)
 
 
