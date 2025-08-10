@@ -112,6 +112,7 @@ jobs:
       issues: read
     needs: validation
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: pre-release
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -126,6 +127,13 @@ jobs:
         with:
             pixi-version: v0.50.2
             cache: true
+
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -142,7 +150,7 @@ jobs:
 
       - name: Create pre-release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
           # Create pre-release version
           uv run semantic-release version --prerelease
@@ -181,6 +189,13 @@ jobs:
             pixi-version: v0.50.2
             cache: true
 
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - run: pixi run -e build --frozen sync
 
       - name: Download build artifacts
@@ -196,7 +211,7 @@ jobs:
 
       - name: Create release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
           case "${{ github.event.inputs.release_type }}" in
             "release")
