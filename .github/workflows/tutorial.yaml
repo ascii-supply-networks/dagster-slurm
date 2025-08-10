@@ -1,4 +1,4 @@
-name: Validaiton of tutorial code
+name: Validation of tutorial code
 
 on:
   push:
