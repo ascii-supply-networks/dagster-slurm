@@ -220,7 +220,7 @@ jobs:
           case "${{ github.event.inputs.release_type }}" in
             "release")
               # Convert latest pre-release to full release
-              uv run semantic-release version --no-prerelease
+              uv run semantic-release version
               ;;
             "patch"|"minor"|"major")
               # Force specific version bump
@@ -228,7 +228,7 @@ jobs:
               ;;
             "prerelease")
               # Create another pre-release
-              uv run semantic-release version --prerelease
+              uv run semantic-release version --as-prerelease
               ;;
           esac
           
