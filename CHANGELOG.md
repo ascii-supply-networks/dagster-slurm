@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.0.1-rc.2 (2025-08-10)
+
+### Chores
+
+- Automating semantic release
+  ([`4e56b52`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4e56b52bc54d2b3e8c4b1a5ab52a28b66cfa612e))
+
+
 ## v0.0.1-rc.1 (2025-08-10)
 
 ### Bug Fixes
