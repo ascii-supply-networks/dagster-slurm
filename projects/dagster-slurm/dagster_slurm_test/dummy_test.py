@@ -1,6 +1,3 @@
-import pytest
-
-
 # TODO: remove dummy test
 def test_truth():
     """
