@@ -35,6 +35,7 @@ jobs:
         with:
             pixi-version: v0.50.2
             cache: true
+            frozen: true
       - run: pixi run -e docs --frozen docs-build
 
       - name: Setup Pages
