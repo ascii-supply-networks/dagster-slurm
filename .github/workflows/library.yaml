@@ -51,6 +51,6 @@ jobs:
 
       - run: pixi run -e build --frozen test
 
-      - run: pixi run -e build --rozen build-lib
+      - run: pixi run -e build --frozen build-lib
 
       # TODO: (on main only) a) add push to pypi b) add version increment
