@@ -3,7 +3,6 @@
 start:
 	pixi run -e dev --frozen start
 
-
 .PHONY: fmt 
 ## basic auto formatting
 fmt:

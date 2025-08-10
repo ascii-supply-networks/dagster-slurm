@@ -1,21 +1,19 @@
-name: Validaiton of tutorial code
+name: Validation of library code
 
 on:
   push:
     branches: [ main ]
     paths:
-      - 'examples/**'
       - 'projects/**'
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [ main ]
     paths:
-      - 'examples/**'
       - 'projects/**'
   workflow_dispatch:
 
 concurrency:
-  group: tutorial-main-${{ github.ref }}
+  group: library-main-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,20 +40,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - uses: prefix-dev/setup-pixi@v0.8.14
         with:
             pixi-version: v0.50.2
             cache: true
-      - run: cd examples && pixi run -e dev --frozen lint
+      - run: pixi run -e build --frozen lint
 
-      - run: cd examples && pixi run -e dev --frozen test
+      - run: pixi run -e build --frozen test
 
-      - run: cd examples && pixi run pack
+      - run: pixi run -e build --rozen build-lib
 
-      - name: Store Packed Environment as Artifact
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: packed-slurm-cluster-environment-${{ github.sha }}
-          path: ./examples/environment.tar
-          retention-days: 3
+      # TODO: (on main only) a) add push to pypi b) add version increment

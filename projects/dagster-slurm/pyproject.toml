@@ -3,15 +3,12 @@ name = "dagster-slurm"
 version = "0.0.1"
 description = "dagster integration with slurm"
 readme = "README.md"
-authors = [
-    { name = "geoheil", email = "georg.heiler@ascii.ac.at" }
-]
+authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
 requires-python = ">=3.12"
-dependencies = [
-]
+dependencies = []
 
 [tool.uv.sources]
-feray = { workspace = true }    
+feray = { workspace = true }
 
 [tool.uv.build-backend]
 module-root = ""

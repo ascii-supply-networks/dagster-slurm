@@ -3,14 +3,12 @@ name = "dagster-slurm-workspace"
 version = "0.0.1"
 description = "Workspace root - not published"
 readme = "README.md"
-authors = [
-    { name = "geoheil", email = "georg.heiler@ascii.ac.at" }
-]
+authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
 [tool.uv]
-package = false 
+package = false
 
 [tool.uv.workspace]
 members = ["projects/*"]
@@ -21,21 +19,23 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "pyrefly>=0.23.1",
-    "ruff>=0.12.3",
+  "yamllint>=1.35.1,<2",
+  "taplo>=0.9.3,<0.10",
+  "pytest>=8.3.4,<9",
+  "pytest-mock>=3.14.0,<4",
+  "pytest-cov~=6.0.0",
+  "ruff>=0.12.8,<1",
+  "pyrefly>=0.27.2,<1",
 ]
 
 [tool.pixi.project]
-# not supported  "win-64", due to pip ray
-platforms = ["linux-64", "osx-arm64", "osx-64", "linux-aarch64"]
+platforms = ["linux-64", "osx-arm64", "osx-64", "linux-aarch64", "win-64"]
 channels = ["conda-forge"]
 
 [tool.pixi.environments]
 build = { features = ["build"], solve-group = "build" }
 
-docs = { features = [
-  "docs",
-], solve-group = "docs", no-default-feature = true }
+docs = { features = ["docs"], solve-group = "docs" }
 
 [tool.pixi.feature.build.pypi-dependencies]
 uv = ">=0.8.6"
@@ -46,12 +46,35 @@ channels = ["conda-forge", "https://prefix.dev/brads-forge"]
 [tool.pixi.feature.docs.dependencies]
 nodejs = "~=24.4.1"
 bun = "~=1.2.19"
+sphinx = "~=8.2.3"
+[tool.pixi.feature.docs.pypi-dependencies]
+sphinx-rtd-theme = "~=3.0.2"
+myst-parser = "~=4.0.1"
+sphinx-markdown-builder = ">=0.6.8,<1"
+dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 
 
 [tool.pixi.feature.build.tasks]
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
-build-lib = { cmd = "uv build", cwd = "projects/dagster-slurm",  depends-on = ["clean-lib"] }
-publish-lib = { cmd = "uv publish --token $PYPI_TOKEN", depends-on = ["build-lib"] }
+
+fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
+lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects", description = "Lint" }
+test = { cmd = "uv run -- pytest projects", description = "Run all unit tests" }
+
+[tool.pixi.feature.build.tasks.sync-lib]
+cmd = "uv sync --all-packages --upgrade"
+description = "uv sync"
+
+[tool.pixi.feature.build.tasks.build-lib]
+cmd = "uv build --all-packages"
+cwd = "projects/dagster-slurm"
+depends-on = ["clean-lib"]
+description = "Cleanly build the library"
+
+[tool.pixi.feature.build.tasks.publish-lib]
+cmd = "uv publish --token $PYPI_TOKEN"
+depends-on = ["build-lib"]
+description = "Publish the library"
 
 [tool.pixi.tasks.pre-commit-install]
 cmd = "pre-commit install"
@@ -65,3 +88,22 @@ description = "run pre-commit on all files"
 cwd = "examples"
 cmd = "pixi run -e dev --frozen start"
 description = "Start example"
+
+[tool.pixi.feature.docs.tasks.docs-install]
+cmd = "bun install"
+cwd = "docs"
+
+[tool.pixi.feature.docs.tasks.docs-build-python-api]
+cmd = "bun run build:api"
+cwd = "docs"
+[tool.pixi.feature.docs.tasks.docs-serve]
+cmd = "bun run start"
+cwd = "docs"
+depends-on = ["docs-install", "docs-build-python-api"]
+description = "Serve docs locally"
+
+[tool.pixi.feature.docs.tasks.docs-build]
+cmd = "bun run build"
+cwd = "docs"
+depends-on = ["docs-install", "docs-build-python-api"]
+description = "Build docs for serving"
