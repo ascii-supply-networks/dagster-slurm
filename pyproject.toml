@@ -58,7 +58,7 @@ dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 
 [tool.pixi.feature.build.tasks]
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
-release = { cmd = "uv run semantic-release publish", description="Make new release" }
+release = { cmd = "uv run semantic-release -c projects/dagster-slurm/.python-semantic-release.toml publish", description="Make new release" }
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
 lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects", description = "Lint" }
