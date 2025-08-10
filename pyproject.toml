@@ -126,8 +126,10 @@ tag_format = "v$version"
 version_toml = ["pyproject.toml:project.version"]
 build_command = "pixi run -e build --frozen build-lib"
 
+[tool.semantic_release.commit_parser_options]
+parse_squash_commits = true
+
 [tool.semantic_release.branches.main]
-# TODO: Remove this
 match = "(main)"
 
 #[tool.semantic_release.publish]
