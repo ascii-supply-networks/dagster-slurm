@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.1.0-rc.3 (2025-08-10)
+
+### Bug Fixes
+
+- Versions
+  ([`ee1735e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ee1735e199008231de751e0f3fd129eba9e0b1f8))
+
+### Chores
+
+- Update dagster-slurm lockfile entry [skip ci]
+  ([`ed9661d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ed9661d66c98fe86afa7dd3018a1faf76c6a360f))
+
+
 ## v1.1.0-rc.2 (2025-08-10)
 
 ### Bug Fixes
