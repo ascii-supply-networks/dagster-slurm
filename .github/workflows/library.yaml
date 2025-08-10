@@ -85,13 +85,6 @@ jobs:
 
       - run: pixi run -e build --frozen build-lib
 
-      # - name: Upload build artifacts
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: dist-files
-      #     path: dist/
-      #     retention-days: 7
-
   prerelease:
     name: Create pre-release
     runs-on: ubuntu-latest
@@ -126,12 +119,6 @@ jobs:
             cache: true
             frozen: true
 
-      # - name: Download build artifacts
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: dist-files
-      #     path: dist/
-
       - run: pixi run -e build --frozen sync
 
       - name: Configure Git
@@ -147,6 +134,10 @@ jobs:
 
           # Create pre-release version
           uv run semantic-release version --prerelease
+
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: additional changes [skip ci]"
+          fi
           
           # Push changes and tags
           git push origin main
@@ -171,6 +162,85 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     environment: release
     steps:
+      - name: Validate release prerequisites
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          
+          # Get current version from pyproject.toml
+          CURRENT_VERSION=$(grep "version =" pyproject.toml | head -1 | cut -d'"' -f2)
+          echo "📋 Current version: $CURRENT_VERSION"
+          echo "🎯 Release type: ${{ github.event.inputs.release_type }}"
+          
+          case "${{ github.event.inputs.release_type }}" in
+            "release")
+              echo "🔍 Validating prerelease promotion..."
+              
+              # Check if current version is a prerelease
+              if echo "$CURRENT_VERSION" | grep -E "(rc|alpha|beta)" >/dev/null; then
+                PRERELEASE_TAG="v$CURRENT_VERSION"
+                echo "🔍 Looking for prerelease tag: $PRERELEASE_TAG"
+                
+                # Check if the prerelease exists and is marked as prerelease
+                if gh release view "$PRERELEASE_TAG" >/dev/null 2>&1; then
+                  IS_PRERELEASE=$(gh release view "$PRERELEASE_TAG" --json isPrerelease --jq '.isPrerelease')
+                  if [ "$IS_PRERELEASE" = "true" ]; then
+                    echo "✅ Found valid prerelease: $PRERELEASE_TAG"
+                    echo "✅ Ready to promote to full release"
+                  else
+                    echo "❌ Release $PRERELEASE_TAG exists but is not marked as prerelease"
+                    exit 1
+                  fi
+                else
+                  echo "❌ Prerelease $PRERELEASE_TAG not found"
+                  echo "💡 You must create a prerelease first by pushing changes to main branch"
+                  exit 1
+                fi
+              else
+                echo "❌ Current version ($CURRENT_VERSION) is not a prerelease"
+                echo "💡 Use 'patch', 'minor', or 'major' to create a new release"
+                echo "💡 Or push changes to main to create a prerelease first"
+                exit 1
+              fi
+              ;;
+              
+            "patch"|"minor"|"major")
+              echo "🔍 Validating new ${{ github.event.inputs.release_type }} release..."
+              
+              # Check if current version is already a clean release (not prerelease)
+              if echo "$CURRENT_VERSION" | grep -E "(rc|alpha|beta)" >/dev/null; then
+                echo "⚠️  Current version ($CURRENT_VERSION) is a prerelease"
+                echo "💡 Consider using 'release' to promote the prerelease"
+                echo "💡 Or continuing with ${{ github.event.inputs.release_type }} bump (will skip prerelease)"
+              else
+                echo "✅ Current version is a clean release, ready for ${{ github.event.inputs.release_type }} bump"
+              fi
+              
+              # Check that we don't have uncommitted changes
+              if [ -n "$(git status --porcelain)" ]; then
+                echo "❌ Working directory is not clean"
+                git status
+                exit 1
+              fi
+              
+              echo "✅ Ready to create new ${{ github.event.inputs.release_type }} release"
+              ;;
+              
+            "prerelease")
+              echo "🔍 Validating prerelease creation..."
+              echo "✅ Ready to create new prerelease"
+              ;;
+              
+            *)
+              echo "❌ Unknown release type: ${{ github.event.inputs.release_type }}"
+              exit 1
+              ;;
+          esac
+          
+          echo ""
+          echo "🎉 Validation passed! Proceeding with release..."
+
       - name: Generate GitHub App Token
         id: generate_token
         uses: tibdex/github-app-token@v2
@@ -213,6 +283,10 @@ jobs:
           set -e
 
           uv run semantic-release version
+
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: additional changes [skip ci]"
+          fi
 
           git push origin main
           git push --tags
