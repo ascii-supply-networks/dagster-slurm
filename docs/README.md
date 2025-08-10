@@ -39,9 +39,8 @@ pixi run -e docs --frozen docs-build
 
 ## release
 
-
+Verify release
 
 ```bash
 uv run semantic-release -v --noop version
-uv run semantic-release publish
 ```
