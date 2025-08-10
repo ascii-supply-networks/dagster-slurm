@@ -1,7 +1,7 @@
 name: Auto PR Title
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize, edited] 
 jobs:
   update-title:
     runs-on: ubuntu-latest
