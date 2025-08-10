@@ -1,0 +1,61 @@
+name: Validaiton of tutorial code
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'examples/**'
+      - 'projects/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ main ]
+    paths:
+      - 'examples/**'
+      - 'projects/**'
+  workflow_dispatch:
+
+concurrency:
+  group: tutorial-main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validation:
+    name: Validate tutorial
+    runs-on: ubuntu-latest
+    # TODO: Eventually specify a slurm cluster here for CI/CD via a (single) docker container so we can validate in CI/CD
+    # services:
+    #   postgres:
+    #     image: postgres:17.5-alpine3.22
+    #     env:
+    #       POSTGRES_USER: ${{ env.BACKEND_APPLICATION__DATABASE__USERNAME }}
+    #       POSTGRES_PASSWORD: ${{ env.BACKEND_APPLICATION__DATABASE__PASSWORD }}
+    #       POSTGRES_DB: ${{ env.BACKEND_APPLICATION__DATABASE__DATABASE_NAME }}
+    #     ports:
+    #       - 7432:5432
+    #     # Add health check to ensure postgres is ready  
+    #     options: >-
+    #       --health-cmd "pg_isready -U test_user -d test_db"
+    #       --health-interval 10s
+    #       --health-timeout 5s
+    #       --health-retries 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.14
+        with:
+            pixi-version: v0.50.2
+            cache: true
+      - run: cd examples && pixi run -e dev --frozen lint
+
+      - run: cd examples && pixi run -e dev --frozen test
+
+      - run: cd examples && pixi run pack
+
+      - name: Store Packed Environment as Artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: packed-slurm-cluster-environment-${{ github.sha }}
+          path: ./examples/environment.tar
+          retention-days: 3

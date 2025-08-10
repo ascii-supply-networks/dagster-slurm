@@ -1,0 +1,24 @@
+name: Auto PR Title
+on:
+  pull_request:
+    types: [opened]
+jobs:
+  update-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update PR title from branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            const match = branch.match(/^(feat|fix|docs|style|refactor|perf|test|chore)\/(.+)/);
+            if (match) {
+              const [, type, description] = match;
+              const title = `${type}: ${description.replace(/-/g, ' ')}`;
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                title: title
+              });
+            }
