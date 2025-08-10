@@ -128,7 +128,7 @@ build_command = "pixi run -e build --frozen build-lib"
 
 [tool.semantic_release.branches.main]
 # TODO: Remove this
-match = "(main|feat/initial-example)"
+match = "(main)"
 
 #[tool.semantic_release.publish]
 #dist_glob_patterns = ["dist/*"]
