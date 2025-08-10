@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.0.0-rc.3 (2025-08-10)
+
+### Bug Fixes
+
+- Upgrade lockfile as well
+  ([`445e57e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/445e57e194d7965e8505ff2e4643f284a2f35f14))
+
+### Chores
+
+- Re-trigger
+  ([`c159264`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c1592642657272641791e8b27784e8ab47e842f5))
+
+### Features
+
+- Enable skip-ci
+  ([`88ac37a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/88ac37a4a87def157bae1c96d1fb49a1fa09e6ee))
+
+
 ## v1.0.0-rc.2 (2025-08-10)
 
 ### Bug Fixes
