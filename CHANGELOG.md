@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.0.1-rc.6 (2025-08-10)
+
+### Chores
+
+- Re-trigger
+  ([`55f2ce8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/55f2ce8073c0e2512848164d16e9482264416af7))
+
+
 ## v0.0.1-rc.5 (2025-08-10)
 
 
