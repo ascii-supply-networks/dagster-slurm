@@ -160,7 +160,7 @@ jobs:
           git push --tags
           
           # Create GitHub pre-release
-          uv run semantic-release publish --prerelease
+          uv run semantic-release publish
 
   release:
     name: Create full release
