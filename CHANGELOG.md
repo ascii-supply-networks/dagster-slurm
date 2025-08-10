@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.0.1-rc.4 (2025-08-10)
+
+### Chores
+
+- Fix pre-release to pypi write permissions
+  ([`e61c18c`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e61c18c6cc21dba607fbb455d9eb0493ac814f28))
+
+
 ## v0.0.1-rc.3 (2025-08-10)
 
 ### Features
