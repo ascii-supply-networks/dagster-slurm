@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.0-rc.5 (2025-08-10)
+
+### Chores
+
+- Fix full release automation
+  ([`55268b0`](https://github.com/ascii-supply-networks/dagster-slurm/commit/55268b0569d128f5f5858817092e33d41c272124))
+
+
 ## v1.1.0-rc.4 (2025-08-10)
 
 ### Bug Fixes
