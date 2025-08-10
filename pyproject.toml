@@ -123,7 +123,10 @@ update_changelog_on_bump = false
 tag_format = "v$version"
 
 [tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
+version_toml = [
+    "pyproject.toml:project.version",
+    "projects/dagster-slurm/pyproject.toml:project.version"
+]
 build_command = "pixi run -e build --frozen build-lib"
 
 [tool.semantic_release.commit_parser_options]
