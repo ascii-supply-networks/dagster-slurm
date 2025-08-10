@@ -218,25 +218,29 @@ jobs:
           GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
           case "${{ github.event.inputs.release_type }}" in
-            "release")
-              # Convert latest pre-release to full release
-              uv run semantic-release version
+            "patch")
+              # Force patch version
+              SEMANTIC_RELEASE_VERSION_PATCH=true uv run semantic-release version
               ;;
-            "patch"|"minor"|"major")
-              # Force specific version bump
-              uv run semantic-release version --increment ${{ github.event.inputs.release_type }}
+            "minor") 
+              # Force minor version
+              SEMANTIC_RELEASE_VERSION_MINOR=true uv run semantic-release version
+              ;;
+            "major")
+              # Force major version  
+              SEMANTIC_RELEASE_VERSION_MAJOR=true uv run semantic-release version
               ;;
             "prerelease")
-              # Create another pre-release
+              # Create prerelease
               uv run semantic-release version --as-prerelease
               ;;
+            "release")
+              # Let semantic-release decide based on commits
+              uv run semantic-release version
+              ;;
           esac
-          
-          # Push changes and tags
           git push origin main
           git push --tags
-          
-          # Create GitHub release and upload to PyPI
           uv run semantic-release publish
           
       - name: Publish to PyPI (Trusted Publishing)
