@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.0.1-rc.3 (2025-08-10)
+
+### Features
+
+- Publish pre-release to pypi
+  ([`fcdfc66`](https://github.com/ascii-supply-networks/dagster-slurm/commit/fcdfc66d77e36a271ab5238d1b9f0f7e95785d66))
+
+
 ## v0.0.1-rc.2 (2025-08-10)
 
 ### Chores
