@@ -110,6 +110,7 @@ jobs:
       contents: write
       pull-requests: read
       issues: read
+      id-token: write
     needs: validation
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: pre-release
