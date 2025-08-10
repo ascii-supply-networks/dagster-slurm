@@ -161,6 +161,11 @@ jobs:
           
           # Create GitHub pre-release
           uv run semantic-release publish
+      
+      - name: Publish pre-release to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
 
   release:
     name: Create full release
