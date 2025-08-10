@@ -5,6 +5,9 @@ on:
 jobs:
   update-title:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
     steps:
       - name: Update PR title from branch
         uses: actions/github-script@v7
