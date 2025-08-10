@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.0 (2025-08-10)
+
+### Chores
+
+- Update dagster-slurm lockfile entry [skip ci]
+  ([`3e297ab`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3e297abcc3702a6505a70ec8bf5d18d2c24253a1))
+
+
 ## v1.0.0-rc.3 (2025-08-10)
 
 ### Bug Fixes
