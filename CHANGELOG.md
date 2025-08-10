@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.0-rc.1 (2025-08-10)
+
+### Bug Fixes
+
+- Release and push
+  ([`c718690`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c718690add213bed2f90a1782f8a11d0c7a6ff5b))
+
+
 ## v1.0.0 (2025-08-10)
 
 
