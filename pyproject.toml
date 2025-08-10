@@ -62,8 +62,12 @@ lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/
 test = { cmd = "uv run -- pytest projects", description = "Run all unit tests" }
 
 [tool.pixi.feature.build.tasks.sync-lib]
-cmd = "uv sync --all-packages --upgrade"
+cmd = "uv sync --all-packages"
 description = "uv sync"
+
+[tool.pixi.feature.build.tasks.sync-lib-with-upgrade]
+cmd = "uv sync --all-packages --upgrade"
+description = "uv sync with upgrade"
 
 [tool.pixi.feature.build.tasks.build-lib]
 cmd = "uv build --all-packages"
