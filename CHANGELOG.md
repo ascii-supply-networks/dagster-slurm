@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.1.3-rc.2 (2025-08-10)
+
+### Chores
+
+- Grant more permissions ([#16](https://github.com/ascii-supply-networks/dagster-slurm/pull/16),
+  [`53363ee`](https://github.com/ascii-supply-networks/dagster-slurm/commit/53363ee390384d2421c2be5df566f9d049e90620))
+
+- Refine basic docs ([#16](https://github.com/ascii-supply-networks/dagster-slurm/pull/16),
+  [`53363ee`](https://github.com/ascii-supply-networks/dagster-slurm/commit/53363ee390384d2421c2be5df566f9d049e90620))
+
+- Trigger more often ([#16](https://github.com/ascii-supply-networks/dagster-slurm/pull/16),
+  [`53363ee`](https://github.com/ascii-supply-networks/dagster-slurm/commit/53363ee390384d2421c2be5df566f9d049e90620))
+
+### Features
+
+- Refine basic docs ([#16](https://github.com/ascii-supply-networks/dagster-slurm/pull/16),
+  [`53363ee`](https://github.com/ascii-supply-networks/dagster-slurm/commit/53363ee390384d2421c2be5df566f9d049e90620))
+
+
 ## v1.1.3-rc.1 (2025-08-10)
 
 ### Bug Fixes
