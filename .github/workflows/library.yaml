@@ -143,6 +143,15 @@ jobs:
         run: |
           # Create pre-release version
           uv run semantic-release version --prerelease
+
+          # update lockfile
+          pixi update dagster-slurm
+
+          # Commit the lockfile update
+          git add pixi.lock
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update dagster-slurm lockfile entry [skip ci]"
+          fi
           
           # Push changes and tags
           git push origin main
@@ -206,6 +215,15 @@ jobs:
           GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
           uv run semantic-release version
+
+          # update lockfile
+          pixi update dagster-slurm
+
+          # Commit the lockfile update
+          git add pixi.lock
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update dagster-slurm lockfile entry [skip ci]"
+          fi
 
           git push origin main
           git push --tags
