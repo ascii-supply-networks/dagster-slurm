@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.1.0-rc.1 (2025-08-10)
+
+### Chores
+
+- Improve readme with metadata
+  ([`8bc2206`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8bc220621dff08d70bda1d9ecd58268ac002c8b3))
+
+- Locked vs frozen install
+  ([`2f48f43`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2f48f433e9b0421d337eadc2a4f3256557544521))
+
+- Update dagster-slurm lockfile entry [skip ci]
+  ([`3721baf`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3721baf3b15e1fe5b9ee855b3f49628aab3a668d))
+
+
 ## v1.1.0 (2025-08-10)
 
 ### Chores
