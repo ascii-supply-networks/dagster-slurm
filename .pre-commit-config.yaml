@@ -27,3 +27,9 @@ repos:
         entry: sh -c 'find . -type f -size +1M -not -path "./.git/*" -not -path "./.pixi/*" -not -path "./node_modules/*" -not -path "./.sqlx/*" | head -5'
         language: system
         pass_filenames: false
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.8.3
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
