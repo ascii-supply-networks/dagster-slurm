@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.2-rc.2 (2025-08-10)
+
+### Chores
+
+- Re-try clean overall version
+  ([`dbe3ca7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/dbe3ca7a4f1549f8d97079ec400d51d69979fde2))
+
+
 ## v1.1.2-rc.1 (2025-08-10)
 
 ### Bug Fixes

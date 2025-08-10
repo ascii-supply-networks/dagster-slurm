@@ -916,8 +916,8 @@ packages:
   timestamp: 1733218222191
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.1.2
-  sha256: 75b58240b2e9b251fddf38b2960dbcd58dcec2fe09f9789084c7542c37c4b66c
+  version: 1.1.2rc2
+  sha256: e19a58cea16f6a737fb7ad009787616b6750459d6fb83e4e22223ec3c3ab9e0e
   requires_python: '>=3.12'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/docutils-0.21.2-pyhd8ed1ab_1.conda
