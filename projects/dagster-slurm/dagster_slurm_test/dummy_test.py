@@ -1,7 +1,7 @@
-# TODO: remove dummy test
 import pytest
 
 
+# TODO: remove dummy test
 def test_truth():
     """
     This is a simple dummy test to ensure the pytest suite runs correctly.
