@@ -36,3 +36,9 @@ pixi run -e build --frozen test
 pixi run -e docs --frozen docs-serve
 pixi run -e docs --frozen docs-build
 ```
+
+## release
+
+```bash
+uv run semantic-release -v --noop version
+```
