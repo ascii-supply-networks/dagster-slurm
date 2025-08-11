@@ -29,5 +29,5 @@ Documentation = "https://ascii-supply-networks.github.io/dagster-slurm/docs/intr
 module-root = ""
 
 [build-system]
-requires = ["uv_build>=0.8.6,<0.9"]
+requires = ["uv_build>=0.8.8,<0.9"]
 build-backend = "uv_build"
