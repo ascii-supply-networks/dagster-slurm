@@ -2383,8 +2383,8 @@ packages:
 - pypi: ../projects/dagster-slurm
   name: dagster-slurm
   version: 1.2.0rc1
-  sha256: 24f8c7b5987b17ed3759dd931db24681e256963dfa320730342afb6b58dedefd
-  requires_python: '>=3.12'
+  sha256: 4a9cd1f2c9ccc27a218d26379cc7b51a06eff4ea1f4df5bfbfe16b701933be07
+  requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./
   name: dagster-slurm-example
