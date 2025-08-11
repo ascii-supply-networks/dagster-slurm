@@ -33,6 +33,7 @@ dev = { features = [
   "cluster",
   "cluster-dev",
   "ci-basics",
+  "dagster-scaffolding",
 ], solve-group = "dagster-slurm-example" }
 
 packaged-cluster = { features = [
@@ -86,6 +87,10 @@ age = "~=1.2.1"
 [tool.pixi.feature.opstooling.dependencies]
 git = "~=2.49"
 pixi-pack = ">=0.7.2,<1"
+
+[tool.pixi.feature.dagster-scaffolding.pypi-dependencies]
+dagster-dg-cli = ">=1.11.0,<1.12"
+create-dagster = ">=1.11.0,<1.12"
 
 [tool.pixi.tasks]
 

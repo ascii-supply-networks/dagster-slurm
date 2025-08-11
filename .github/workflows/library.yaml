@@ -148,6 +148,8 @@ jobs:
       
       - name: Publish pre-release to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
 
   release:
     name: Promote prerelease to full release
@@ -221,12 +223,6 @@ jobs:
             frozen: true
 
       - run: pixi run -e build --frozen sync
-
-      # - name: Download build artifacts
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: dist-files
-      #     path: dist/
 
       - name: Configure Git
         run: |
