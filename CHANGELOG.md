@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.2.0-rc.1 (2025-08-11)
+
+### Chores
+
+- Re-trigger
+  ([`1bfff5f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1bfff5f5b2cca44c8c4ec2d75fda0d32e8f67b88))
+
+- Use test pypi for preview deployments
+  ([#17](https://github.com/ascii-supply-networks/dagster-slurm/pull/17),
+  [`7b7d9dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7b7d9dc092e50f7552f44d6dec9438a84181a48f))
+
+### Features
+
+- Demo fully enable dagster components
+  ([#17](https://github.com/ascii-supply-networks/dagster-slurm/pull/17),
+  [`7b7d9dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7b7d9dc092e50f7552f44d6dec9438a84181a48f))
+
+- Refine ([#17](https://github.com/ascii-supply-networks/dagster-slurm/pull/17),
+  [`7b7d9dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7b7d9dc092e50f7552f44d6dec9438a84181a48f))
+
+
 ## v1.2.0 (2025-08-10)
 
 
