@@ -4,7 +4,7 @@ version = "1.2.0-rc.1"
 description = "dagster integration with slurm"
 readme = "README.md"
 authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 keywords = ["dagster", "slurm", "hpc", "workflow-orchestration", "ray", "feray"]
 classifiers = [
@@ -24,9 +24,6 @@ Homepage = "https://ascii-supply-networks.github.io/dagster-slurm/"
 Repository = "https://github.com/ascii-supply-networks/dagster-slurm"
 Documentation = "https://ascii-supply-networks.github.io/dagster-slurm/docs/intro"
 "Bug Reports" = "https://github.com/ascii-supply-networks/dagster-slurm/issues"
-
-[tool.uv.sources]
-feray = { workspace = true }
 
 [tool.uv.build-backend]
 module-root = ""
