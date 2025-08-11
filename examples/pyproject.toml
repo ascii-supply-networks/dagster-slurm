@@ -168,6 +168,7 @@ exclude = ["pixi.lock"]
 filterwarnings = [
   "ignore::DeprecationWarning:dagster.*",
   "ignore::DeprecationWarning:pydantic.*",
+  "ignore:.*is currently in beta::dagster.*",
 ]
 markers = ["data: tests using real input data"]
 
