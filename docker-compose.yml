@@ -1,0 +1,33 @@
+services:
+  slurmmaster:
+    image: slurm-master:latest
+    build: . 
+    command: ["/usr/sbin/slurmctld","-Dvv"]
+    user: admin
+    ports: ["6817:6817", "6819:6819"]
+    volumes:
+      - ./workspace:/home/admin
+      - ./etc/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./etc/gres.conf:/etc/slurm/gres.conf:ro
+      - ./etc/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - ./secrets/munge.key:/etc/munge/munge.key:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    restart: unless-stopped
+
+  slurmnode1:
+    image: slurm-master:latest
+    command: ["/usr/sbin/slurmd","-Dvv"] 
+    container_name: slurmnode1
+    user: admin
+    # gpus: 1   # uncomment if you want GPU on this node (Compose v2)
+    ports: ["6818:6818"]   # slurmd RPCs (optional to expose)
+    volumes:
+      - ./workspace:/home/admin
+      - ./etc/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./etc/gres.conf:/etc/slurm/gres.conf:ro
+      - ./etc/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - ./secrets/munge.key:/etc/munge/munge.key:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    depends_on:
+      - slurmmaster
+    restart: unless-stopped
