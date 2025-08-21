@@ -62,10 +62,8 @@ def job_state(jid):
     return s.split()[0] if s else ""
 
 
-@asset(
-    name="slurm_submit_pipes"
-)
-def slurm_submit_remote_pipes(context: AssetExecutionContext):# noqa: C901
+@asset(name="slurm_submit_pipes")
+def slurm_submit_remote_pipes(context: AssetExecutionContext):  # noqa: C901
     os.makedirs(PIPES_BASE, exist_ok=True)
     _dexec(
         CONTAINER,

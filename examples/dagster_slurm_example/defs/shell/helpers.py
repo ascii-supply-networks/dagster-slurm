@@ -133,7 +133,7 @@ def _tail_logs(container: str, job_name: str, job_id: int, n=50):
     return out_txt, err_txt
 
 
-def upload_file(local_path: str, dest_uri: str, *, mkdirs=True): # noqa: C901
+def upload_file(local_path: str, dest_uri: str, *, mkdirs=True):  # noqa: C901
     """
     Copy a *local* file to one of:
       - docker://<container>/<abs/path>
