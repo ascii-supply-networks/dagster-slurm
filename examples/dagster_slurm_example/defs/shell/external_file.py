@@ -1,10 +1,21 @@
-from dagster_pipes import open_dagster_pipes, PipesEnvVarParamsLoader
-from dagster_pipes import PipesDefaultContextLoader, PipesDefaultMessageWriter
+import time, socket, json, os
+from pathlib import Path
+from dagster_pipes import open_dagster_pipes
+import random
 
-with open_dagster_pipes(
-    params_loader=PipesEnvVarParamsLoader(),
-    context_loader=PipesDefaultContextLoader(),      # reads path from env
-    message_writer=PipesDefaultMessageWriter(),      # writes to path from env
-) as pipes:
-    pipes.log.info("running in Slurm")
-    pipes.report_asset_materialization(metadata={"rows": {"raw_value": 123, "type": "int"}})
+def main():
+    with open_dagster_pipes() as pipes:
+        pipes.log.info("hello from Slurm via Dagster Pipes (file writer)")
+        pipes.log.info(f"node={socket.gethostname()}")
+        out_dir = Path(os.environ.get("JOB_OUTPUT_DIR", "/data/results"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "proof.txt").write_text("materialized via pipes\n")
+        pipes.report_asset_materialization(
+            metadata={"rows": {"raw_value": random.randint(0,100), "type": "int"}}
+        )
+        for i in range(5):
+            pipes.log.info(f"work step {i+1}/5")
+            time.sleep(0.3)
+
+if __name__ == "__main__":
+    main()
