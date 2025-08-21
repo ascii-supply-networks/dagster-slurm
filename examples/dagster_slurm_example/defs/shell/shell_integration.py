@@ -1,30 +1,31 @@
-
-import dagster as dg
-from dagster import (
-    PipesSession, 
-    PipesContextInjector, 
-    PipesMessageReader, 
-    asset, 
-    AssetExecutionContext, 
-    MaterializeResult, 
-    open_pipes_session,
-    PipesFileContextInjector,
-    PipesFileMessageReader,
-    Output)
-import os, json
+import os
 import re
 import shlex
-import subprocess
-from dataclasses import dataclass
-from typing import Optional
+import textwrap
 import time
+import uuid
 from contextlib import contextmanager
-
-import os, re, shlex, subprocess, textwrap, uuid
-from urllib.parse import urlparse
 from pathlib import Path
-from dagster_slurm_example.defs.shared import example_defs_prefix
-from .helpers import (_submit_python, _dexec, upload_file, _detect_partition, _wait_slurm_done, _find_controller, _put_file, _wait_done, _tail_logs)
+
+from dagster import (
+    AssetExecutionContext,
+    MaterializeResult,
+    PipesFileContextInjector,
+    PipesFileMessageReader,
+    asset,
+    open_pipes_session,
+)
+
+from .helpers import (
+    _detect_partition,
+    _dexec,
+    _find_controller,
+    _put_file,
+    _submit_python,
+    _tail_logs,
+    _wait_done,
+    upload_file,
+)
 
 CONTAINER = "slurmctld"
 CONTAINER_DATA_DIR = "/data"
@@ -33,16 +34,22 @@ PIPES_BASE = os.path.join(HOST_SHARED, "pipes")
 
 LOCAL_PAYLOAD = os.environ.get(
     "LOCAL_EXTERNAL_FILE",
-    str((Path(__file__).resolve().parents[3]/"dagster_slurm_example"/"defs"/"shell"/"external_file.py").resolve())
+    str(
+        (
+            Path(__file__).resolve().parents[3]
+            / "dagster_slurm_example"
+            / "defs"
+            / "shell"
+            / "external_file.py"
+        ).resolve()
+    ),
 )
 
 PYTHON_IN_NODE = os.environ.get("PYTHON_IN_NODE", "python3")
 
 PYTHON_IN_NODE = "/usr/bin/python3"
-DEFAULT_LOCAL_SCRIPT = os.path.join(
-    os.path.dirname(__file__), "test.py"
-)
-TERMINAL = {"COMPLETED","FAILED","CANCELLED","TIMEOUT","PREEMPTED","NODE_FAIL"}
+DEFAULT_LOCAL_SCRIPT = os.path.join(os.path.dirname(__file__), "test.py")
+TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "PREEMPTED", "NODE_FAIL"}
 
 
 def job_state(jid):
@@ -52,28 +59,38 @@ def job_state(jid):
         return s
     o, _, _ = _dexec(CONTAINER, f"sacct -X -n -j {jid} -o State || true")
     s = (o or "").strip()
-    return s.split()[0] if s else "" 
+    return s.split()[0] if s else ""
 
-@asset(name="slurm_submit_pipes")   # let your loader assign group, or set group_name to match it
-def slurm_submit_remote_pipes(context: AssetExecutionContext):
+
+@asset(
+    name="slurm_submit_pipes"
+)
+def slurm_submit_remote_pipes(context: AssetExecutionContext):# noqa: C901
     os.makedirs(PIPES_BASE, exist_ok=True)
-    _dexec(CONTAINER, "mkdir -p /data/{logs,results,pipes} && chmod 1777 /data/{logs,results,pipes}")
+    _dexec(
+        CONTAINER,
+        "mkdir -p /data/{logs,results,pipes} && chmod 1777 /data/{logs,results,pipes}",
+    )
 
     run_id = context.run_id or uuid.uuid4().hex
     host_run_dir = os.path.join(PIPES_BASE, run_id)
     os.makedirs(host_run_dir, exist_ok=True)
     container_run_dir = f"{CONTAINER_DATA_DIR}/pipes/{run_id}"
 
-    host_context  = os.path.join(host_run_dir, "context.json")
+    host_context = os.path.join(host_run_dir, "context.json")
     host_messages = os.path.join(host_run_dir, "messages.jsonl")
 
-    cont_context  = f"{container_run_dir}/context.json"
+    cont_context = f"{container_run_dir}/context.json"
     cont_messages = f"{container_run_dir}/messages.jsonl"
 
     injector = DualPathContextInjector(host_context, cont_context)
-    reader   = DualPathFileMessageReader(host_messages, cont_messages, include_stdio_in_messages=True)
+    reader = DualPathFileMessageReader(
+        host_messages, cont_messages, include_stdio_in_messages=True
+    )
 
-    remote_payload_uri = f"docker://{CONTAINER}{container_run_dir}/external_file_pipes.py"
+    remote_payload_uri = (
+        f"docker://{CONTAINER}{container_run_dir}/external_file_pipes.py"
+    )
     upload_file(LOCAL_PAYLOAD, remote_payload_uri)
 
     with open_pipes_session(
@@ -84,7 +101,10 @@ def slurm_submit_remote_pipes(context: AssetExecutionContext):
     ) as session:
         env = session.get_bootstrap_env_vars()
         exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
-        _dexec(CONTAINER, f"mkdir -p {shlex.quote(container_run_dir)} && cat > {container_run_dir}/pipes.env <<'EOF'\n{exports}\nEOF")
+        _dexec(
+            CONTAINER,
+            f"mkdir -p {shlex.quote(container_run_dir)} && cat > {container_run_dir}/pipes.env <<'EOF'\n{exports}\nEOF",
+        )
 
         bootstrap = textwrap.dedent(f"""\
             set -euxo pipefail
@@ -115,17 +135,34 @@ def slurm_submit_remote_pipes(context: AssetExecutionContext):
             /data/envs/pipes/bin/python {container_run_dir}/external_file_pipes.py
         """)
         opts = [
-            "-J","pipes_ext",
-            "-D",container_run_dir,
-            "-o",f"{container_run_dir}/slurm-%j.out",
-            "-e",f"{container_run_dir}/slurm-%j.err",
-            "-t","00:05:00","-c","1","--mem=512M",
+            "-J",
+            "pipes_ext",
+            "-D",
+            container_run_dir,
+            "-o",
+            f"{container_run_dir}/slurm-%j.out",
+            "-e",
+            f"{container_run_dir}/slurm-%j.err",
+            "-t",
+            "00:05:00",
+            "-c",
+            "1",
+            "--mem=512M",
         ]
         part = _detect_partition()
-        if part: opts += ["-p", part]
+        if part:
+            opts += ["-p", part]
 
-        _dexec(CONTAINER, f"cat > {container_run_dir}/job.sbatch <<'SB'\n#!/bin/bash\n{bootstrap}\nSB\nchmod +x {container_run_dir}/job.sbatch")
-        out, _, _ = _dexec(CONTAINER, "sbatch " + " ".join(shlex.quote(x) for x in opts) + f" {container_run_dir}/job.sbatch")
+        _dexec(
+            CONTAINER,
+            f"cat > {container_run_dir}/job.sbatch <<'SB'\n#!/bin/bash\n{bootstrap}\nSB\nchmod +x {container_run_dir}/job.sbatch",
+        )
+        out, _, _ = _dexec(
+            CONTAINER,
+            "sbatch "
+            + " ".join(shlex.quote(x) for x in opts)
+            + f" {container_run_dir}/job.sbatch",
+        )
 
         m = re.search(r"Submitted batch job (\d+)", out)
         if not m:
@@ -141,7 +178,7 @@ def slurm_submit_remote_pipes(context: AssetExecutionContext):
 
         for ev in session.get_results():
             yield ev
-#    yield Output(None)
+    #    yield Output(None)
 
     return MaterializeResult(
         metadata={
@@ -151,6 +188,7 @@ def slurm_submit_remote_pipes(context: AssetExecutionContext):
             "payload_local": LOCAL_PAYLOAD,
         }
     )
+
 
 @asset(name="slurm_submit_external")
 def slurm_submit_external(context: AssetExecutionContext) -> MaterializeResult:
@@ -177,7 +215,9 @@ def slurm_submit_external(context: AssetExecutionContext) -> MaterializeResult:
         args=["--message", "hello from dagster"],
         partition=partition,
     )
-    context.log.info(f"Submitted job id={submit.job_id} on node={submit.node or 'unknown'}")
+    context.log.info(
+        f"Submitted job id={submit.job_id} on node={submit.node or 'unknown'}"
+    )
 
     final_state = _wait_done(controller, submit.job_id)
     context.log.info(f"Job {submit.job_id} finished: {final_state}")
@@ -194,7 +234,6 @@ def slurm_submit_external(context: AssetExecutionContext) -> MaterializeResult:
     return MaterializeResult(metadata=md)
 
 
-
 class DualPathContextInjector(PipesFileContextInjector):
     """
     Host<->container bridge for FILE-based Pipes.
@@ -202,6 +241,7 @@ class DualPathContextInjector(PipesFileContextInjector):
     Writes the context JSON to 'host_path' (Dagster side), and injects
     'DAGSTER_PIPES_CONTEXT_PATH' pointing at 'container_path' (Slurm side).
     """
+
     def __init__(self, host_path: str, container_path: str):
         super().__init__(path=host_path)
         self._container_path = container_path
@@ -228,6 +268,7 @@ class DualPathContextInjector(PipesFileContextInjector):
             f"{self.host_path} and injected container path {self._container_path}."
         )
 
+
 class DualPathFileMessageReader(PipesFileMessageReader):
     """
     Host<->container bridge for FILE-based Pipes messages.
@@ -236,8 +277,19 @@ class DualPathFileMessageReader(PipesFileMessageReader):
     PipesFileMessageReader, but injects 'DAGSTER_PIPES_MESSAGES_PATH' for
     the external process to the 'container_path'.
     """
-    def __init__(self, host_path: str, container_path: str, include_stdio_in_messages: bool = True, cleanup_file: bool = False):
-        super().__init__(path=host_path, include_stdio_in_messages=include_stdio_in_messages, cleanup_file=cleanup_file)
+
+    def __init__(
+        self,
+        host_path: str,
+        container_path: str,
+        include_stdio_in_messages: bool = True,
+        cleanup_file: bool = False,
+    ):
+        super().__init__(
+            path=host_path,
+            include_stdio_in_messages=include_stdio_in_messages,
+            cleanup_file=cleanup_file,
+        )
         self._container_path = container_path
         self.host_path = host_path
 
