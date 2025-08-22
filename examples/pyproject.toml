@@ -111,7 +111,7 @@ cwd = "./projects/dagster-slurm-example-shared"
 
 [tool.pixi.tasks.pack]
 # --ignore-pypi-non-wheel
-cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dagster_slurm_example_shared-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda pyproject.toml"
 description = "Start Pack dev environment"
 depends-on = ["build-shared-libarary"]
 
