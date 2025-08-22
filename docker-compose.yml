@@ -39,14 +39,12 @@ services:
     container_name: slurmctld
     hostname: slurmctld
     privileged: true
-    #cgroupns_mode: private  
-    # pid: host
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
-      #- /sys/fs/cgroup:/sys/fs/cgroup
+      - ./z_state/data_and_logs:/data_and_logs
     expose:
       - "6817"
     depends_on:
@@ -62,14 +60,12 @@ services:
     hostname: c1
     container_name: c1
     privileged: true
-    #cgroupns_mode: private  
-    # pid: host
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
-      #- /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - ./z_state/data_and_logs:/data_and_logs
     expose:
       - "6818"
     depends_on:
@@ -83,14 +79,12 @@ services:
     hostname: c2
     container_name: c2
     privileged: true
-    #cgroupns_mode: private  
-    # pid: host
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
-      #- /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - ./z_state/data_and_logs:/data_and_logs
     expose:
       - "6818"
     depends_on:
