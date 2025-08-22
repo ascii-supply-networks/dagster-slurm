@@ -66,3 +66,14 @@ pixi update
 pixi run -e build --frozen sync-lib-with-upgrade
 cd examples pixi update
 ```
+
+## Local slurm cluster
+
+Start a local slurm cluster via
+
+```bash
+docker compose up --build -d
+ssh submitter@localhost -p 2222
+# password: submitter
+sinfo
+```

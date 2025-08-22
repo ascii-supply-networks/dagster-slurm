@@ -57,7 +57,7 @@ dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 
 [tool.pixi.feature.build.tasks]
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
-release = { cmd = "uv run semantic-release publish", description="Make new release" }
+release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
 lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects", description = "Lint" }
@@ -123,8 +123,8 @@ tag_format = "v$version"
 
 [tool.semantic_release]
 version_toml = [
-    "pyproject.toml:project.version",
-    "projects/dagster-slurm/pyproject.toml:project.version"
+  "pyproject.toml:project.version",
+  "projects/dagster-slurm/pyproject.toml:project.version",
 ]
 build_command = "pixi update dagster-slurm && uv sync --all-packages && pixi run -e build --frozen build-lib && git add pixi.lock uv.lock"
 
