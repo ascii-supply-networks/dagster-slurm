@@ -81,8 +81,8 @@ dagster-slurm-example-shared = { path = "./projects/dagster-slurm-example-shared
 [tool.pixi.feature.cluster-prod.pypi-dependencies]
 # eventually use released version
 # dagster-slurm = ">=0.0.1,<1"
-# dagster-slurm = { path = "../projects/dagster-slurm", editable = false }
-dagster-slurm-example-shared = { path = "./projects/dagster-slurm-example-shared", editable = false }
+# build from pixi build and injected in packaging process
+# dagster-slurm-example-shared
 
 [tool.pixi.feature.secops.dependencies]
 go-sops = "~=3.10.2"
@@ -104,10 +104,16 @@ cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
 
+# pixi run -e opstooling --frozen build-shared-libarary
+[tool.pixi.tasks.build-shared-libarary]
+cmd = "pixi build -o dist"
+cwd = "./projects/dagster-slurm-example-shared"
+
 [tool.pixi.tasks.pack]
 # --ignore-pypi-non-wheel
-cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  pyproject.toml"
+cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dagster_slurm_example_shared-*.conda pyproject.toml"
 description = "Start Pack dev environment"
+depends-on = ["build-shared-libarary"]
 
 [tool.pixi.feature.secops.tasks.secrets-encrypt]
 cmd = "./scripts/encrypt_secrets.sh"
@@ -127,7 +133,7 @@ description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects"
+cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes projects/dagster-slurm-example-shared/.pixi"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]
@@ -182,7 +188,12 @@ project-includes = [
   "projects/dagster-slurm-example-shared/dagster_slurm_example_shared",
   "projects/dagster-slurm-example/dagster_slurm_example_tests",
 ]
-project-excludes = ["**/build", "**/.ruff_cache"]
+project-excludes = [
+  "**/build/**",
+  "**/.ruff_cache/**",
+  "**/.pixi/**",
+  "**/dist/**",
+]
 
 search-path = [
   "projects/dagster-slurm-example",

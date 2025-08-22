@@ -9,3 +9,16 @@ dependencies = []
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
+
+[tool.pixi.workspace]
+preview = ["pixi-build"]
+channels = [
+  "https://prefix.dev/conda-forge",
+  "https://prefix.dev/pixi-build-backends",
+]
+
+[tool.pixi.package.build]
+backend = { name = "pixi-build-python", version = ">=0.3.2" }
+
+[tool.pixi.package.host-dependencies]
+hatchling = ">=1.27,<2.0"
