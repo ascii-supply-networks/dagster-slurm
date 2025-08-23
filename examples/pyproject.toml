@@ -63,7 +63,7 @@ dagster-webserver = ">=1.11.0,<1.12"
 
 [tool.pixi.feature.my-infrastructure.dependencies]
 [tool.pixi.feature.my-infrastructure.pypi-dependencies]
-dagster-slurm-example = { path = ".", editable = true }
+dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
 dagster-ray = ">=0.0.20,<1"
 
 [tool.pixi.feature.submission.dependencies]
@@ -77,8 +77,12 @@ ray = { version = "~=2.48.0", extras = ["data", "default"] }
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
+dagster-slurm-example-shared = { path = "./projects/dagster-slurm-example-shared", editable = true }
 [tool.pixi.feature.cluster-prod.pypi-dependencies]
+# eventually use released version
 # dagster-slurm = ">=0.0.1,<1"
+# build from pixi build and injected in packaging process
+# dagster-slurm-example-shared
 
 [tool.pixi.feature.secops.dependencies]
 go-sops = "~=3.10.2"
@@ -100,10 +104,21 @@ cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
 
+# pixi run -e opstooling --frozen build-shared-libarary
+[tool.pixi.tasks.build-shared-libarary]
+cmd = "pixi build -o dist"
+cwd = "./projects/dagster-slurm-example-shared"
+
 [tool.pixi.tasks.pack]
 # --ignore-pypi-non-wheel
-cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  pyproject.toml"
-description = "Start Pack dev environment"
+cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda pyproject.toml"
+description = "Pack dev environment"
+depends-on = ["build-shared-libarary"]
+
+[tool.pixi.tasks.pack-aarch]
+cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-aarch64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda pyproject.toml"
+description = "Pack dev environment for aarch"
+depends-on = ["build-shared-libarary"]
 
 [tool.pixi.feature.secops.tasks.secrets-encrypt]
 cmd = "./scripts/encrypt_secrets.sh"
@@ -118,12 +133,12 @@ cmd = "./scripts/git_clean_local_branches.sh"
 description = "cleanup local non used branches"
 
 [tool.pixi.tasks.fmt]
-cmd = "pixi run -e ci-basics --frozen ruff format ./dagster_slurm_example && ruff check --fix ./dagster_slurm_example && yamllint -c yamllintconfig.yaml . && taplo fmt"
+cmd = "pixi run -e ci-basics --frozen ruff format ./projects && ruff check --fix ./projects && yamllint -c yamllintconfig.yaml projects && taplo fmt"
 description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./dagster_slurm_example && yamllint -c yamllintconfig.yaml . && taplo check && pyrefly check"
+cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes projects/dagster-slurm-example-shared/.pixi"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]
@@ -166,14 +181,27 @@ exclude = ["pixi.lock"]
 
 [tool.pytest.ini_options]
 filterwarnings = [
-  "ignore::DeprecationWarning:dagster.*",
-  "ignore::DeprecationWarning:pydantic.*",
+  "ignore::dagster._utils.warnings.BetaWarning",
+  "ignore::dagster._utils.warnings.PreviewWarning",
 ]
 markers = ["data: tests using real input data"]
 
 
 [tool.pyrefly]
-project-includes = ["dagster_slurm_example"]
-project-excludes = ["dagster_slurm_example/build"]
-search-path = ["dagster_slurm_example"]
+project-includes = [
+  "projects/dagster-slurm-example/dagster_slurm_example",
+  "projects/dagster-slurm-example-shared/dagster_slurm_example_shared",
+  "projects/dagster-slurm-example/dagster_slurm_example_tests",
+]
+project-excludes = [
+  "**/build/**",
+  "**/.ruff_cache/**",
+  "**/.pixi/**",
+  "**/dist/**",
+]
+
+search-path = [
+  "projects/dagster-slurm-example",
+  "projects/dagster-slurm-example-shared",
+]
 python-version = "3.12.11"

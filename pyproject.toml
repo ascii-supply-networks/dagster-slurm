@@ -14,7 +14,7 @@ package = false
 members = ["projects/*"]
 
 [build-system]
-requires = ["uv_build>=0.7.20,<0.8.0"]
+requires = ["uv_build>=0.8.8,<0.9.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
@@ -60,10 +60,9 @@ myst-parser = "~=4.0.1"
 sphinx-markdown-builder = ">=0.6.8,<1"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 
-
 [tool.pixi.feature.build.tasks]
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
-release = { cmd = "uv run semantic-release publish", description="Make new release" }
+release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
 lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects", description = "Lint" }
@@ -129,8 +128,8 @@ tag_format = "v$version"
 
 [tool.semantic_release]
 version_toml = [
-    "pyproject.toml:project.version",
-    "projects/dagster-slurm/pyproject.toml:project.version"
+  "pyproject.toml:project.version",
+  "projects/dagster-slurm/pyproject.toml:project.version",
 ]
 build_command = "pixi update dagster-slurm && uv sync --all-packages && pixi run -e build --frozen build-lib && git add pixi.lock uv.lock"
 
