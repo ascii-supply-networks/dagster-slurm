@@ -61,6 +61,7 @@ services:
     hostname: c1
     container_name: c1
     privileged: true
+    shm_size: '4gb'
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -81,6 +82,7 @@ services:
     hostname: c2
     container_name: c2
     privileged: true
+    shm_size: '4gb'
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
