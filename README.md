@@ -93,8 +93,13 @@ SENTINEL="${SLURM_SUBMIT_DIR:-$PWD}/.ray_shutdown.${SLURM_JOB_ID:-$$}"
 
 cleanup() {
   echo "--- Performing cleanup ---"
-  : > "$SENTINEL"           # create/touch the shutdown file
-  wait || true              # wait for background sruns to exit cleanly
+  : > "$SENTINEL"      # signal workers/head to stop
+
+  # Optional but recommended on shared FS: let workers notice the sentinel.
+  sleep 1
+
+  wait || true   # wait for the srun steps to exit cleanly
+  rm -f "$SENTINEL" || true    # tidy up
   echo "--- cleanup complete ---"
 }
 trap cleanup EXIT SIGINT SIGTERM
