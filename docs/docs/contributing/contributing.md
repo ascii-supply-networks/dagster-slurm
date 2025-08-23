@@ -1,6 +1,6 @@
 ---
 sidebar_position: 2
-title: Contributing
+title: Tooling setup
 ---
 
 ## Call for contribution
@@ -58,3 +58,22 @@ pixi run -e docs --frozen docs-build
 ```
 
 When committing - ensure semver compatible standard commit patterns are followed.
+
+### Dependency upgrade
+
+```bash
+pixi update
+pixi run -e build --frozen sync-lib-with-upgrade
+cd examples pixi update
+```
+
+## Local slurm cluster
+
+Start a local slurm cluster via
+
+```bash
+docker compose up --build -d
+ssh submitter@localhost -p 2222
+# password: submitter
+sinfo
+```
