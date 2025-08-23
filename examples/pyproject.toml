@@ -112,7 +112,12 @@ cwd = "./projects/dagster-slurm-example-shared"
 [tool.pixi.tasks.pack]
 # --ignore-pypi-non-wheel
 cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda pyproject.toml"
-description = "Start Pack dev environment"
+description = "Pack dev environment"
+depends-on = ["build-shared-libarary"]
+
+[tool.pixi.tasks.pack-aarch]
+cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-aarch64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda pyproject.toml"
+description = "Pack dev environment for aarch"
 depends-on = ["build-shared-libarary"]
 
 [tool.pixi.feature.secops.tasks.secrets-encrypt]
