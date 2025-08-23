@@ -28,3 +28,43 @@ ssh submitter@localhost -p 2222
 # password: submitter
 sinfo
 ```
+
+## basic distribution
+
+initial setup
+
+```bash
+curl -fsSL https://pixi.sh/install.sh | sh
+bash
+pixi global install pixi-unpack
+```
+
+environment setup
+
+```bash
+cd examples
+pixi run pack
+# if using an ARM host
+# pixi run pack-aarch
+
+scp -P 2222 environment.tar submitter@localhost:/home/submitter
+ssh submitter@localhost -p 2222
+
+# tar -xvf environment.tar
+pixi exec pixi-unpack environment.tar
+source ./activate.sh
+```
+
+as a result:
+
+```bash
+source /home/submitter/activate.sh
+```
+
+is now available on all the cluster nodes
+
+## ray
+
+```bash
+
+```

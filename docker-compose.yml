@@ -45,6 +45,7 @@ services:
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
       - ./z_state/data_and_logs:/data_and_logs
+      - home_dirs:/home
     expose:
       - "6817"
     depends_on:
@@ -66,6 +67,7 @@ services:
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
       - ./z_state/data_and_logs:/data_and_logs
+      - home_dirs:/home
     expose:
       - "6818"
     depends_on:
@@ -85,6 +87,7 @@ services:
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
       - ./z_state/data_and_logs:/data_and_logs
+      - home_dirs:/home
     expose:
       - "6818"
     depends_on:
@@ -98,6 +101,7 @@ volumes:
   slurm_jobdir:
   var_lib_mysql:
   var_log_slurm:
+  home_dirs:
 
 networks:
   slurm-network:
