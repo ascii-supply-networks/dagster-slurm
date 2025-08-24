@@ -49,6 +49,7 @@ const sidebars: SidebarsConfig = {
         },
       ],
     },
+    'slides',
     {
       type: 'category',
       label: 'API Reference',

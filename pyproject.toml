@@ -47,7 +47,7 @@ build = ">=1.3.0"
 channels = ["conda-forge", "https://prefix.dev/brads-forge"]
 [tool.pixi.feature.docs.dependencies]
 nodejs = "~=24.4.1"
-bun = "~=1.2.19"
+bun = ">=1.2.19,<2"
 sphinx = "~=8.2.3"
 [tool.pixi.feature.docs.pypi-dependencies]
 sphinx-rtd-theme = "~=3.0.2"
@@ -99,20 +99,55 @@ description = "Start example"
 cmd = "bun install"
 cwd = "docs"
 
+[tool.pixi.feature.docs.tasks.slides-install]
+cmd = "bun install"
+cwd = "slides"
+
 [tool.pixi.feature.docs.tasks.docs-build-python-api]
 cmd = "bun run build:api"
 cwd = "docs"
 [tool.pixi.feature.docs.tasks.docs-serve]
 cmd = "bun run start"
 cwd = "docs"
-depends-on = ["docs-install", "docs-build-python-api"]
+depends-on = ["docs-install", "docs-build-python-api", "docs-collect-slides"]
 description = "Serve docs locally"
 
 [tool.pixi.feature.docs.tasks.docs-build]
 cmd = "bun run build"
 cwd = "docs"
-depends-on = ["docs-install", "docs-build-python-api"]
+depends-on = ["docs-install", "docs-build-python-api", "docs-collect-slides"]
 description = "Build docs for serving"
+
+[tool.pixi.feature.docs.tasks.slides]
+cmd = "bun dev"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "start slides server"
+
+[tool.pixi.feature.docs.tasks.slides-export-pdf]
+cmd = "bun run export"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "expoert pdf"
+
+[tool.pixi.feature.docs.tasks.slides-build]
+cmd = "bun run build"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "build static files"
+
+
+[tool.pixi.feature.docs.tasks.slides-build-base]
+cmd = "bun run build-base"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "build static slides with base"
+
+
+[tool.pixi.feature.docs.tasks.docs-collect-slides]
+cmd = "bash -lc 'set -euo pipefail; rm -rf docs/static/slides; cp -R slides/dist/. docs/static/slides'"
+depends-on = ["slides-build-base"]
+description = "Copy Slidev dist into Docusaurus static/"
 
 
 [tool.commitizen]

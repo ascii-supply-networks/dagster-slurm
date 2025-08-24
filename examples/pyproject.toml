@@ -92,6 +92,9 @@ age = "~=1.2.1"
 git = "~=2.49"
 pixi-pack = ">=0.7.2,<1"
 
+[tool.pixi.feature.dagster-scaffolding.dependencies]
+yarn = "~=4.9.2"
+
 [tool.pixi.feature.dagster-scaffolding.pypi-dependencies]
 dagster-dg-cli = ">=1.11.0,<1.12"
 create-dagster = ">=1.11.0,<1.12"
