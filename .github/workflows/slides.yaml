@@ -40,5 +40,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          path: src/slides/slides-export.pdf
+          path: slides/slides-export.pdf
           retention-days: 5
