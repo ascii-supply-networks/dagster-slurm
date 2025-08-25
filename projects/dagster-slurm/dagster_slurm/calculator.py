@@ -52,4 +52,4 @@ def subtract(a: float, b: float) -> float:
     return a - b
 
 
-foo = "2"
+foo = "3"

@@ -139,7 +139,7 @@ source = { editable = "projects/dagster-slurm" }
 
 [[package]]
 name = "dagster-slurm-ray"
-version = "1.3.0"
+version = "1.2.0rc1"
 source = { editable = "projects/dagster-slurm-ray" }
 dependencies = [
     { name = "dagster-slurm" },
@@ -150,7 +150,7 @@ requires-dist = [{ name = "dagster-slurm", editable = "projects/dagster-slurm" }
 
 [[package]]
 name = "dagster-slurm-spark"
-version = "1.3.0"
+version = "1.2.0rc1"
 source = { editable = "projects/dagster-slurm-spark" }
 dependencies = [
     { name = "dagster-slurm" },
