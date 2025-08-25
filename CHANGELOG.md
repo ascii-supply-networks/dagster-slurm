@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.0-rc.5 (2025-08-25)
+
+### Chores
+
+- Re-trigger CI
+  ([`c93d035`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c93d0355dca5bf5971327dbb274b9e295602be4e))
+
+
 ## v1.2.0-rc.4 (2025-08-25)
 
 ### Chores
