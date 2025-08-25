@@ -198,13 +198,10 @@ class _PipesBaseSlurmClient(PipesClient):
 
             # 4) stream Pipes messages while polling Slurm
             while True:
-                for ev in session.get_results():
-                    yield ev
                 st = ssh_job_state(job_id)
                 if st in TERMINAL_STATES:
                     break
                 time.sleep(self.poll_interval_seconds)
 
-            # Final drain (captures any buffered tail lines)
             for ev in session.get_results():
                 yield ev

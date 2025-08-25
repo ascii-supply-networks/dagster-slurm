@@ -163,6 +163,7 @@ def slurm_submit_pipes(context: AssetExecutionContext):
         metadata={"job_id": job_id, "remote_run_dir": remote_run_dir},
     )
 
+
 slurm_submit_pipes_ssh = make_slurm_pipes_asset(
     name="slurm_submit_pipes_ssh2",
     local_payload="external_file.py",
