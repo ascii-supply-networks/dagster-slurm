@@ -927,8 +927,8 @@ packages:
   timestamp: 1733218222191
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.2.0rc1
-  sha256: 7453c8ad0c37e50113045906eff683b1f2f76b38cc7210d76066bcec255db46f
+  version: 1.2.0rc2
+  sha256: 952a55f4dc6ecab89beeda7ef8b68b3ccc9df372be3e0a5a715884f4430d48b4
   requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./projects/dagster-slurm-ray
@@ -936,7 +936,7 @@ packages:
   version: 1.2.0rc1
   sha256: 3474bcc6c1248d5c489fac27e65667d4a5e66a71dca2383e072bef7846da3187
   requires_dist:
-  - dagster-slurm @ file:///Users/geoheil/development/ascii/dagster-slurm/projects/dagster-slurm
+  - dagster-slurm @ file:///home/runner/work/dagster-slurm/dagster-slurm/projects/dagster-slurm
   requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./projects/dagster-slurm-spark
@@ -944,7 +944,7 @@ packages:
   version: 1.2.0rc1
   sha256: 52717ffb535fe013292e3497402f95caa4ae5d1868117053a011a7a18a096cf5
   requires_dist:
-  - dagster-slurm @ file:///Users/geoheil/development/ascii/dagster-slurm/projects/dagster-slurm
+  - dagster-slurm @ file:///home/runner/work/dagster-slurm/dagster-slurm/projects/dagster-slurm
   requires_python: '>=3.12,<3.13'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/docutils-0.21.2-pyhd8ed1ab_1.conda
