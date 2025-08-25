@@ -5,7 +5,8 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
-
+import shutil
+import dagster as dg
 from dagster import (
     AssetExecutionContext,
     asset,
@@ -13,50 +14,83 @@ from dagster import (
     Output,
     PipesEnvContextInjector,
 )
-from .ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES
-from .ssh_message_reader import SshExecTailMessageReader
+from dagster_slurm.ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES
+from dagster_slurm.ssh_message_reader import SshExecTailMessageReader
+from dagster_slurm.slurm_factory import make_slurm_pipes_asset
+from ..shared import *
 
-# ---------- Config via env ----------
-REMOTE_BASE         = os.environ.get("SLURM_REMOTE_BASE", "/home/submitter").rstrip("/")
-ACTIVATE_SH         = os.environ.get("SLURM_ACTIVATE_SH", "/home/submitter/activate.sh")
-REMOTE_PY           = os.environ.get("SLURM_PYTHON", "python")
-PARTITION           = os.environ.get("SLURM_PARTITION", "")
-TIME_LIMIT          = os.environ.get("SLURM_TIME", "00:10:00")
-CPUS                = os.environ.get("SLURM_CPUS", "1")
-MEM                 = os.environ.get("SLURM_MEM", "256M")
-MEM_PER_CPU   = os.environ.get("SLURM_MEM_PER_CPU", "256M")
 
-# Local external script executed remotely under Pipes
-LOCAL_PAYLOAD = os.environ.get(
-    "LOCAL_EXTERNAL_FILE",
-    str(
-        (Path(__file__).resolve().parents[3]
-         / "dagster_slurm_example" / "defs" / "shell" / "external_file.py"
-        ).resolve()
-    ),
+def get_python_executable() -> str:
+    """Get the Python executable path from PATH.
+
+    Returns:
+        str: Path to the Python executable
+
+    Raises:
+        RuntimeError: If Python executable is not found in PATH
+    """
+    python_path = shutil.which("python")
+    if python_path is None:
+        raise RuntimeError("Python executable not found in PATH")
+    return python_path
+
+
+@dg.multi_asset(
+    specs=[dg.AssetSpec(key=[example_defs_prefix, "orders"]), dg.AssetSpec("users")]
 )
+def subprocess_asset(
+    context: dg.AssetExecutionContext,
+    pipes_subprocess_client: dg.PipesSubprocessClient,
+):
+    python_path = get_python_executable()
+    cmd = [python_path, dg.file_relative_path(__file__, "shell_external.py")]
+
+    return pipes_subprocess_client.run(
+        command=cmd,
+        context=context,
+        extras={"foo": "bar"},
+        env={
+            "MY_ENV_VAR_IN_SUBPROCESS": "my_value",
+        },
+    ).get_results()
+
+
+@dg.asset_check(
+    asset=dg.AssetKey([example_defs_prefix, "orders"]),
+    blocking=True,
+)
+def no_empty_order_check(
+    context: dg.AssetCheckExecutionContext,
+    pipes_subprocess_client: dg.PipesSubprocessClient,
+) -> dg.AssetCheckResult:
+    python_path = get_python_executable()
+    cmd = [
+        python_path,
+        dg.file_relative_path(__file__, "shell_integration_test.py"),
+    ]
+
+    results = pipes_subprocess_client.run(
+        command=cmd, context=context.op_execution_context
+    ).get_asset_check_result()
+    return results
 
 
 @asset(name="slurm_submit_pipes_ssh")
 def slurm_submit_pipes(context: AssetExecutionContext):
-    # --- Per-run remote paths ---
     run_id         = context.run_id or uuid.uuid4().hex
     remote_run_dir = f"{REMOTE_BASE}/pipes/{run_id}"
     remote_msgs    = f"{remote_run_dir}/messages.jsonl"
     remote_results = f"{REMOTE_BASE}/results"
     remote_logs    = f"{REMOTE_BASE}/logs"
 
-    # --- Create directories once (robust quoting; single mkdir invocation) ---
     mkdir_cmd = "mkdir -p -- " + " ".join(
         shlex.quote(p) for p in (remote_run_dir, remote_results, remote_logs)
     )
     ssh_check(mkdir_cmd)
 
-    # --- Upload payload & set perms ---
     scp_put(LOCAL_PAYLOAD, f"{remote_run_dir}/external_file.py")
     ssh_check(f"chmod a+rx {shlex.quote(remote_run_dir)}/external_file.py")
 
-    # --- Pipes: env-based context + SSH-tailed file messages from remote ---
     injector = PipesEnvContextInjector()
     reader   = SshExecTailMessageReader(
         remote_messages_path=remote_msgs,
@@ -102,7 +136,7 @@ def slurm_submit_pipes(context: AssetExecutionContext):
             "-t", TIME_LIMIT,
             "-c", CPUS,
             f"--mem={MEM}",
-            #f"--mem-per-cpu={MEM_PER_CPU}"
+            #f"--mem-per-cpu={MEM_PER_CPU}" #--mem and --mem-per-cpu cannot be together
         ]
         if PARTITION:
             opts += ["-p", PARTITION]
@@ -118,18 +152,23 @@ def slurm_submit_pipes(context: AssetExecutionContext):
 
         # 4) Stream messages while polling job state
         while True:
-            #for ev in session.get_results():
-            #    yield ev
+
             st = ssh_job_state(job_id)
             if st in TERMINAL_STATES:
                 break
             time.sleep(1.0)
 
-    # Final drain after the session context exits (captures any buffered tail)
-    #for ev in session.get_results():
-    #    yield ev
-
     yield Output(
         {"job_id": job_id, "remote_run_dir": remote_run_dir},
         metadata={"job_id": job_id, "remote_run_dir": remote_run_dir},
     )
+
+slurm_submit_pipes_ssh = make_slurm_pipes_asset(
+    name="slurm_submit_pipes_ssh2",
+    local_payload="external_file.py",
+    time_limit="00:10:00",
+    cpus="1",
+    mem="256M",
+    # partition="normal",                      # optional
+    # extra_env={"FOO": "bar"},                # optional
+)
