@@ -927,22 +927,22 @@ packages:
   timestamp: 1733218222191
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.3.0rc1
-  sha256: eaa646a8b93055134be6815a5a1b1dec90bafbc0680f31bc2356da5b65513986
+  version: 1.3.1
+  sha256: 642ac8f58e1f48a9b7c13b231985d04a14d04fd31ce3efcb1288fbfd0c243625
   requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./projects/dagster-slurm-ray
   name: dagster-slurm-ray
-  version: 1.3.0rc1
-  sha256: a7d447dd8af4c927f7a96ee49a40ccfd8262cdd214d58fd0b6f82f0a2dd5e13f
+  version: 1.3.1
+  sha256: 21d6548a2826063da5018ca0d9877ce07ed6ceffe7a74bc8170d9b90c882cfbd
   requires_dist:
   - dagster-slurm @ file:///home/runner/work/dagster-slurm/dagster-slurm/projects/dagster-slurm
   requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./projects/dagster-slurm-spark
   name: dagster-slurm-spark
-  version: 1.3.0rc1
-  sha256: b6009c33655f840275f5b1d0b547eab0f371b156508c6c62a58f534b6690e88e
+  version: 1.3.1
+  sha256: 4742fdaf6b9fcb63aabb72797436fea9540b35f4e58671f33578ec2c041b0f78
   requires_dist:
   - dagster-slurm @ file:///home/runner/work/dagster-slurm/dagster-slurm/projects/dagster-slurm
   requires_python: '>=3.12,<3.13'
