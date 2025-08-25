@@ -1,0 +1,36 @@
+[project]
+name = "dagster-slurm-ray"
+version = "1.2.0-rc.1"
+description = "dagster integration with slurm and ray"
+readme = "README.md"
+authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
+requires-python = ">=3.12,<3.13"
+license = { text = "Apache-2.0" }
+keywords = ["dagster", "slurm", "hpc", "workflow-orchestration", "ray", "feray"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Distributed Computing",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["dagster-slurm"]
+
+[tool.uv.sources]
+dagster-slurm = { workspace = true }
+
+[project.urls]
+Homepage = "https://ascii-supply-networks.github.io/dagster-slurm/"
+Repository = "https://github.com/ascii-supply-networks/dagster-slurm"
+Documentation = "https://ascii-supply-networks.github.io/dagster-slurm/docs/intro"
+"Bug Reports" = "https://github.com/ascii-supply-networks/dagster-slurm/issues"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.8.8,<0.9"]
+build-backend = "uv_build"

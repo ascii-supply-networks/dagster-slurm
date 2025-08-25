@@ -15,5 +15,6 @@ documentation for details.
    :maxdepth: 2
    :caption: Contents:
 
-   api
-
+   api_core
+   api_ray
+   api_spark
