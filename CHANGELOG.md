@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.2.0-rc.3 (2025-08-25)
+
+### Chores
+
+- Re-trigger
+  ([`5f18dda`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5f18ddac5454235759b0746a539e1ce5c6f1509b))
+
+- Re-trigger CI
+  ([`0a7f1a9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0a7f1a9f2bc348db3dbd28d8550c2b079fd4a738))
+
+
 ## v1.2.0-rc.2 (2025-08-25)
 
 ### Bug Fixes
