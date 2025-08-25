@@ -173,3 +173,14 @@ slurm_submit_pipes_ssh = make_slurm_pipes_asset(
     # partition="normal",                      # optional
     # extra_env={"FOO": "bar"},                # optional
 )
+
+slurm_submit_pipes_ssh = make_slurm_pipes_asset(
+    job_name="ray_pipes_job",
+    name="slurm_submit_pipes_ray",
+    local_payload="../ray/ray_slurm.py",
+    time_limit="00:10:00",
+    cpus="1",
+    mem="256M",
+    # partition="normal",                      # optional
+    # extra_env={"FOO": "bar"},                # optional
+)
