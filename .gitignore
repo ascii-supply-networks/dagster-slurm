@@ -600,3 +600,5 @@ z_state/data_and_logs/
 # TODO: Explore if we can ignore the static slides and have CI autogenerate them for deployment
 docs/static/slides/
 slides/slides-export.pdf
+examples/environment.tar
+examples/*.tar
