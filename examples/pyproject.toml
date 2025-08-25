@@ -63,7 +63,7 @@ dagster-webserver = ">=1.11.0,<1.12"
 
 [tool.pixi.feature.my-infrastructure.dependencies]
 [tool.pixi.feature.my-infrastructure.pypi-dependencies]
-dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
+# dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
 dagster-ray = ">=0.0.20,<1"
 
 [tool.pixi.feature.submission.dependencies]
@@ -77,7 +77,7 @@ ray = { version = "~=2.48.0", extras = ["data", "default"] }
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
-dagster-slurm-example-shared = { path = "./projects/dagster-slurm-example-shared", editable = true }
+# dagster-slurm-example-shared = { path = "./projects/dagster-slurm-example-shared", editable = true }
 [tool.pixi.feature.cluster-prod.pypi-dependencies]
 # eventually use released version
 # dagster-slurm = ">=0.0.1,<1"
