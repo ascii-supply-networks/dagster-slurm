@@ -1,6 +1,6 @@
 ---
 sidebar_position: 3
-title: Release
+title: Release process
 ---
 This project uses [semantic-release](https://semantic-release.gitbook.io/) for automated versioning and publishing.
 

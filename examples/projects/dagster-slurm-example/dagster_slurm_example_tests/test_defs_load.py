@@ -1,5 +1,4 @@
 import dagster as dg
-
 from dagster_slurm_example import defs
 
 
