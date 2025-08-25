@@ -73,7 +73,7 @@ Start a local slurm cluster via
 
 ```bash
 docker compose up --build -d
-ssh submitter@localhost -p 2222
+ssh submitter@localhost -p 2223
 # password: submitter
 sinfo
 ```

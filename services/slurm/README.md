@@ -24,7 +24,7 @@ using Docker Compose:
 # docker compose up --build -d
 docker compose up -d
 
-ssh submitter@localhost -p 2222
+ssh submitter@localhost -p 2223
 ```
 
 ## 🖥️  Accessing the Cluster

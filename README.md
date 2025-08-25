@@ -26,7 +26,7 @@ See the (draft) [documentation](https://ascii-supply-networks.github.io/dagster-
 docker compose build
 docker compose up -d
 
-ssh submitter@localhost -p 2222
+ssh submitter@localhost -p 2223
 # password: submitter
 sinfo
 ```
@@ -49,8 +49,8 @@ pixi run pack
 # if using an ARM host
 # pixi run pack-aarch
 
-scp -P 2222 environment.tar submitter@localhost:/home/submitter
-ssh submitter@localhost -p 2222
+scp -P 2223 environment.tar submitter@localhost:/home/submitter
+ssh submitter@localhost -p 2223
 
 # tar -xvf environment.tar
 pixi exec pixi-unpack environment.tar
