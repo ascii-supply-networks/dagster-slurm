@@ -102,7 +102,7 @@ create-dagster = ">=1.11.0,<1.12"
 [tool.pixi.tasks]
 
 [tool.pixi.tasks.start]
-cmd = "pixi run -e dev --locked dagster dev"
+cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
@@ -119,13 +119,13 @@ description = "Build all slurm integrations"
 
 [tool.pixi.tasks.pack]
 # --ignore-pypi-non-wheel
-cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl pyproject.toml"
 description = "Pack dev environment"
 depends-on = ["build-shared-libarary", "build-integrations"]
 
 
 [tool.pixi.tasks.pack-aarch]
-cmd = "pixi run -e opstooling --locked pixi-pack --environment packaged-cluster --platform linux-aarch64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl pyproject.toml"
 description = "Pack dev environment for aarch"
 depends-on = ["build-shared-libarary"]
 
