@@ -2,6 +2,108 @@
 
 <!-- version list -->
 
+## v1.2.0-rc.3 (2025-08-25)
+
+### Chores
+
+- Re-trigger
+  ([`5f18dda`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5f18ddac5454235759b0746a539e1ce5c6f1509b))
+
+- Re-trigger CI
+  ([`0a7f1a9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0a7f1a9f2bc348db3dbd28d8550c2b079fd4a738))
+
+
+## v1.2.0-rc.2 (2025-08-25)
+
+### Bug Fixes
+
+- Add autoformatter for pre-commit
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Clean path ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Increase timeout ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Use frozen ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+### Chores
+
+- Change port to 2223 ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Explore packaging of shared - fail to bdist it
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Pixi update ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Refine cleanup ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Refine documentation as per zach`s review
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Refine tests ignore beta warnings
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Try to package scripts ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Upgrade uv ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+### Features
+
+- Add pixi to slides ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Add slides (mechanics) ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Add slurm container, refactor to dedicated shared library for the examples
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Basic slides blueprint ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Creating new dedicated integration packages
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Enable submission of ray to (local) slurm
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- More timeout ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Package aarch, instructions for copying stuff over
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Packaging of shared library
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Refine docs ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Refinments and cleanup ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+- Use dedicated shared volume - ./z_state/data_and_logs:/data_and_logs
+  ([#20](https://github.com/ascii-supply-networks/dagster-slurm/pull/20),
+  [`120b239`](https://github.com/ascii-supply-networks/dagster-slurm/commit/120b239b61b74b7703be9a4dc548692ff004be34))
+
+
 ## v1.2.0-rc.1 (2025-08-11)
 
 ### Chores

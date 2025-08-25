@@ -2,7 +2,11 @@ import os
 
 import pandas as pd
 from dagster_pipes import PipesContext, open_dagster_pipes
+<<<<<<< HEAD:examples/dagster_slurm_example/defs/shell/shell_external.py
 from ..shared import foo
+=======
+from dagster_slurm_example_shared.shared import foo
+>>>>>>> 630443d564ddbb2f258dc1747f1740bf5c165237:examples/projects/dagster-slurm-example/dagster_slurm_example/defs/shell/shell_external.py
 
 from ..shared import example_defs_prefix
 

@@ -83,6 +83,12 @@ const config: Config = {
           position: 'left',
           label: 'Tutorial',
         },
+        {
+          type: 'doc',
+          docId: 'slides',
+          label: 'Slides',
+          position: 'left',
+        },
         // {to: '/blog', label: 'Blog', position: 'left'},
         {
           href: 'https://github.com/ascii-supply-networks/dagster-slurm',
@@ -101,6 +107,7 @@ const config: Config = {
               label: 'Tutorial',
               to: '/docs/intro',
             },
+            { to: 'docs/slides', label: 'Slides' },
           ],
         },
         {
