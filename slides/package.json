@@ -6,7 +6,7 @@
     "build": "slidev build",
     "build-base": "slidev build --base ./",
     "dev": "slidev --open --port 5555",
-    "export": "slidev export"
+    "export": "slidev export -timeout 60000"
   },
   "dependencies": {
     "@slidev/cli": "^52.1.0",
