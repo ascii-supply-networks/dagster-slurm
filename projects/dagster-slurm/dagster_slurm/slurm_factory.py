@@ -47,12 +47,17 @@ def make_slurm_pipes_asset(
             extra_sbatch_args=extra_sbatch_args,
             extra_env=extra_env,
         ):
-            print(ev)
-            # yield 
+            if isinstance(ev, str):
+                context.log.info(ev)
+            elif hasattr(ev, "to_observation"):
+                yield ev.to_observation()
 
         yield Output(
             {"job_id": client.last_job_id, "remote_run_dir": client.last_remote_run_dir},
-            metadata={"job_id": client.last_job_id, "remote_run_dir": client.last_remote_run_dir},
+            metadata={
+                "job_id": client.last_job_id,
+                "remote_run_dir": client.last_remote_run_dir,
+            },
         )
 
     return _asset
