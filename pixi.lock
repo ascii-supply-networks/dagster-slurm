@@ -927,8 +927,8 @@ packages:
   timestamp: 1733218222191
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.2.0rc3
-  sha256: 66825eb86008ce62185d5473543143b6ce9e820379eca9c331ca955066197969
+  version: 1.2.0rc4
+  sha256: 7ef93c37d755d5a97af04f38aac3eb555db88c285add4da6a42edb68d2bc3565
   requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./projects/dagster-slurm-ray

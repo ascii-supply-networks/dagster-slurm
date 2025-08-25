@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.0-rc.4 (2025-08-25)
+
+### Chores
+
+- Re-trigger CI
+  ([`efcc128`](https://github.com/ascii-supply-networks/dagster-slurm/commit/efcc12885c1f9bb2f42839b3d454232aaaa3fb9d))
+
+
 ## v1.2.0-rc.3 (2025-08-25)
 
 ### Chores
