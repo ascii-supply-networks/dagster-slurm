@@ -3,7 +3,7 @@ default_install_hook_types: [pre-commit, commit-msg]
 minimum_pre_commit_version: '3.0.0'
 
 repos:
-  # Python Data Pipeline - Format & Lint (combined for speed)
+  # examples
   - repo: local
     hooks:
       - id: python-fmt-lint
@@ -11,6 +11,16 @@ repos:
         entry: sh -c 'cd examples && pixi run -e ci-basics --frozen fmt'
         language: system
         files: ^examples/.*\.(py|ipynb)$
+        pass_filenames: false
+        require_serial: false
+  # library
+  - repo: local
+    hooks:
+      - id: python-fmt-lint
+        name: python format and lint
+        entry: sh -c 'pixi run -e build --frozen fmt'
+        language: system
+        files: ^projects/.*\.(py|ipynb)$
         pass_filenames: false
         require_serial: false
 

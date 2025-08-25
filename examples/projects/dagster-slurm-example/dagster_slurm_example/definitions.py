@@ -44,7 +44,7 @@ def defs():
         git_branch="main",
         file_path_mapping=dg.AnchorBasedFilePathMapping(
             local_file_anchor=Path(__file__).parent,
-            file_anchor_path_in_repository="dagster-slurm/examples/dagster_slurm_example",
+            file_anchor_path_in_repository="examples/dagster_slurm_example",
         ),
     )
 

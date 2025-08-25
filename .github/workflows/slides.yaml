@@ -1,0 +1,44 @@
+name: slides and pdf render
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'slides/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ main ]
+    paths:
+      - 'slides/**'
+  workflow_dispatch:
+
+concurrency:
+  group: slides-main-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build slides and render PDF
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.9.0
+        with:
+          pixi-version: v0.53.0
+          cache: true
+          frozen: true
+      # - run: pixi run -e docs --frozen slides-build
+      - run: pixi run -e docs --frozen slides-export-pdf
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          path: slides/slides-export.pdf
+          retention-days: 5
