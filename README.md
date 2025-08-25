@@ -23,7 +23,9 @@ See the (draft) [documentation](https://ascii-supply-networks.github.io/dagster-
 ## developing
 
 ```bash
-docker compose up --build -d
+docker compose build
+docker compose up -d
+
 ssh submitter@localhost -p 2222
 # password: submitter
 sinfo
@@ -31,11 +33,11 @@ sinfo
 
 ## basic distribution
 
-initial setup
+initial setup.
+Install `pixi-unpack` to unpack the environment on the HPC/supercomputer to make it available for execution.
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
-bash
 pixi global install pixi-unpack
 ```
 
