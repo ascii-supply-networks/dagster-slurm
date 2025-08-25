@@ -162,6 +162,8 @@ tag_format = "v$version"
 version_toml = [
   "pyproject.toml:project.version",
   "projects/dagster-slurm/pyproject.toml:project.version",
+  "projects/dagster-slurm-ray/pyproject.toml:project.version",
+  "projects/dagster-slurm-spark/pyproject.toml:project.version",
 ]
 build_command = "pixi update dagster-slurm && uv sync --all-packages && pixi run -e build --frozen build-lib && git add pixi.lock uv.lock"
 

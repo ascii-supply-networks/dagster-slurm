@@ -933,7 +933,7 @@ packages:
   editable: true
 - pypi: ./projects/dagster-slurm-ray
   name: dagster-slurm-ray
-  version: 1.2.0rc1
+  version: 1.3.0
   sha256: 3474bcc6c1248d5c489fac27e65667d4a5e66a71dca2383e072bef7846da3187
   requires_dist:
   - dagster-slurm @ file:///home/runner/work/dagster-slurm/dagster-slurm/projects/dagster-slurm
@@ -941,7 +941,7 @@ packages:
   editable: true
 - pypi: ./projects/dagster-slurm-spark
   name: dagster-slurm-spark
-  version: 1.2.0rc1
+  version: 1.3.0
   sha256: 52717ffb535fe013292e3497402f95caa4ae5d1868117053a011a7a18a096cf5
   requires_dist:
   - dagster-slurm @ file:///home/runner/work/dagster-slurm/dagster-slurm/projects/dagster-slurm
