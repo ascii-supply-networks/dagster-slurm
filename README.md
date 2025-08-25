@@ -20,6 +20,12 @@ See the (draft) [documentation](https://ascii-supply-networks.github.io/dagster-
 > We are actively looking for contributions to bring this package to life together
 
 
+## TODO:
+
+1) see the tasks in the github project
+2) refine documentation
+3) clean up this readme
+
 ## developing
 
 ```bash
@@ -71,7 +77,7 @@ docs: https://docs.ray.io/en/latest/cluster/vms/user-guides/community/slurm.html
 
 - get `slurm-template.sh` but modified https://docs.ray.io/en/latest/cluster/vms/user-guides/community/slurm-template.html#slurm-template find our [version here](projects/dagster-slurm-ray/dagster_slurm_ray/scripts/slurm-template.sh)
 
-- get `slurm-launch.py` inspired by (but modified) https://docs.ray.io/en/latest/cluster/vms/user-guides/community/slurm-launch.html#slurm-launch find our [version here](projects/dagster-slurm-ray/dagster_slurm_ray/scripts/slurm-launch.py)
+- get `slurm-launch.py` inspired by (but modified) https://docs.ray.io/en/latest/cluster/vms/user-guides/community/slurm-launch.html#slurm-launch find our [version here](projects/dagster-slurm-ray/dagster_slurm_ray/slurm-launch.py)
 
 - make a mini python file `my_mini_job.py` with contents of:
 
@@ -86,6 +92,13 @@ def f(x):
 futures = [f.remote(i) for i in range(4)]
 print(ray.get(futures)) # [0, 1, 4, 9]
 ```
+
+Connect to the slurm master:
+
+- by ssh connecting to your production supercomputer
+- by `docker exec -ti <<container id >> bash` for the local slurm minicluster
+
+And there follow along with
 
 ```bash
 # test run locally (single node)
