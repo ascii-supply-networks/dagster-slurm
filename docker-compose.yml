@@ -53,7 +53,7 @@ services:
     networks:
       - slurm-network
     ports:
-      - 2222:22
+      - 2223:22
 
   c1:
     image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
