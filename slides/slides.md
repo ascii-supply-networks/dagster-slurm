@@ -367,6 +367,27 @@ class: bg-white text-black
 
 ---
 transition: fade-out
+layout: image-right
+image: https://pixi.sh/latest/assets/pixi.png
+---
+
+# Dependency handling
+
+- Conda is a must
+- But slow
+
+`pixi` as the solution
+
+- fast
+- lockfiles
+- multi-environment handling (dev, prod)
+- pip and conda support
+- neatly packaging of environments
+- easy bootstrap
+- task runner
+
+---
+transition: fade-out
 class: bg-white text-black
 
 ---
