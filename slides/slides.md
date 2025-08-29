@@ -368,7 +368,7 @@ class: bg-white text-black
 ---
 transition: fade-out
 layout: image-right
-image: https://pixi.sh/latest/assets/pixi.png
+image: https://raw.githubusercontent.com/prefix-dev/pixi/refs/heads/main/docs/assets/pixi.webp
 ---
 
 # Dependency handling
@@ -381,7 +381,7 @@ image: https://pixi.sh/latest/assets/pixi.png
 - fast
 - lockfiles
 - multi-environment handling (dev, prod)
-- pip and conda support
+- pip and conda supportol
 - neatly packaging of environments
 - easy bootstrap
 - task runner
