@@ -147,10 +147,12 @@ description = "cleanup local non used branches"
 
 [tool.pixi.tasks.fmt]
 cmd = "pixi run -e ci-basics --frozen ruff format ./projects && ruff check --fix ./projects && yamllint -c yamllintconfig.yaml projects && taplo fmt"
+cmd = "pixi run -e ci-basics --frozen ruff format ./projects && ruff check --fix ./projects && yamllint -c yamllintconfig.yaml projects && taplo fmt"
 description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
+cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes projects/dagster-slurm-example-shared/.pixi"
 cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes projects/dagster-slurm-example-shared/.pixi"
 description = "Validate formatting and type check python files"
 
@@ -196,11 +198,29 @@ exclude = ["pixi.lock"]
 filterwarnings = [
   "ignore::dagster._utils.warnings.BetaWarning",
   "ignore::dagster._utils.warnings.PreviewWarning",
+  "ignore::dagster._utils.warnings.BetaWarning",
+  "ignore::dagster._utils.warnings.PreviewWarning",
 ]
 markers = ["data: tests using real input data"]
 
 
 [tool.pyrefly]
+project-includes = [
+  "projects/dagster-slurm-example/dagster_slurm_example",
+  "projects/dagster-slurm-example-shared/dagster_slurm_example_shared",
+  "projects/dagster-slurm-example/dagster_slurm_example_tests",
+]
+project-excludes = [
+  "**/build/**",
+  "**/.ruff_cache/**",
+  "**/.pixi/**",
+  "**/dist/**",
+]
+
+search-path = [
+  "projects/dagster-slurm-example",
+  "projects/dagster-slurm-example-shared",
+]
 project-includes = [
   "projects/dagster-slurm-example/dagster_slurm_example",
   "projects/dagster-slurm-example-shared/dagster_slurm_example_shared",
