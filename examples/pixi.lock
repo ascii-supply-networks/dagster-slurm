@@ -516,6 +516,7 @@ environments:
       - pypi: ../projects/dagster-slurm-ray
       - pypi: ../projects/dagster-slurm-spark
       - pypi: ./projects/dagster-slurm-example
+      - pypi: ./projects/dagster-slurm-example-hpc-workload
       - pypi: ./projects/dagster-slurm-example-shared
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-2_gnu.tar.bz2
@@ -724,6 +725,7 @@ environments:
       - pypi: ../projects/dagster-slurm-ray
       - pypi: ../projects/dagster-slurm-spark
       - pypi: ./projects/dagster-slurm-example
+      - pypi: ./projects/dagster-slurm-example-hpc-workload
       - pypi: ./projects/dagster-slurm-example-shared
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/bzip2-1.0.8-hfdf4475_7.conda
@@ -924,6 +926,7 @@ environments:
       - pypi: ../projects/dagster-slurm-ray
       - pypi: ../projects/dagster-slurm-spark
       - pypi: ./projects/dagster-slurm-example
+      - pypi: ./projects/dagster-slurm-example-hpc-workload
       - pypi: ./projects/dagster-slurm-example-shared
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-h99b78c6_7.conda
@@ -1123,6 +1126,7 @@ environments:
       - pypi: ../projects/dagster-slurm-ray
       - pypi: ../projects/dagster-slurm-spark
       - pypi: ./projects/dagster-slurm-example
+      - pypi: ./projects/dagster-slurm-example-hpc-workload
       - pypi: ./projects/dagster-slurm-example-shared
   opstooling:
     channels:
@@ -2469,6 +2473,12 @@ packages:
   version: 1.0.0
   sha256: 67e02dd5adf20d93848b4c4cd1bb93c22f64f291cb84064e6376eda420f18b23
   requires_python: '>=3.12'
+  editable: true
+- pypi: ./projects/dagster-slurm-example-hpc-workload
+  name: dagster-slurm-example-hpc-workload
+  version: 1.0.0
+  sha256: 762d2af2fffa13cbc905af8cd304f1cc305e403ace112c2f242e04f2c2bd5de6
+  requires_python: '>=3.12,<3.13'
   editable: true
 - pypi: ./projects/dagster-slurm-example-shared
   name: dagster-slurm-example-shared
