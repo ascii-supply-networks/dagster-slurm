@@ -3,7 +3,7 @@ import os
 import dagster as dg
 from dagster_ray import LocalRay
 
-from .lazy_local_ray import (
+from dagster_slurm_example.resources.lazy_local_ray import (
     PipesRayJobClientLazyLocalResource,
 )
 

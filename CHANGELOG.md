@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v1.3.1 (2025-08-25)
+
+
+## v1.3.0-rc.1 (2025-08-25)
+
+### Bug Fixes
+
+- Fix version increase for metadata
+  ([`15d18bf`](https://github.com/ascii-supply-networks/dagster-slurm/commit/15d18bfe6247cd7e8212e411b9fb64622217cd3f))
+
+### Chores
+
+- Re-trigger CI
+  ([`93e0200`](https://github.com/ascii-supply-networks/dagster-slurm/commit/93e0200bd3b40d2daeb4dd83a6244f4a64c37e02))
+
+
+## v1.3.0 (2025-08-25)
+
+
+## v1.2.0-rc.5 (2025-08-25)
+
+### Chores
+
+- Re-trigger CI
+  ([`c93d035`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c93d0355dca5bf5971327dbb274b9e295602be4e))
+
+
+## v1.2.0-rc.4 (2025-08-25)
+
+### Chores
+
+- Re-trigger CI
+  ([`efcc128`](https://github.com/ascii-supply-networks/dagster-slurm/commit/efcc12885c1f9bb2f42839b3d454232aaaa3fb9d))
+
+
 ## v1.2.0-rc.3 (2025-08-25)
 
 ### Chores

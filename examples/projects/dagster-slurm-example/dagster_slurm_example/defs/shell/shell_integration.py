@@ -17,7 +17,7 @@ from dagster import (
 from dagster_slurm.ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES
 from dagster_slurm.ssh_message_reader import SshExecTailMessageReader
 from dagster_slurm.slurm_factory import make_slurm_pipes_asset
-from ..shared import *
+from dagster_slurm_example.defs.shared import *
 
 
 def get_python_executable() -> str:
