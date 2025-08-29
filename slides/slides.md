@@ -381,7 +381,7 @@ image: https://raw.githubusercontent.com/prefix-dev/pixi/refs/heads/main/docs/as
 - fast
 - lockfiles
 - multi-environment handling (dev, prod)
-- pip and conda supportol
+- pip and conda support
 - neatly packaging of environments
 - easy bootstrap
 - task runner
