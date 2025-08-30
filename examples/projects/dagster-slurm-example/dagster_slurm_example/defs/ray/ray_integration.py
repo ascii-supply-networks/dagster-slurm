@@ -45,7 +45,10 @@ def ray_minithing(  # noqa:C901
 def my_external_asset(
     context: dg.AssetExecutionContext, pipes_ray_job_client: PipesRayJobClient
 ):
-    fp = dg.file_relative_path(__file__, "ray_external.py")
+    fp = dg.file_relative_path(
+        __file__,
+        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/ray_external.py",
+    )
     return pipes_ray_job_client.run(
         context=context,
         submit_job_params={

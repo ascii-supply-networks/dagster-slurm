@@ -1,4 +1,9 @@
 Based on https://github.com/giovtorres/slurm-docker-cluster
+Refinements:
+- python environment handling
+- SSH demo access
+- Upgrade to current version of slurm and OS
+- Streamlined/simplified setup
 
 # Slurm Docker Cluster
 

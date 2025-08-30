@@ -1,6 +1,5 @@
 import pandas as pd
 from dagster_pipes import PipesContext, open_dagster_pipes
-
 from dagster_slurm_example.defs.shared import example_defs_prefix
 
 

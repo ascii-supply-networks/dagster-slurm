@@ -323,13 +323,13 @@ Advantages of asset-based orchestration:
 ---
 transition: slide-up
 level: 2
-class: bg-white text-black
+# class: bg-white text-black
 ---
 
 
 # Architecture in detail
 
-![](/img/arch-detail.svg)
+![](/img/arch-detail-dark.svg)
 
 ---
 transition: slide-up
@@ -368,13 +368,14 @@ class: bg-white text-black
 ---
 transition: fade-out
 layout: image-right
-image: https://pixi.sh/latest/assets/pixi.png
+image: /img/Paxton_Wand_FINAL-2.png
+backgroundSize: contain
 ---
 
 # Dependency handling
 
-- Conda is a must
-- But slow
+- conda support is a must
+- conda itself is slow and dated (even with mamba)
 
 `pixi` as the solution
 
