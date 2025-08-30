@@ -368,13 +368,14 @@ class: bg-white text-black
 ---
 transition: fade-out
 layout: image-right
-image: https://raw.githubusercontent.com/prefix-dev/pixi/refs/heads/main/docs/assets/pixi.webp
+image: /img/Paxton_Wand_FINAL-2.png
+backgroundSize: contain
 ---
 
 # Dependency handling
 
-- Conda is a must
-- But slow
+- conda support is a must
+- conda itself is slow and dated (even with mamba)
 
 `pixi` as the solution
 
