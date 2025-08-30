@@ -323,13 +323,13 @@ Advantages of asset-based orchestration:
 ---
 transition: slide-up
 level: 2
-class: bg-white text-black
+# class: bg-white text-black
 ---
 
 
 # Architecture in detail
 
-![](/img/arch-detail.svg)
+![](/img/arch-detail-dark.svg)
 
 ---
 transition: slide-up
