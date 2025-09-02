@@ -15,7 +15,6 @@ members = ["projects/*"]
 
 [build-system]
 requires = ["uv_build>=0.8.8,<0.9.0"]
-requires = ["uv_build>=0.8.8,<0.9.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
@@ -65,7 +64,6 @@ dagster-slurm-spark = { path = "./projects/dagster-slurm-spark", editable = true
 
 [tool.pixi.feature.build.tasks]
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
-release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
