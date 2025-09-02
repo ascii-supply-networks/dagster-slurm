@@ -173,7 +173,7 @@ def slurm_submit_pipes(context: AssetExecutionContext):
     )
 
 
-slurm_submit_pipes_ssh = make_slurm_pipes_asset(
+slurm_submit_pipes_ssh2  = make_slurm_pipes_asset(
     name="slurm_submit_pipes_ssh2",
     local_payload="external_file.py",
     time_limit="00:10:00",
@@ -183,7 +183,7 @@ slurm_submit_pipes_ssh = make_slurm_pipes_asset(
     # extra_env={"FOO": "bar"},                # optional
 )
 
-slurm_submit_pipes_ssh = make_slurm_pipes_asset(
+slurm_submit_pipes_ray  = make_slurm_pipes_asset(
     job_name="ray_pipes_job",
     name="slurm_submit_pipes_ray",
     local_payload="../ray/ray_slurm.py",

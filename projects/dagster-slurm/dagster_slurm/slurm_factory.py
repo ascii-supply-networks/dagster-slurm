@@ -16,7 +16,7 @@ def _resolve_payload_path(payload: str | Path, caller_file: str) -> str:
     return str(p)
 
 def make_slurm_pipes_asset(
-    *,
+    *,  
     name: str,
     local_payload: str,
     job_name: str = "pipes_ext",
