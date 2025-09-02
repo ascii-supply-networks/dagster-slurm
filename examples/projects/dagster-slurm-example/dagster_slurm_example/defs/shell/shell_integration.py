@@ -43,7 +43,13 @@ def subprocess_asset(
     pipes_subprocess_client: dg.PipesSubprocessClient,
 ):
     python_path = get_python_executable()
-    cmd = [python_path, dg.file_relative_path(__file__, "shell_external.py")]
+    cmd = [
+        python_path,
+        dg.file_relative_path(
+            __file__,
+            "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/shell_external.py",
+        ),
+    ]
 
     return pipes_subprocess_client.run(
         command=cmd,
@@ -66,7 +72,10 @@ def no_empty_order_check(
     python_path = get_python_executable()
     cmd = [
         python_path,
-        dg.file_relative_path(__file__, "shell_integration_test.py"),
+        dg.file_relative_path(
+            __file__,
+            "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/shell_integration_test.py",
+        ),
     ]
 
     results = pipes_subprocess_client.run(

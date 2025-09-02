@@ -19,3 +19,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+With refinements from Georg Heiler (c) 2025
+
+Refinements:
+- python environment handling
+- SSH demo access
+- Upgrade to current version of slurm and OS
+- Streamlined/simplified setup
+
+These Refinements are also MIT licensed.
