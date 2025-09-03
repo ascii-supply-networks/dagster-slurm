@@ -13,18 +13,31 @@ from dagster import AssetExecutionContext, PipesClient, PipesEnvContextInjector,
 from .ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES
 from .ssh_message_reader import SshExecTailMessageReader
 
-
-def _default_local_payload() -> str:
-    # same default you used before
-    return str(
-        (Path(__file__).resolve().parents[3]
-         / "dagster_slurm_example" / "defs" / "shell" / "external_file.py"
-        ).resolve()
-    )
-
+_ALLOWED_KEYS = {
+    "PARTITION_OPTION",
+    "JOB_NAME",
+    "GIVEN_NODE",
+    "NUM_NODES",
+    "NUM_GPUS_PER_NODE",
+    "LOAD_ENV",
+    "COMMAND_PLACEHOLDER",
+}
 REMOTE_BASE = os.environ.get("SLURM_REMOTE_BASE", "/home/submitter").rstrip("/")
 ACTIVATE_SH = os.environ.get("SLURM_ACTIVATE_SH", "/home/submitter/activate.sh")
 REMOTE_PY   = os.environ.get("SLURM_PYTHON", "python")
+
+
+def _render_template_keep_others(src: str, mapping: Dict[str, str]) -> str:
+    """
+    Replaces ${KEY} only if KEY is in _ALLOWED_KEYS (and provided in mapping).
+    Leave everything else (including ${SLURM_*}, ${ip}, etc.) untouched.
+    """
+    def repl(m: re.Match[str]) -> str:
+        key = m.group(1)
+        if key in _ALLOWED_KEYS and key in mapping:
+            return str(mapping[key])
+        return m.group(0)
+    return re.sub(r"\$\{([A-Z0-9_]+)\}", repl, src)
 
 class _PipesBaseSlurmClient(PipesClient):
     """
@@ -112,7 +125,7 @@ class _PipesBaseSlurmClient(PipesClient):
         self,
         context: AssetExecutionContext,
         *,
-        local_payload: Optional[str] = None,
+        local_payload: str,
         job_name: str = "pipes_ext",
         results_dir_name: str = "results",
         logs_dir_name: str = "logs",
@@ -123,27 +136,33 @@ class _PipesBaseSlurmClient(PipesClient):
         partition: Optional[str] = None,
         extra_sbatch_args: Optional[Iterable[str]] = None,
         extra_env: Optional[Dict[str, str]] = None,
+        slurm_template_path: Optional[str] = None,
+        template_params: Optional[Dict[str, str]] = None,        
     ) -> Iterator:
         """
         Yields Dagster events (logs/materializations) from the remote Pipes process.
         On success, sets `self.last_job_id` and `self.last_remote_run_dir`.
+        If slurm_template_path is provided, it renders it and submit that as the batch script.
+        Otherwise, fall back to the built-in tiny batch script.
         """
         run_id = context.run_id or uuid.uuid4().hex
         remote_run_dir = f"{REMOTE_BASE}/pipes/{run_id}"
         remote_msgs    = f"{remote_run_dir}/messages.jsonl"
-        remote_results = f"{REMOTE_BASE}/results"
-        remote_logs    = f"{REMOTE_BASE}/logs"
+        remote_results = f"{REMOTE_BASE}/{results_dir_name}"
+        remote_logs    = f"{REMOTE_BASE}/{logs_dir_name}"
         mkdir_cmd = "mkdir -p -- " + " ".join(
             shlex.quote(p) for p in (remote_run_dir, remote_results, remote_logs)
         )
         # 1) create dirs
         ssh_check("mkdir -p -- " + " ".join(map(shlex.quote, (remote_run_dir, remote_results, remote_logs))))
         # 2) upload payload and chmod
+        #TODO: make this push dagster-slurm pixi pack verify pack exist if not packing 
+        #TODO: make this push share pixi pack verify pack exist if not packing 
         scp_put(str(local_payload), f"{remote_run_dir}/external_file.py") #TODO: make this keep the original name
         ssh_check(f"chmod a+rx {shlex.quote(remote_run_dir)}/external_file.py")
         # 3) Pipes wiring: reader + injector
-        injector = PipesEnvContextInjector()
-        reader   = SshExecTailMessageReader(remote_messages_path=remote_msgs, include_stdio_in_messages=True)
+        injector = self.context_injector
+        reader   = self._message_reader_factory(remote_msgs)
 
         with open_pipes_session(context=context, context_injector=injector, message_reader=reader) as session:
             # 3a) write pipes.env (bootstrap DAGSTER_PIPES_* + caller's extra_env)
@@ -154,37 +173,80 @@ class _PipesBaseSlurmClient(PipesClient):
             ssh_check(f"cat > {shlex.quote(remote_run_dir)}/pipes.env <<'EOF'\n{exports}\nEOF")
 
             # 3b) job.sbatch
-            bootstrap = textwrap.dedent(
-                f"""\
-                set -euo pipefail
-                source {shlex.quote(self.activate_sh)}
-                source {shlex.quote(remote_run_dir)}/pipes.env
-                export JOB_OUTPUT_DIR={shlex.quote(remote_results)}
-                mkdir -p -- "$JOB_OUTPUT_DIR"
-                exec {shlex.quote(self.remote_python)} {shlex.quote(remote_run_dir)}/external_file.py
-                """
-            )
-            ssh_check(
-                "cat > {path}/job.sbatch <<'SB'\n#!/bin/bash\n{body}\nSB\nchmod +x {path}/job.sbatch".format(
-                    path=shlex.quote(remote_run_dir), body=bootstrap
+            if slurm_template_path:
+                template_text = Path(slurm_template_path).read_text(encoding="utf-8")
+                default_load_env = "\n".join([
+                    f"source {shlex.quote(self.activate_sh)}",
+                    f"source {shlex.quote(remote_run_dir)}/pipes.env",
+                    f"export JOB_OUTPUT_DIR={shlex.quote(remote_results)}",
+                    'mkdir -p -- "$JOB_OUTPUT_DIR"',
+                ])
+                partition_line = f"#SBATCH -p {partition}" if partition else ""
+                params: Dict[str, str] = {
+                    "PARTITION_OPTION": partition_line,
+                    "JOB_NAME": job_name,
+                    "GIVEN_NODE": template_params.get("GIVEN_NODE", "") if template_params else "",
+                    "NUM_NODES": template_params.get("NUM_NODES", "1") if template_params else "1",
+                    "NUM_GPUS_PER_NODE": template_params.get("NUM_GPUS_PER_NODE", "0") if template_params else "0",
+                    "LOAD_ENV": template_params.get("LOAD_ENV", default_load_env) if template_params else default_load_env,
+                    # This is where your payload runs with Pipes env loaded:
+                    "COMMAND_PLACEHOLDER": template_params.get(
+                        "COMMAND_PLACEHOLDER",
+                        f'exec {shlex.quote(self.remote_python)} {shlex.quote(remote_run_dir)}/external_file.py',
+                    ) if template_params else f'exec {shlex.quote(self.remote_python)} {shlex.quote(remote_run_dir)}/external_file.py',
+                }
+                if template_params:
+                    params.update(template_params)
+                rendered = _render_template_keep_others(template_text, params)
+                #ng = str(params.get("NUM_GPUS_PER_NODE", "0")).strip().lower()
+                #if ng in ("0", "", "none", "false"):
+                #    rendered = "\n".join(
+                #        line for line in rendered.splitlines()
+                #        if "--gpus-per-task" not in line and "--gres=gpu" not in line
+                #    ) + "\n"
+                ssh_check(
+                    "cat > {path}/job.sbatch <<'SB'\n{body}\nSB\nchmod +x {path}/job.sbatch".format(
+                        path=shlex.quote(remote_run_dir), body=rendered
+                    )
                 )
-            )
+                cmd = f"sbatch -D {shlex.quote(remote_run_dir)} {shlex.quote(remote_run_dir)}/job.sbatch"
+                if extra_sbatch_args:
+                    cmd = "sbatch " + " ".join(shlex.quote(x) for x in extra_sbatch_args) + f" -D {shlex.quote(remote_run_dir)} {shlex.quote(remote_run_dir)}/job.sbatch"
 
-            # 3c) sbatch submit
-            args = [
-                "-J", job_name,
-                "-D", remote_run_dir,
-                "-o", f"{remote_run_dir}/slurm-%j.out",
-                "-e", f"{remote_run_dir}/slurm-%j.err",
-            ]
-            if time_limit: args += ["-t", time_limit]
-            if cpus:       args += ["-c", cpus]
-            if mem:        args += [f"--mem={mem}"]
-            if mem_per_cpu and not mem: args += [f"--mem-per-cpu={mem_per_cpu}"]
-            if partition:  args += ["-p", partition]
-            if extra_sbatch_args: args += list(extra_sbatch_args)
+                out = ssh_check(cmd)
+            else:
+                
+                bootstrap = textwrap.dedent(
+                    f"""\
+                    set -euo pipefail
+                    source {shlex.quote(self.activate_sh)}
+                    source {shlex.quote(remote_run_dir)}/pipes.env
+                    export JOB_OUTPUT_DIR={shlex.quote(remote_results)}
+                    mkdir -p -- "$JOB_OUTPUT_DIR"
+                    exec {shlex.quote(self.remote_python)} {shlex.quote(remote_run_dir)}/external_file.py
+                    """
+                )
+                ssh_check(
+                    "cat > {path}/job.sbatch <<'SB'\n#!/bin/bash\n{body}\nSB\nchmod +x {path}/job.sbatch".format(
+                        path=shlex.quote(remote_run_dir), body=bootstrap
+                    )
+                )
 
-            out = ssh_check("sbatch " + " ".join(shlex.quote(x) for x in args) + f" {shlex.quote(remote_run_dir)}/job.sbatch")
+                # 3c) sbatch submit
+                args = [
+                    "-J", job_name,
+                    "-D", remote_run_dir,
+                    "-o", f"{remote_run_dir}/slurm-%j.out",
+                    "-e", f"{remote_run_dir}/slurm-%j.err",
+                ]
+                if time_limit: args += ["-t", time_limit]
+                if cpus:       args += ["-c", cpus]
+                if mem:        args += [f"--mem={mem}"]
+                if mem_per_cpu and not mem: args += [f"--mem-per-cpu={mem_per_cpu}"]
+                if partition:  args += ["-p", partition]
+                if extra_sbatch_args: args += list(extra_sbatch_args)
+
+                out = ssh_check("sbatch " + " ".join(shlex.quote(x) for x in args) + f" {shlex.quote(remote_run_dir)}/job.sbatch")
             
             m = re.search(r"Submitted batch job (\d+)", out)
             if not m:

@@ -186,10 +186,14 @@ slurm_submit_pipes_ssh2  = make_slurm_pipes_asset(
 slurm_submit_pipes_ray  = make_slurm_pipes_asset(
     job_name="ray_pipes_job",
     name="slurm_submit_pipes_ray",
-    local_payload="../ray/ray_slurm.py",
-    time_limit="00:10:00",
-    cpus="1",
-    mem="256M",
+    local_payload="../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/ray_slurm.py",
+    slurm_template_path="../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/slurm-template.sh",
+#examples/projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/slurm-template.sh
+    template_params={
+        "GIVEN_NODE": "",
+        "NUM_NODES": "2",
+        "NUM_GPUS_PER_NODE": "0",
+    }
     # partition="normal",                      # optional
     # extra_env={"FOO": "bar"},                # optional
 )

@@ -28,11 +28,15 @@ def make_slurm_pipes_asset(
     extra_sbatch_args: Optional[Iterable[str]] = None,
     extra_env: Optional[Dict[str, str]] = None,
     client: Optional[_PipesBaseSlurmClient] = None,
+    slurm_template_path: Optional[str] = None,
+    template_params: Optional[Dict[str, str]] = None,
 ):
     client = client or _PipesBaseSlurmClient()
     caller_file = inspect.stack()[1].filename
     payload_path = _resolve_payload_path(local_payload, caller_file)
-
+    resolved_template = None
+    if slurm_template_path:
+        resolved_template = _resolve_payload_path(slurm_template_path, caller_file)
     @asset(name=name)
     def _asset(context: AssetExecutionContext):
         for ev in client.run(
@@ -46,6 +50,8 @@ def make_slurm_pipes_asset(
             partition=partition,
             extra_sbatch_args=extra_sbatch_args,
             extra_env=extra_env,
+            slurm_template_path=resolved_template,
+            template_params=template_params,
         ):
             if isinstance(ev, str):
                 context.log.info(ev)
