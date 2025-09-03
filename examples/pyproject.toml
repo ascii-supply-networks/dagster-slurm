@@ -7,7 +7,7 @@ requires-python = ">=3.12,<3.13"
 
 [tool.pixi.project]
 # not supported  "win-64", due to pip ray
-platforms = ["linux-64", "osx-arm64", "osx-64", "linux-aarch64"]
+platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
 channels = ["conda-forge"]
 
 [build-system]
@@ -116,8 +116,8 @@ cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
 
-# pixi run -e opstooling --frozen build-shared-libarary
-[tool.pixi.tasks.build-shared-libarary]
+# pixi run -e opstooling --frozen build-shared-library
+[tool.pixi.tasks.build-shared-library]
 cmd = "pixi build -o dist"
 cwd = "./projects/dagster-slurm-example-shared"
 
@@ -126,18 +126,27 @@ cmd = "pixi run -e build --frozen build-lib"
 cwd = "../projects"
 description = "Build all slurm integrations"
 
+[tool.pixi.tasks.build-hpc-workload]
+cmd = "pixi build -o dist"
+cwd = "./projects/dagster-slurm-example-hpc-workload"
+
 [tool.pixi.tasks.pack]
 # --ignore-pypi-non-wheel
+# --create-executable
 # For now, deliberately not inject workload here (fast mode)
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment"
-depends-on = ["build-shared-libarary", "build-integrations"]
 
+depends-on = ["build-shared-library", "build-integrations", "build-hpc-workload"]
 
 [tool.pixi.tasks.pack-aarch]
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64  --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch"
-depends-on = ["build-shared-libarary"]
+depends-on = ["build-shared-library", "build-integrations", "build-hpc-workload"]
+
+[tool.pixi.tasks.clean]
+cmd = "pixi run -e opstooling --frozen ./scripts/cleanup_all.sh"
+description = "Cleanup"
 
 [tool.pixi.feature.secops.tasks.secrets-encrypt]
 cmd = "./scripts/encrypt_secrets.sh"
