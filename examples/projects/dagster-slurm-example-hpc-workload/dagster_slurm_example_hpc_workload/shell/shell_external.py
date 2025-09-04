@@ -15,6 +15,9 @@ def main():
     print("*" * 10)
     print(foo)
     print("*" * 10)
+    print("*" * 10)
+    print(foo)
+    print("*" * 10)
 
     orders_df = pd.DataFrame({"order_id": [1, 2], "item_id": [432, 878]})
     total_orders = len(orders_df)
