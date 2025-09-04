@@ -10,7 +10,7 @@ from typing import Callable, Dict, Iterable, Iterator, List, Optional
 
 from dagster import AssetExecutionContext, PipesClient, PipesEnvContextInjector, get_dagster_logger, open_pipes_session
 
-from .ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES
+from .ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES, upload_lib
 from .ssh_message_reader import SshExecTailMessageReader
 
 _ALLOWED_KEYS = {
@@ -137,7 +137,8 @@ class _PipesBaseSlurmClient(PipesClient):
         extra_sbatch_args: Optional[Iterable[str]] = None,
         extra_env: Optional[Dict[str, str]] = None,
         slurm_template_path: Optional[str] = None,
-        template_params: Optional[Dict[str, str]] = None,        
+        template_params: Optional[Dict[str, str]] = None,
+        package_src_dir: str = '../projects/dagster-slurm', 
     ) -> Iterator:
         """
         Yields Dagster events (logs/materializations) from the remote Pipes process.
@@ -160,6 +161,7 @@ class _PipesBaseSlurmClient(PipesClient):
         #TODO: make this push share pixi pack verify pack exist if not packing 
         scp_put(str(local_payload), f"{remote_run_dir}/external_file.py") #TODO: make this keep the original name
         ssh_check(f"chmod a+rx {shlex.quote(remote_run_dir)}/external_file.py")
+        wheel_remote  = upload_lib(source=package_src_dir, dest=remote_run_dir)
         # 3) Pipes wiring: reader + injector
         injector = self.context_injector
         reader   = self._message_reader_factory(remote_msgs)
@@ -175,11 +177,24 @@ class _PipesBaseSlurmClient(PipesClient):
             # 3b) job.sbatch
             if slurm_template_path:
                 template_text = Path(slurm_template_path).read_text(encoding="utf-8")
+                install_wheel_shell = textwrap.dedent(f"""
+                    # Install freshly built package into the python we'll use
+                    if command -v uv >/dev/null 2>&1; then
+                        "{self.remote_python}" -m uv pip install -U {wheel_remote}
+                    else
+                        "{self.remote_python}" -m pip install -U {wheel_remote} || (
+                        "{self.remote_python}" -m ensurepip --upgrade &&
+                        "{self.remote_python}" -m pip install -U {wheel_remote}
+                        )
+                    fi
+                    """).strip()         
+
                 default_load_env = "\n".join([
                     f"source {shlex.quote(self.activate_sh)}",
                     f"source {shlex.quote(remote_run_dir)}/pipes.env",
                     f"export JOB_OUTPUT_DIR={shlex.quote(remote_results)}",
                     'mkdir -p -- "$JOB_OUTPUT_DIR"',
+                    install_wheel_shell,
                 ])
                 partition_line = f"#SBATCH -p {partition}" if partition else ""
                 params: Dict[str, str] = {

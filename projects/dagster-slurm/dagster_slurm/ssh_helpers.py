@@ -1,6 +1,7 @@
 import os
 import shlex
 import subprocess
+from pathlib import Path
 
 # --- Connection settings ---
 SSH_HOST = os.environ.get("SLURM_SSH_HOST", "localhost")
@@ -78,5 +79,25 @@ def ssh_job_state(job_id: int) -> str:
     s = (out or "").strip()
     return s.split()[0] if s else ""
 
+def _clean_env() -> dict:
+    env = os.environ.copy()
+    env.pop("PIXI_ENVIRONMENT", None)
+    env.pop("PIXI_PROJECT_MANIFEST", None)
+    return env
 
+def upload_lib(source: str, dest: str):
+    env = _clean_env()
+    pkg_dir = Path(source).resolve()
+    if not pkg_dir.exists():
+        raise FileNotFoundError(f"package_src_dir not found: {pkg_dir}")
+    subprocess.run(["pixi","run", "-e", "default", "--manifest-path", str(pkg_dir / "pyproject.toml"), "build-wheel"], cwd=str(pkg_dir), check=True, env=env)
+    wheels = sorted((pkg_dir / "dist").glob("*.whl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not wheels:
+        raise RuntimeError(f"No wheel found in {pkg_dir/'dist'} after build")
+    wheel_local = wheels[0]
+    wheel_remote = f"{dest}/{wheel_local.name}"
+    scp_put(str(wheel_local), wheel_remote)   
+    ssh_check(f"chmod a+rx {shlex.quote(wheel_remote)}")
+    return wheel_remote  
+    
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "PREEMPTED", "NODE_FAIL"}
