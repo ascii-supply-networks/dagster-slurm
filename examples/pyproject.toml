@@ -113,7 +113,7 @@ create-dagster = "~=1.11.7"
 [tool.pixi.tasks.start]
 cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
-env = { DAGSTER_IS_DEV_CLI = "True" }
+env = { DAGSTER_IS_DEV_CLI = "True" , LOCAL_ACTIVATE_SH='~/ascii/dagster-slurm/examples/activate.sh'}
 description = "Start dagster webserver in dev mode"
 
 # pixi run -e opstooling --frozen build-shared-library
@@ -125,7 +125,6 @@ cwd = "./projects/dagster-slurm-example-shared"
 cmd = "pixi run -e build --frozen build-lib"
 cwd = "../projects"
 description = "Build all slurm integrations"
-
 [tool.pixi.tasks.build-hpc-workload]
 cmd = "pixi build -o dist"
 cwd = "./projects/dagster-slurm-example-hpc-workload"

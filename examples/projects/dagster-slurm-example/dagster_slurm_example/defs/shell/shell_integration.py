@@ -13,13 +13,15 @@ from dagster import (
     open_pipes_session,
     Output,
     PipesEnvContextInjector,
+    PipesMessageReader, 
 )
+from typing import Mapping, Any
 from dagster_slurm.ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES
 from dagster_slurm.ssh_message_reader import SshExecTailMessageReader
 from dagster_slurm.slurm_factory import make_slurm_pipes_asset
 from dagster_slurm_example.defs.shared import *
 
-
+PipesMessage = Mapping[str, Any] 
 def get_python_executable() -> str:
     """Get the Python executable path from PATH.
 
@@ -176,9 +178,6 @@ def slurm_submit_pipes(context: AssetExecutionContext):
 slurm_submit_pipes_ssh2  = make_slurm_pipes_asset(
     name="slurm_submit_pipes_ssh2",
     local_payload="../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/shell_external.py",
-    time_limit="00:10:00",
-    cpus="1",
-    mem="256M",
 )
 
 slurm_submit_pipes_ray  = make_slurm_pipes_asset(

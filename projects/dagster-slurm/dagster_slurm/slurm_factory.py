@@ -1,6 +1,7 @@
 # slurm_assets.py
 from typing import Optional, Iterable, Dict
 from dagster import asset, AssetExecutionContext, Output
+
 import inspect
 from .slurm_pipes_client import _PipesBaseSlurmClient
 
