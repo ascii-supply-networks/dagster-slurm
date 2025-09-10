@@ -1261,3 +1261,5 @@ z_state/data_and_logs/
 docs/static/slides/
 slides/slides-export.pdf
 *.tar
+examples/activate.sh
+examples/environment.sh

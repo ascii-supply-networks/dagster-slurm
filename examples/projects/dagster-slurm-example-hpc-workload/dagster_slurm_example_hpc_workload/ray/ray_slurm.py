@@ -13,27 +13,16 @@ def main():
         work = pathlib.Path(tempfile.mkdtemp(prefix="ray_job_"))
         entry = work / "ray_payload.py"
         entry.write_text(textwrap.dedent("""
-            import ray, time
-            ray.init(address="auto", namespace="dagster")
-            @ray.remote
-            def divide(x):
-                if x == 0:
-                    raise ValueError("division by zero")
-                return 10 / x
+import ray
 
-            futs = [divide.remote(i) for i in [1,2,0,3]]
-            ok = bad = 0
-            while futs:
-                ready, futs = ray.wait(futs, num_returns=1)
-                for f in ready:
-                    try:
-                        r = ray.get(f)
-                        print(f"[ray payload] result={r}", flush=True)
-                        ok += 1
-                    except Exception as e:
-                        print(f"[ray payload] error: {e}", flush=True)
-                        bad += 1
-            print(f"[ray payload] done; ok={ok} bad={bad}", flush=True)
+ray.init()
+
+@ray.remote
+def my_function(x):
+    return x * 2
+
+futures = [my_function.remote(i) for i in range(4)]
+print(ray.get(futures))
         """).strip() + "\n")
 
         job_id = client.submit_job(

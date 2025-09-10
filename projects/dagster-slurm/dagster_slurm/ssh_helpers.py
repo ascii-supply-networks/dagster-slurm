@@ -2,6 +2,9 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
+from dagster import get_dagster_logger
+from glob import glob as _glob
+import logging 
 
 # --- Connection settings ---
 SSH_HOST = os.environ.get("SLURM_SSH_HOST", "localhost")
@@ -31,7 +34,6 @@ BASE_OPTS = [
 EXTRA_OPTS = shlex.split(os.environ.get("SLURM_SSH_OPTS_EXTRA", ""))
 
 COMMON_SSH_OPTS = BASE_OPTS + EXTRA_OPTS
-
 
 def _ssh_cmdline(cmd: str) -> list[str]:
     # Run remote command in a clean shell so login banners or profile scripts can’t break it
@@ -85,19 +87,77 @@ def _clean_env() -> dict:
     env.pop("PIXI_PROJECT_MANIFEST", None)
     return env
 
-def upload_lib(source: str, dest: str):
+def _latest(pattern: str | Path) -> Path | None:
+    matches = [_p for _p in (_glob(str(pattern)) or [])]
+    if not matches:
+        return None
+    paths = [Path(m) for m in matches]
+    return max(paths, key=lambda p: p.stat().st_mtime)
+
+def _run_logged(cmd: list[str], *, cwd: Path | None, env: dict, log: logging.Logger, label: str):
+    log.info(f"{label}: running: {shlex.join(cmd)}")
+    log.info(f"{label}: cwd={cwd}")
+    p = subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env,
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        log.error(f"{label}: returncode={p.returncode}")
+        if p.stdout:
+            log.error(f"{label}: stdout:\n{p.stdout}")
+        if p.stderr:
+            log.error(f"{label}: stderr:\n{p.stderr}")
+        raise subprocess.CalledProcessError(p.returncode, cmd, p.stdout, p.stderr)
+    if p.stdout:
+        log.debug(f"{label}: stdout:\n{p.stdout}")
+    if p.stderr:
+        log.debug(f"{label}: stderr:\n{p.stderr}")
+    return p
+
+
+def upload_lib(
+    source: str,                # ../projects/dagster-slurm
+    dest: str,                  # remote run dir: /home/submitter/pipes/<run_id>
+    *, 
+    examples_dir: str | None = "../../examples",  # repo ./examples (where tasks.pack lives)
+    package_name: str = "dagster_slurm",
+) -> str:
+    log = get_dagster_logger()
     env = _clean_env()
     pkg_dir = Path(source).resolve()
     if not pkg_dir.exists():
+        log.error(f"package_src_dir not found: {pkg_dir}")
         raise FileNotFoundError(f"package_src_dir not found: {pkg_dir}")
-    subprocess.run(["pixi","run", "-e", "default", "--manifest-path", str(pkg_dir / "pyproject.toml"), "build-wheel"], cwd=str(pkg_dir), check=True, env=env)
-    wheels = sorted((pkg_dir / "dist").glob("*.whl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not wheels:
-        raise RuntimeError(f"No wheel found in {pkg_dir/'dist'} after build")
-    wheel_local = wheels[0]
+    log.debug(f"upload_lib: package_src_dir={pkg_dir}")
+
+    wheel_local: Path | None = None
+
+    # 1) Preferred: build via examples task
+    if examples_dir:
+        log.debug(f"upload_lib: examples_dir (requested)={examples_dir}")
+        ex_dir = Path(examples_dir).resolve()
+        log.debug(f"upload_lib: ex_dir (resolved)={ex_dir}")
+        if (ex_dir / "pyproject.toml").exists():
+            _run_logged(
+                    ["pixi", "run", "-e", "dev", "--frozen", "pack"],
+                    cwd=ex_dir,
+                    env=env,
+                    log=log,
+                    label="pixi-pack(examples)",
+                )
+            # task writes wheels to one of these
+            wheel_local = (
+                _latest(str(ex_dir.parent / "dist" / f"{package_name}-*.whl"))
+                or _latest(str(pkg_dir / "dist" / f"{package_name}-*.whl"))
+            )
+        log.debug(f"Using wheel: {wheel_local}")
+
+
+    if wheel_local is None:
+            raise RuntimeError(f"No wheel found in {pkg_dir/'dist'} after build")
     wheel_remote = f"{dest}/{wheel_local.name}"
-    scp_put(str(wheel_local), wheel_remote)   
-    ssh_check(f"chmod a+rx {shlex.quote(wheel_remote)}")
-    return wheel_remote  
+    log.info(f"Uploading wheel to remote: {wheel_remote}")
+    scp_put(str(wheel_local), wheel_remote)
+    ssh_check(f"chmod a+r {shlex.quote(wheel_remote)}")
+    log.info(f"Wheel uploaded: {wheel_remote}")
+    return wheel_remote
     
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "PREEMPTED", "NODE_FAIL"}
