@@ -8,10 +8,12 @@ import uuid
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional
 from string import Template
+from .local_runner import LocalRunner
+from .docker_runner import DockerRunner
 
 from dagster import AssetExecutionContext, PipesClient, PipesEnvContextInjector, get_dagster_logger, open_pipes_session
 
-from .ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES, upload_lib
+from .ssh_helpers import ssh_check, scp_put, ssh_job_state, TERMINAL_STATES, upload_lib, install_lib_locally
 from .ssh_message_reader import SshExecTailMessageReader
 
 _ALLOWED_KEYS = {
@@ -26,6 +28,15 @@ _ALLOWED_KEYS = {
 REMOTE_BASE = os.environ.get("SLURM_REMOTE_BASE", "/home/submitter").rstrip("/")
 ACTIVATE_SH = os.environ.get("SLURM_ACTIVATE_SH", "/home/submitter/activate.sh")
 REMOTE_PY   = os.environ.get("SLURM_PYTHON", "python")
+
+def get_runner(logger):
+    # Use an env var to decide which runner to use. Default to local.
+    env = os.environ.get("DAGSTER_ENV", "dev").lower()
+    if env == "staging":
+        logger.info("Using SlurmRunner for staging environment.")
+        return DockerRunner(logger)
+    logger.info("Using LocalRunner for dev environment.")
+    return LocalRunner(logger)
 
 
 class _PipesBaseSlurmClient(PipesClient):
@@ -49,11 +60,11 @@ class _PipesBaseSlurmClient(PipesClient):
         remote_python: Optional[str] = None,
 
         # sbatch defaults (can be overridden per-run)
-        default_partition: str = "",
-        default_time_limit: str = "00:10:00",
-        default_cpus: str = "1",
-        default_mem: str = "256M",
-        default_mem_per_cpu: str = "",  # leave empty to prefer --mem
+        default_partition: Optional[str] = "",
+        default_time_limit: Optional[str] = "00:10:00",
+        default_cpus: Optional[str] = "1",
+        default_mem: Optional[str] = "256M",
+        default_mem_per_cpu: Optional[str] = "",  # leave empty to prefer --mem
 
         # Pipes bits
         poll_interval_seconds: float = 1.0,
@@ -62,10 +73,11 @@ class _PipesBaseSlurmClient(PipesClient):
             Callable[[str], SshExecTailMessageReader]
         ] = None,
     ):
+        super().__init__()
         # Resolve defaults from env
         self.remote_base = (remote_base or os.environ.get("SLURM_REMOTE_BASE", "/home/submitter")).rstrip("/")
         self.activate_sh  = activate_sh or os.environ.get("SLURM_ACTIVATE_SH", "/home/submitter/activate.sh")
-        self.remote_python = remote_python or os.environ.get("SLURM_PYTHON", "python")
+        self.remote_python = remote_python or os.environ.get("SLURM_PYTHON", "python3")
 
         self.default_partition   = default_partition or os.environ.get("SLURM_PARTITION", "")
         self.default_time_limit  = os.environ.get("SLURM_TIME", default_time_limit)
@@ -79,8 +91,9 @@ class _PipesBaseSlurmClient(PipesClient):
             message_reader_factory
             or (lambda remote_path: SshExecTailMessageReader(remote_path, include_stdio_in_messages=True))
         )
-
         self.logger = get_dagster_logger()
+        self.runner = get_runner(self.logger)
+        
         # surfaces for the caller to read after run()
         self.last_job_id: Optional[int] = None
         self.last_remote_run_dir: Optional[str] = None
@@ -178,6 +191,7 @@ echo "[$(date -Is)] SLURM_JOB_ID=${{SLURM_JOB_ID:-unknown}}  RUN_DIR={remote_run
         slurm_template_path: Optional[str] = None,
         template_params: Optional[Dict[str, str]] = None,
         package_src_dir: str = '../projects/dagster-slurm',
+        package_name: str = "dagster-slurm",
     ) -> Iterator:
         """
         Yields Dagster events (logs/materializations) from the remote Pipes process.
@@ -186,194 +200,80 @@ echo "[$(date -Is)] SLURM_JOB_ID=${{SLURM_JOB_ID:-unknown}}  RUN_DIR={remote_run
         Otherwise, fall back to the built-in tiny batch script.
         """
         run_id = context.run_id or uuid.uuid4().hex
-        remote_run_dir = f"{REMOTE_BASE}/pipes/{run_id}"
-        remote_msgs    = f"{remote_run_dir}/messages.jsonl"
-        remote_results = f"{REMOTE_BASE}/{results_dir_name}"
-        remote_logs    = f"{REMOTE_BASE}/{logs_dir_name}"
+        is_staging = isinstance(self.runner, DockerRunner)
+        wheel_remote_path = None
+        exec_base_dir = self.remote_base if is_staging else "/tmp/dagster_local_runs"
+        temp_dir_base = "/tmp" if is_staging else exec_base_dir
+
+        exec_run_dir = f"{exec_base_dir}/pipes/{run_id}"
+        temp_run_dir = f"{temp_dir_base}/pipes/{run_id}"\
+
+        if is_staging:
+            wheel_remote_path = upload_lib(
+                source=package_src_dir,
+                dest=exec_run_dir,
+                examples_dir="./examples", # Adjust path to your examples dir
+                package_name=package_name,
+            )
+        else:
+            install_lib_locally(
+                source=package_src_dir,
+                examples_dir="./examples", # Adjust path to your examples dir
+                package_name=package_name,
+                log=self.logger,
+            )
+            
+            
+        Path(temp_run_dir).mkdir(parents=True, exist_ok=True)
+        remote_msgs = f"{exec_run_dir}/messages.jsonl"
         
+        self.runner.run_command(f"mkdir -p {shlex.quote(exec_run_dir)}")
         payload_filename = Path(local_payload).name
-        remote_payload_path = f"{remote_run_dir}/{payload_filename}"
+        remote_payload_path = f"{exec_run_dir}/{payload_filename}"
+        if local_payload != remote_payload_path:
+            self.runner.put_file(local_payload, remote_payload_path)
 
-        ssh_check("mkdir -p -- " + " ".join(map(shlex.quote, (remote_run_dir, remote_results, remote_logs))))
-        scp_put(str(local_payload), remote_payload_path)
-        ssh_check(f"chmod a+rx {shlex.quote(remote_payload_path)}")
+        py_executable = self.remote_python 
+        bootstrap_content = f"#!/bin/bash\nsource {shlex.quote(self.activate_sh)}\n{py_executable} {shlex.quote(remote_payload_path)}\n"
         
-        wheel_remote  = upload_lib(source=package_src_dir,
-                                       dest=remote_run_dir,
-                                       examples_dir="./",
-                                       package_name="dagster_slurm",)
+        local_job_script = Path(temp_run_dir) / "job.sh"
+        local_job_script.write_text(bootstrap_content)
         
-        injector = self.context_injector
-        reader   = self._message_reader_factory(remote_msgs)
+        remote_job_script = f"{exec_run_dir}/job.sh"
+        if str(local_job_script) != remote_job_script:
+            self.runner.put_file(str(local_job_script), remote_job_script)
+        self.runner.run_command(f"chmod +x {shlex.quote(remote_job_script)}")
 
-        with open_pipes_session(context=context, context_injector=injector, message_reader=reader) as session:
-            env = session.get_bootstrap_env_vars()
-            env["SLURM_PYTHON"] = self.remote_python
-            env["REMOTE_WHEEL"] = wheel_remote
-            if extra_env:
-                env.update({k: str(v) for k, v in extra_env.items()})
-            exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
-            ssh_check(f"cat > {shlex.quote(remote_run_dir)}/pipes.env <<'EOF'\n{exports}\nEOF")
+        bootstrap_steps = [
+            "#!/bin/bash",
+            "set -euo pipefail",
+            f"source {shlex.quote(self.activate_sh)}",
+        ]
+
+        if is_staging and wheel_remote_path:
+            # If in staging, the job must install the uploaded wheel
+            bootstrap_steps.append(
+                f"{shlex.quote(self.remote_python)} -m pip install {shlex.quote(wheel_remote_path)}"
+            )
+        bootstrap_steps.append(
+            f"exec {shlex.quote(self.remote_python)} {shlex.quote(remote_payload_path)}"
+        )
+        
+        job_script_content = "\n".join(bootstrap_steps)
+
+        message_reader_path = remote_msgs if is_staging else f"{exec_run_dir}/messages.jsonl"
+        reader = self._message_reader_factory(message_reader_path)
+
+        with open_pipes_session(context=context, context_injector=self.context_injector, message_reader=reader) as session:
+            # 3. Submit the job using the runner
+            job_id = self.runner.submit_job(job_script_content)
+            context.log.info(f"Submitted job {job_id} using {type(self.runner).__name__}")
             
-            if slurm_template_path:
-                self.logger.info("recognizes the template")
-                template_text = Path(slurm_template_path).read_text(encoding="utf-8")
+            # 4. Wait for completion using the runner
+            self.runner.wait_for_job(job_id)
 
-                ensure_pipes_shell = f'''
-                ( set +e
-                  "{self.remote_python}" - <<'PY'
-                  import importlib.util, sys
-                  sys.exit(0 if importlib.util.find_spec("dagster_pipes") else 1)
-                  PY
-                  rc=$?
-                  if [ "$rc" -ne 0 ]; then
-                      "{self.remote_python}" -m ensurepip --upgrade || true
-                      "{self.remote_python}" -m pip install -U "dagster-pipes" || true
-                  fi
-                ) || true
-                '''.strip()
-
-                probe = fr"""
-                export DAGSTER_PIPES_MESSAGES_PATH="{remote_msgs}"
-                if ! "$SLURM_PYTHON" - <<'PY'; then
-                from dagster_pipes import PipesDefaultMessageWriter as W
-                with W.from_env() as w:
-                    w.report_log("[sbatch] pipes env loaded; bootstrapping...")
-                PY
-                "$SLURM_PYTHON" - <<'PYFALLBACK' || echo "[probe] both writers failed" >&2
-                import json, os
-                p = os.environ.get("DAGSTER_PIPES_MESSAGES_PATH")
-                if p:
-                    rec = {{"method":"report_log","params":{{"message":"[sbatch] (fallback) pipes env loaded; bootstrapping...","level":"INFO"}}}}
-                    with open(p, "a", encoding="utf-8") as f:
-                        f.write(json.dumps(rec) + "\n")
-                PYFALLBACK
-                fi
-                """
-
-                install_wheel_shell = f'''
-                ( set +e
-                  if command -v uv >/dev/null 2>&1; then
-                      "{self.remote_python}" -m uv pip install -U {wheel_remote}
-                  else
-                      "{self.remote_python}" -m pip install -U {wheel_remote} || (
-                          "{self.remote_python}" -m ensurepip --upgrade &&
-                          "{self.remote_python}" -m pip install -U {wheel_remote}
-                      )
-                  fi
-                ) || true
-                '''.strip()
-
-                install_ray_shell = f'''
-                ( set +e
-                  if ! command -v ray >/dev/null 2>&1; then
-                      "{self.remote_python}" -m pip install -U "ray[data,default]==2.48.0" || (
-                      "{self.remote_python}" -m ensurepip --upgrade &&
-                      "{self.remote_python}" -m pip install -U "ray[data,default]==2.48.0"
-                      )
-                  fi
-                ) || true
-                '''.strip()
-
-                # --- FIX #2: Consolidate all setup logic into this single block. ---
-                default_load_env = "\n".join([
-                    f"# --- Pipes/Ray setup ---",
-                    f': > "{remote_msgs}" || true', # Ensure message file exists before sourcing env
-                    f"source {shlex.quote(self.activate_sh)}",
-                    f"source {shlex.quote(remote_run_dir)}/pipes.env",
-                    'export PYTHONUNBUFFERED=1',
-                    f"export JOB_OUTPUT_DIR={shlex.quote(remote_results)}",
-                    'mkdir -p -- "$JOB_OUTPUT_DIR"',
-                    f'echo "[$(date -Is)] Job: $SLURM_JOB_ID | Run Dir: {remote_run_dir}"',
-                    f'echo "[$(date -Is)] DAGSTER_PIPES_MESSAGES=$DAGSTER_PIPES_MESSAGES"',
-                    ensure_pipes_shell,
-                    probe,
-                    install_wheel_shell,
-                    install_ray_shell,
-                ])
-
-                self.logger.debug(f"LOAD_ENV block:\n{default_load_env}")
-                
-                py = shlex.quote(self.remote_python)
-                script = shlex.quote(remote_payload_path)
-                default_cmd = f"{py} -m dagster_pipes.cli wrap -- {py} {script}"
-                
-                params: Dict[str, str] = {
-                    "JOB_NAME": job_name,
-                    "GIVEN_NODE": template_params.get("GIVEN_NODE", "") if template_params else "",
-                    "NUM_NODES": template_params.get("NUM_NODES", "1") if template_params else "1",
-                    "NUM_GPUS_PER_NODE": template_params.get("NUM_GPUS_PER_NODE", "0") if template_params else "0",
-                    "LOAD_ENV": template_params.get("LOAD_ENV", default_load_env) if template_params else default_load_env,
-                    "COMMAND_PLACEHOLDER": (
-                        template_params.get("COMMAND_PLACEHOLDER", f"exec {default_cmd}")
-                        if template_params else f"exec {default_cmd}"
-                    ),
-                }
-                
-                rendered = self._render_template_keep_others(template_text, params)
-                
-                # --- FIX #3: Remove the call to the deleted patch function. ---
-                # rendered = self._patch_rendered_for_pipes_and_ray(...)
-
-                self.logger.debug(f"Rendered sbatch script:\n{rendered}")
-                
-                ssh_check(
-                    "cat > {path}/job.sbatch <<'SB'\n{body}\nSB\nchmod +x {path}/job.sbatch".format(
-                        path=shlex.quote(remote_run_dir), body=rendered
-                    )
-                )
-                cmd = f"sbatch -D {shlex.quote(remote_run_dir)} {shlex.quote(remote_run_dir)}/job.sbatch"
-                if extra_sbatch_args:
-                    cmd = "sbatch " + " ".join(shlex.quote(x) for x in extra_sbatch_args) + f" -D {shlex.quote(remote_run_dir)} {shlex.quote(remote_run_dir)}/job.sbatch"
-                out = ssh_check(cmd)
-            else:
-                
-                bootstrap = textwrap.dedent(
-                    f"""\
-                    set -euo pipefail
-                    source {shlex.quote(self.activate_sh)}
-                    source {shlex.quote(remote_run_dir)}/pipes.env
-                    export JOB_OUTPUT_DIR={shlex.quote(remote_results)}
-                    mkdir -p -- "$JOB_OUTPUT_DIR"
-                    exec {shlex.quote(self.remote_python)} {shlex.quote(remote_run_dir)}/external_file.py
-                    """
-                )
-                ssh_check(
-                    "cat > {path}/job.sbatch <<'SB'\n#!/bin/bash\n{body}\nSB\nchmod +x {path}/job.sbatch".format(
-                        path=shlex.quote(remote_run_dir), body=bootstrap
-                    )
-                )
-
-                # 3c) sbatch submit
-                args = [
-                    "-J", job_name,
-                    "-D", remote_run_dir,
-                    "-o", f"{remote_run_dir}/slurm-%j.out",
-                    "-e", f"{remote_run_dir}/slurm-%j.err",
-                ]
-                if time_limit: args += ["-t", time_limit]
-                if cpus:       args += ["-c", cpus]
-                if mem:        args += [f"--mem={mem}"]
-                if mem_per_cpu and not mem: args += [f"--mem-per-cpu={mem_per_cpu}"]
-                if partition:  args += ["-p", partition]
-                if extra_sbatch_args: args += list(extra_sbatch_args)
-
-                out = ssh_check("sbatch " + " ".join(shlex.quote(x) for x in args) + f" {shlex.quote(remote_run_dir)}/job.sbatch")
-            
-            m = re.search(r"Submitted batch job (\d+)", out)
-            if not m:
-                raise RuntimeError(f"Could not parse job id from sbatch.\nstdout:\n{out}")
-            job_id = int(m.group(1))
-            self.last_job_id = job_id
-            self.last_remote_run_dir = remote_run_dir
-            context.log.info(f"Submitted job {job_id}")
-
-            # 4) stream Pipes messages while polling Slurm
-            while True:
-                st = ssh_job_state(job_id)
-                if st in TERMINAL_STATES:
-                    break
-                time.sleep(self.poll_interval_seconds)
+            self.last_job_id = self.runner.last_job_id
+            self.last_remote_run_dir = exec_run_dir
 
             for ev in session.get_results():
                 yield ev

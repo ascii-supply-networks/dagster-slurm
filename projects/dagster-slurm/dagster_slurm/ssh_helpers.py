@@ -5,6 +5,7 @@ from pathlib import Path
 from dagster import get_dagster_logger
 from glob import glob as _glob
 import logging 
+import sys
 
 # --- Connection settings ---
 SSH_HOST = os.environ.get("SLURM_SSH_HOST", "localhost")
@@ -159,5 +160,61 @@ def upload_lib(
     ssh_check(f"chmod a+r {shlex.quote(wheel_remote)}")
     log.info(f"Wheel uploaded: {wheel_remote}")
     return wheel_remote
+
+def install_lib_locally(
+    source: str,
+    *,
+    examples_dir: str | None,
+    package_name: str,
+    log: logging.Logger,
+) -> None:
+    """Builds a wheel from source and pip installs it into the current Python environment."""
+    env = _clean_env()
+    pkg_dir = Path(source).resolve()
+    if not pkg_dir.exists():
+        raise FileNotFoundError(f"Package source directory not found: {pkg_dir}")
+    log.debug(f"install_lib_locally: package_src_dir={pkg_dir}")
+
+    wheel_local: Path | None = None
+
+    # 1. Build the wheel using the same logic as upload_lib
+    if examples_dir:
+        ex_dir = Path(examples_dir).resolve()
+        if (ex_dir / "pyproject.toml").exists():
+            _run_logged(
+                ["pixi", "run", "-e", "dev", "--frozen", "pack"],
+                cwd=ex_dir,
+                env=env,
+                log=log,
+                label="pixi-pack(local-install)",
+            )
+            # Find the built wheel
+            wheel_local = (
+                _latest(str(ex_dir.parent / "dist" / f"{package_name}-*.whl"))
+                or _latest(str(pkg_dir / "dist" / f"{package_name}-*.whl"))
+            )
     
+    if wheel_local is None:
+        raise RuntimeError(f"No wheel found in {pkg_dir/'dist'} or parent dist after build")
+
+    log.debug(f"Found wheel for local install: {wheel_local}")
+
+    # 2. Pip install the wheel into the current environment
+    # Using sys.executable ensures we use the pip from the correct virtual env
+    pip_install_cmd = [
+        sys.executable,
+        "-m", "pip", "install",
+        "--force-reinstall", # Ensures the latest build is used
+        str(wheel_local)
+    ]
+    _run_logged(
+        pip_install_cmd,
+        cwd=None, # Run from anywhere
+        env=os.environ.copy(), # Use current env
+        log=log,
+        label="pip-install-local-wheel"
+    )
+    log.info(f"Successfully installed {wheel_local.name} into the current environment.")
+        
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "PREEMPTED", "NODE_FAIL"}
+

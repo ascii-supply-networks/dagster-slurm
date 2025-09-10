@@ -63,7 +63,3 @@ ray = ["ray>=2.48.0"]
 
 [tool.pixi.package.build]
 backend = { name = "pixi-build-python", version = "*", channels = ["https://prefix.dev/conda-forge"] }
-[tool.pixi.tasks]
-build-wheel = "python -m build --wheel"
-build-sdist = "python -m build --sdist"
-uv-build-wheel = "uv build --wheel"

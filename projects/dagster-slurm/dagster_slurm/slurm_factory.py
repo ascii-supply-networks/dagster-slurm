@@ -31,12 +31,20 @@ def make_slurm_pipes_asset(
     slurm_template_path: Optional[str] = None,
     template_params: Optional[Dict[str, str]] = None,
 ):
-    client = client or _PipesBaseSlurmClient()
+    if client is None:
+        client = _PipesBaseSlurmClient(
+            default_partition=partition,
+            default_time_limit=time_limit,
+            default_cpus=cpus,
+            default_mem=mem,
+            default_mem_per_cpu=mem_per_cpu
+        )
     caller_file = inspect.stack()[1].filename
     payload_path = _resolve_payload_path(local_payload, caller_file)
     resolved_template = None
     if slurm_template_path:
         resolved_template = _resolve_payload_path(slurm_template_path, caller_file)
+
     @asset(name=name)
     def _asset(context: AssetExecutionContext):
         for ev in client.run(
