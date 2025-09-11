@@ -324,6 +324,7 @@ class _PipesBaseSlurmClient(PipesClient):
         package_name: str = "dagster-slurm",
         remote_base: Optional[str] = None,
         remote_python: Optional[str] = None,
+        extras: Optional[Dict[str, Any]] = None,
     ) -> Iterator:
         """
         Yields Dagster events (logs/materializations) from the remote Pipes process.
@@ -365,6 +366,7 @@ class _PipesBaseSlurmClient(PipesClient):
             context=context,
             context_injector=self.context_injector,
             message_reader=reader,
+            extras=extras,
         ) as session:
             # Always ship the environment installer if it exists in examples/
             examples_env = Path("examples/environment.sh")
@@ -380,9 +382,9 @@ class _PipesBaseSlurmClient(PipesClient):
 
             # Force the external writer to use a file path, in the format expected by your
             # dagster_pipes version (encoded params in DAGSTER_PIPES_MESSAGES).
-            pipes_env["DAGSTER_PIPES_MESSAGES"] = encode_param(
-                {"path": message_reader_path, "stdio": True}
-            )
+            #pipes_env["DAGSTER_PIPES_MESSAGES"] = encode_param(
+            #    {"path": message_reader_path, "stdio": True}
+            #)
 
             # Ensure no legacy/alternate params vars sneak in (avoid double-specifying).
             for k in ("DAGSTER_PIPES_MESSAGE_PARAMS", "DAGSTER_PIPES_MESSAGES_PARAMS"):

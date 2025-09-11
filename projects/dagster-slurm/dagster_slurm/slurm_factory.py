@@ -1,6 +1,6 @@
 # slurm_assets.py
-from typing import Optional, Iterable, Dict
-from dagster import asset, AssetExecutionContext, Output
+from typing import Optional, Iterable, Dict, Any, Sequence
+from dagster import asset, AssetExecutionContext, Output, AssetKey
 
 import inspect
 from .slurm_pipes_client import _PipesBaseSlurmClient
@@ -21,6 +21,7 @@ def make_slurm_pipes_asset(
     name: str,
     local_payload: str,
     job_name: str = "pipes_ext",
+    asset_key: Optional[Sequence[str]] = None,
     time_limit: Optional[str] = None,
     cpus: Optional[str] = None,
     mem: Optional[str] = None,
@@ -31,6 +32,7 @@ def make_slurm_pipes_asset(
     client: Optional[_PipesBaseSlurmClient] = None,
     slurm_template_path: Optional[str] = None,
     template_params: Optional[Dict[str, str]] = None,
+    extras: Optional[Dict[str, Any]] = None,
 ):
     if client is None:
         client = _PipesBaseSlurmClient(
@@ -46,7 +48,13 @@ def make_slurm_pipes_asset(
     if slurm_template_path:
         resolved_template = _resolve_payload_path(slurm_template_path, caller_file)
 
-    @asset(name=name)
+    dec_kwargs = {}
+    if asset_key is not None:
+        dec_kwargs["key"] = AssetKey(list(asset_key))
+    else:
+        dec_kwargs["name"] = name  
+        
+    @asset(**dec_kwargs)
     def _asset(context: AssetExecutionContext):
         for ev in client.run(
             context,
@@ -61,6 +69,7 @@ def make_slurm_pipes_asset(
             extra_env=extra_env,
             slurm_template_path=resolved_template,
             template_params=template_params,
+            extras=extras,
         ):
             if isinstance(ev, str):
                 context.log.info(ev)

@@ -25,13 +25,13 @@ def main():
 
     context.log.info(f"Total orders: {total_orders}, Total items: {total_items}")
 
-    context.report_asset_materialization(
-        asset_key=f"{example_defs_prefix}/orders",
-        metadata={"total_orders": total_orders},
-    )
-    context.report_asset_materialization(
-        asset_key="users", metadata={"total_users": total_items}
-    )
+    #context.report_asset_materialization(
+    #    asset_key=f"{example_defs_prefix}/orders", # Otherwise we have to control how are we passing this asset_key
+    #    metadata={"total_orders": total_orders}, 
+    #)
+    #context.report_asset_materialization(
+    #    asset_key="users", metadata={"total_users": total_items}
+    #)
 
 
 if __name__ == "__main__":

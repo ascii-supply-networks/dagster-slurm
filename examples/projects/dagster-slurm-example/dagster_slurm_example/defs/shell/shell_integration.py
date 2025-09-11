@@ -176,8 +176,13 @@ def slurm_submit_pipes(context: AssetExecutionContext):
 
 
 slurm_submit_pipes_ssh2  = make_slurm_pipes_asset(
-    name="slurm_submit_pipes_ssh2",
+    name="slurm_submit_pipes_vanilla",
+    asset_key=["dse", "orders_with_pipes"],
     local_payload="../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/shell_external.py",
+    extras={"foo": "bar"}, 
+    extra_env={
+        "MY_ENV_VAR_IN_SUBPROCESS": "hello-from-dagster",
+    },
 )
 
 slurm_submit_pipes_ray  = make_slurm_pipes_asset(
