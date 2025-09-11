@@ -180,7 +180,7 @@ def pack_env(
     *,
     examples_dir: str | None = None,   # optional override; default is auto-discovery
     log: logging.Logger,
-) -> bool:
+) -> str:
     env = _clean_env()
     ex_dir = Path(examples_dir).resolve() if examples_dir else _find_examples_dir()
 
@@ -195,7 +195,7 @@ def pack_env(
         log=log,
         label="pixi-pack(examples)",
     )
-    return True
+    return ex_dir
 
 def install_lib_locally(
     source: str,

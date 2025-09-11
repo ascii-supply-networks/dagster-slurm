@@ -7,6 +7,7 @@ from string import Template
 
 from .local_runner import LocalRunner
 from .docker_runner import DockerRunner
+from shlex import quote as shq
 
 from dagster import (
     AssetExecutionContext,
@@ -230,9 +231,7 @@ class _PipesBaseSlurmClient(PipesClient):
             "#!/bin/bash",
             "set -euo pipefail",
             f': > "{messages_path}" || true',
-            f'export DAGSTER_PIPES_MESSAGES="{messages_path}"',
-            'export DAGSTER_PIPES_INCLUDE_STDIO="1"',
-            'echo "[$(date -Is)] Exec run dir: ' + exec_run_dir + '"',
+            f'echo "[$(date -Is)] Exec run dir: ' + exec_run_dir + '"',
             'echo "[$(date -Is)] DAGSTER_PIPES_MESSAGES=${DAGSTER_PIPES_MESSAGES:-unset}"',
             # Pipes context (DAGSTER_PIPES_CONTEXT etc.)
             *[f'export {k}={shlex.quote(v)}' for k, v in session_env.items()],
@@ -338,7 +337,10 @@ class _PipesBaseSlurmClient(PipesClient):
         env_sh = Path("examples/environment.sh")
         lock = Path("examples/pixi.lock")
         # if (not env_sh.exists()) or (lock.exists() and env_sh.stat().st_mtime < lock.stat().st_mtime):
-        pack_env(log=self.logger)
+        # TODO: make this with a flag or dependant on the runner
+        library_dir = pack_env(log=self.logger)
+        
+        
         # Optional local fallback activate (no longer required)
         local_activate = os.environ.get("LOCAL_ACTIVATE_SH", "")
         if local_activate:
@@ -368,27 +370,22 @@ class _PipesBaseSlurmClient(PipesClient):
             message_reader=reader,
             extras=extras,
         ) as session:
-            # Always ship the environment installer if it exists in examples/
-            examples_env = Path("examples/environment.sh")
+            # 1) Ship the packed environment installer (do NOT run it here)
+            examples_env = Path(f"{library_dir}/environment.sh")
             if examples_env.exists():
                 self.runner.put_file(str(examples_env), f"{exec_run_dir}/environment.sh")
-            # Ship payload
+
+            # 2) Ship the Python payload
             payload_filename = Path(local_payload).name
             remote_payload_path = f"{exec_run_dir}/{payload_filename}"
             self.runner.put_file(local_payload, remote_payload_path)
 
-            # Build env exported to the job — force legacy file-writer compatibility
+            # 3) Build env to inject into the job (from injector + message reader)
             pipes_env = session.get_bootstrap_env_vars()
-
-            # Force the external writer to use a file path, in the format expected by your
-            # dagster_pipes version (encoded params in DAGSTER_PIPES_MESSAGES).
-            #pipes_env["DAGSTER_PIPES_MESSAGES"] = encode_param(
-            #    {"path": message_reader_path, "stdio": True}
-            #)
-
-            # Ensure no legacy/alternate params vars sneak in (avoid double-specifying).
             for k in ("DAGSTER_PIPES_MESSAGE_PARAMS", "DAGSTER_PIPES_MESSAGES_PARAMS"):
                 pipes_env.pop(k, None)
+
+            # 4) Render the job script (installs + activates happen inside it)
             job_script_lines = self._bootstrap_for_backend(
                 backend=backend,
                 exec_run_dir=exec_run_dir,
@@ -398,22 +395,15 @@ class _PipesBaseSlurmClient(PipesClient):
                 extra_env=extra_env,
             )
 
-            # Write job.sh locally
+            # 5) Write + upload job script
             local_job_script = Path(temp_run_dir) / "job.sh"
             local_job_script.write_text("\n".join(job_script_lines) + "\n")
-
-            # Compute the remote script path
             remote_job_script = f"{exec_run_dir}/job.sh"
-
-            # In dev, exec_dir == temp_dir_base, so paths can be identical.
-            # Avoid copying a file onto itself.
             if os.path.abspath(str(local_job_script)) != os.path.abspath(remote_job_script):
                 self.runner.put_file(str(local_job_script), remote_job_script)
-
-            # Make sure it's executable (works for both local/remote runners)
             self.runner.run_command(f"chmod +x {shlex.quote(remote_job_script)}")
 
-            # submit: LocalRunner runs synchronously; DockerRunner submits via Slurm.
+            # 6) Submit and stream results
             job_id = self.runner.submit_job(remote_job_script)
             context.log.info(f"Submitted job {job_id} via {type(self.runner).__name__}")
             self.runner.wait_for_job(job_id)

@@ -4,9 +4,7 @@ version = "1.0.0"
 description = "Dagster slurm example"
 authors = [{ name = "geoheil", email = "georg.kf.heiler@gmail.com" }]
 requires-python = ">=3.12"
-dependencies = [
-    "dagster-ray~=0.1"
-]
+dependencies = []
 
 [build-system]
 build-backend = "hatchling.build"
@@ -25,4 +23,3 @@ backend = { name = "pixi-build-python", version = ">=0.3.2" }
 [tool.pixi.package.host-dependencies]
 hatchling = ">=1.27,<2.0"
 python = ">=3.12,<3.13"
-
