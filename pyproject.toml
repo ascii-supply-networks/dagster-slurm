@@ -38,10 +38,15 @@ channels = ["conda-forge"]
 build = { features = ["build"], solve-group = "build" }
 
 docs = { features = ["docs"], solve-group = "docs" }
-
+explore = { features =["build", "explore"], solve-group = "explore"}
 [tool.pixi.feature.build.pypi-dependencies]
 uv = ">=0.8.6"
 build = ">=1.3.0"
+
+[tool.pixi.feature.explore.dependencies]
+ipykernel = "~=6.29"
+
+[tool.pixi.feature.explore.pypi-dependencies]
 
 [tool.pixi.feature.docs]
 channels = ["conda-forge", "https://prefix.dev/brads-forge"]

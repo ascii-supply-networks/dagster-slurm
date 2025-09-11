@@ -55,11 +55,11 @@ pixi run pack
 # if using an ARM host
 # pixi run pack-aarch
 
-scp -P 2223 environment.tar submitter@localhost:/home/submitter
+scp -P 2223 environment.sh submitter@localhost:/home/submitter
 ssh submitter@localhost -p 2223
 
 # tar -xvf environment.tar
-pixi exec pixi-unpack environment.tar
+#pixi exec pixi-unpack environment.tar
 source ./activate.sh
 ```
 

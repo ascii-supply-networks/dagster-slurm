@@ -3,7 +3,7 @@ import os
 import dagster as dg
 from dagster_ray import LocalRay
 
-from dagster_slurm_example.resources.lazy_local_ray import (
+from .lazy_local_ray import (
     PipesRayJobClientLazyLocalResource,
 )
 
@@ -26,9 +26,9 @@ RESOURCES_STAGING = {"pipes_subprocess_client": pipes_subprocess_client}
 
 RESOURCES_PROD = {"pipes_subprocess_client": pipes_subprocess_client}
 resource_defs_by_deployment_name = {
-    "dev": RESOURCES_LOCAL,
-    "staging": RESOURCES_STAGING,
-    "prod": RESOURCES_PROD,
+    "dev": RESOURCES_LOCAL, ## fully local package on fly
+    "staging": RESOURCES_STAGING, ## cluster but package on fly small data
+    "prod": RESOURCES_PROD, ## CI packaging 
 }
 
 
