@@ -2280,7 +2280,7 @@ packages:
 - pypi: ../projects/dagster-slurm
   name: dagster-slurm
   version: 1.3.1
-  sha256: 370c072d49f706e0da881eb3dad3fd582d8a7aec6d7a756dfd8d44f0b40a913a
+  sha256: 016f51b49f0a18dfa1e5306285a848a646015688f0443160511be48e7c3174d7
   requires_dist:
   - ray>=2.48.0 ; extra == 'ray'
   requires_python: '>=3.12,<3.13'
@@ -2288,7 +2288,9 @@ packages:
 - pypi: ./projects/dagster-slurm-example
   name: dagster-slurm-example
   version: 1.0.0
-  sha256: 67e02dd5adf20d93848b4c4cd1bb93c22f64f291cb84064e6376eda420f18b23
+  sha256: 8e33cdad1758090c492c51fcfb5567c4ccb7fe90621f9ff67129ef17b82d93ec
+  requires_dist:
+  - dagster-ray~=0.1
   requires_python: '>=3.12'
   editable: true
 - pypi: ./projects/dagster-slurm-example-hpc-workload

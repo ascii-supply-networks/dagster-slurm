@@ -2,10 +2,10 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from dagster import get_dagster_logger
 from glob import glob as _glob
 import logging 
 import sys
+from dagster import get_dagster_logger
 
 # --- Connection settings ---
 SSH_HOST = os.environ.get("SLURM_SSH_HOST", "localhost")
@@ -120,8 +120,8 @@ def upload_lib(
     *, 
     examples_dir: str | None = "../../examples",  # repo ./examples (where tasks.pack lives)
     package_name: str = "dagster_slurm",
+    log:logging.Logger
 ) -> str:
-    log = get_dagster_logger()
     env = _clean_env()
     pkg_dir = Path(source).resolve()
     if not pkg_dir.exists():
@@ -151,7 +151,6 @@ def upload_lib(
             )
         log.debug(f"Using wheel: {wheel_local}")
 
-
     if wheel_local is None:
             raise RuntimeError(f"No wheel found in {pkg_dir/'dist'} after build")
     wheel_remote = f"{dest}/{wheel_local.name}"
@@ -160,6 +159,43 @@ def upload_lib(
     ssh_check(f"chmod a+r {shlex.quote(wheel_remote)}")
     log.info(f"Wheel uploaded: {wheel_remote}")
     return wheel_remote
+
+def _find_examples_dir() -> Path:
+    """
+    Walk up from this file to locate the repo's examples/ directory that contains
+    the pixi environments and the 'pack' task.
+    """
+    here = Path(__file__).resolve()
+    for root in [here, *here.parents]:
+        cand = root / "examples" / "pyproject.toml"
+        if cand.exists():
+            return cand.parent
+    # Fallback: if running from repo root already
+    if (Path.cwd() / "examples" / "pyproject.toml").exists():
+        return Path.cwd() / "examples"
+    raise FileNotFoundError("Could not locate examples/pyproject.toml to run 'pixi run -e dev pack'.")
+
+
+def pack_env(
+    *,
+    examples_dir: str | None = None,   # optional override; default is auto-discovery
+    log: logging.Logger,
+) -> bool:
+    env = _clean_env()
+    ex_dir = Path(examples_dir).resolve() if examples_dir else _find_examples_dir()
+
+    log.debug(f"packing: using examples_dir={ex_dir}")
+    if not (ex_dir / "pyproject.toml").exists():
+        raise FileNotFoundError(f"{ex_dir}/pyproject.toml not found")
+
+    _run_logged(
+        ["pixi", "run", "-e", "dev", "--frozen", "pack"],
+        cwd=ex_dir,
+        env=env,
+        log=log,
+        label="pixi-pack(examples)",
+    )
+    return True
 
 def install_lib_locally(
     source: str,

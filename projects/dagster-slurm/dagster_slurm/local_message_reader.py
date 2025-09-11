@@ -4,14 +4,15 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, Mapping, Any, Optional
+from typing import Mapping, Any, Optional, Dict
 
 from dagster import PipesMessageReader
 
+
 class LocalExecTailMessageReader(PipesMessageReader):
     """
-    Tails a local messages.jsonl file and forwards each JSON line to the Dagster
-    Pipes message handler. MUST yield immediately so the caller can start the child.
+    Tail a local messages.jsonl file and forward each JSON line to Dagster.
+    Yields immediately so the caller can start the child process.
     """
 
     def __init__(
@@ -37,72 +38,72 @@ class LocalExecTailMessageReader(PipesMessageReader):
 
     @contextmanager
     def read_messages(self, message_handler):
-        # Provide env to the child right away.
-        params: Dict[str, Dict[str, str]] = {
-            "env": {
-                "DAGSTER_PIPES_MESSAGES": self._messages_path,
-                "DAGSTER_PIPES_INCLUDE_STDIO": "1" if self._include_stdio else "0",
-            }
-        }
+        # Return **message writer params** expected by dagster_pipes (not env!)
+        # The context injector will take these and encode/inject them for the payload.
+        messages_params: Dict[str, Any] = {"path": self._messages_path}
+        if self._include_stdio:
+            messages_params["stdio"] = True
 
-        # Start a background tailer that feeds messages to Dagster while the
-        # with-block is active.
         def _tail():
             pos = 0
-            first_seen = None
+            first_seen: Optional[float] = None
+
             while not self._stop.is_set():
                 try:
-                    with open(self._messages_path, "r", encoding="utf-8") as f:
-                        # remember when the file first appears
+                    with open(self._messages_path, "r", encoding="utf-8", errors="replace") as f:
                         if first_seen is None:
                             first_seen = time.time()
-                        # continue from last offset
-                        f.seek(pos, os.SEEK_SET)
-                        for line in f:
-                            pos = f.tell()
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                msg: Mapping[str, Any] = json.loads(line)
-                            except Exception:
-                                # ignore malformed/incomplete lines
-                                continue
 
-                            # call the handler in the most compatible way
-                            if hasattr(message_handler, "handle_message"):
-                                message_handler.handle_message(msg)
-                            elif hasattr(message_handler, "consume_message"):
-                                message_handler.consume_message(msg)
-                            else:
-                                # Fallback: if the handler API changes, fail loudly
-                                raise RuntimeError(
-                                    "Unsupported Pipes message handler interface"
-                                )
+                        # If file truncated/rotated, reset pos
+                        try:
+                            size = os.fstat(f.fileno()).st_size
+                        except Exception:
+                            size = None
+                        if pos > 0 and size is not None and pos > size:
+                            pos = 0
+
+                        # Continue from last offset
+                        if pos:
+                            f.seek(pos, os.SEEK_SET)
+
+                        # Use readline() loop so tell() is legal
+                        line = f.readline()
+                        while line and not self._stop.is_set():
+                            pos = f.tell()  # after reading the line
+                            s = line.strip()
+                            if s:
+                                try:
+                                    msg: Mapping[str, Any] = json.loads(s)
+                                except Exception:
+                                    # Ignore partial/garbage lines
+                                    pass
+                                else:
+                                    if hasattr(message_handler, "handle_message"):
+                                        message_handler.handle_message(msg)
+                                    elif hasattr(message_handler, "consume_message"):
+                                        message_handler.consume_message(msg)
+                                    else:
+                                        raise RuntimeError(
+                                            "Unsupported Pipes message handler interface"
+                                        )
+                            line = f.readline()
 
                 except FileNotFoundError:
-                    # Wait for file to appear, but honor a creation timeout so Dagster
-                    # can render a helpful “no messages” warning.
+                    # Wait for the file to appear; allow a grace period.
                     if first_seen is None:
-                        # haven’t seen the file yet
-                        if self._creation_timeout > 0 and (
-                            time.time() - (first_seen or time.time())
-                        ) > self._creation_timeout:
-                            # Let the outer session decide what to do; just idle here.
-                            pass
-                    # Nothing to tail yet.
+                        first_seen = time.time()
+                    # (We deliberately don't raise; Dagster will show your debug text.)
 
-                # Small sleep to avoid tight loop
+                # Avoid a tight loop
                 self._stop.wait(self._poll_interval)
 
         self._stop.clear()
         self._thread = threading.Thread(target=_tail, name="pipes-local-tail", daemon=True)
         self._thread.start()
         try:
-            # Yield immediately so the caller can start the child process.
-            yield params
+            # Yield immediately so the caller can start the child
+            yield messages_params
         finally:
-            # Stop tailing when the session ends.
             self._stop.set()
             if self._thread is not None:
                 self._thread.join(timeout=5.0)

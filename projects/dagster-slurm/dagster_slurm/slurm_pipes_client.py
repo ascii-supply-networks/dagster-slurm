@@ -1,9 +1,5 @@
-# slurm_pipes_client.py
 import os
-import re
 import shlex
-import textwrap
-import time
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Mapping, Any
@@ -21,14 +17,11 @@ from dagster import (
     PipesMessageReader,
 )
 
-# Kept imported to match prior interface (even if not used directly here)
+from dagster_pipes import encode_param
 from .ssh_helpers import (
     ssh_check,
     scp_put,
-    ssh_job_state,
-    TERMINAL_STATES,
-    upload_lib,
-    install_lib_locally,
+    pack_env
 )
 
 from .ssh_message_reader import SshExecTailMessageReader
@@ -47,9 +40,8 @@ _ALLOWED_KEYS = {
 }
 
 REMOTE_BASE = os.environ.get("SLURM_REMOTE_BASE", "/home/submitter").rstrip("/")
-ACTIVATE_SH = os.environ.get("SLURM_ACTIVATE_SH", "/home/submitter/activate.sh")
+ACTIVATE_SH_DEFAULT = os.environ.get("SLURM_ACTIVATE_SH", "/home/submitter/activate.sh")
 REMOTE_PY = os.environ.get("SLURM_PYTHON", "python")
-
 
 def get_runner(logger):
     # Use an env var to decide which runner to use. Default to local.
@@ -60,10 +52,44 @@ def get_runner(logger):
     logger.info("Using LocalRunner for dev environment.")
     return LocalRunner(logger)
 
-
 def get_backend() -> str:
     return os.environ.get("COMPUTE_BACKEND", "python").lower()  # python|ray|spark
 
+def _find_environment_sh() -> Optional[Path]:
+    """
+    Look for examples/environment.sh from a variety of roots so this works
+    regardless of current working directory.
+    """
+    here = Path(__file__).resolve()
+    candidates = [
+        Path("examples/environment.sh"),
+        here.parent.parent.parent.parent / "examples" / "environment.sh",  # repo_root/examples/environment.sh
+        here.parents[3] / "examples" / "environment.sh",
+        here.parents[4] / "examples" / "environment.sh" if len(here.parents) >= 5 else None,
+    ]
+    for p in candidates:
+        if p and p.exists():
+            return p
+    return None
+
+
+def _maybe_examples_pythonpath() -> str:
+    """
+    Build a PYTHONPATH segment with your three examples projects if present.
+    """
+    here = Path(__file__).resolve()
+    repo_root = here.parents[3]  # projects/dagster-slurm/dagster_slurm/ -> projects -> repo_root
+    examples = repo_root / "examples" / "projects"
+    parts = []
+    for rel in [
+        "dagster-slurm-example",
+        "dagster-slurm-example-shared",
+        "dagster-slurm-example-hpc-workload",
+    ]:
+        p = examples / rel
+        if p.exists():
+            parts.append(str(p))
+    return ":".join(parts)
 
 class _PipesBaseSlurmClient(PipesClient):
     """
@@ -102,17 +128,12 @@ class _PipesBaseSlurmClient(PipesClient):
         self.runner = get_runner(self.logger)
 
         # Resolve defaults from env
-        self.remote_base = (
-            remote_base or os.environ.get("SLURM_REMOTE_BASE", "/home/submitter")
-        ).rstrip("/")
-        self.activate_sh = activate_sh or os.environ.get(
-            "SLURM_ACTIVATE_SH", "/home/submitter/activate.sh"
-        )
+        self.remote_base = (remote_base or os.environ.get("SLURM_REMOTE_BASE", "/home/submitter")).rstrip("/")
+        # NOTE: This is only used as a *fallback* if we don't generate a per-run activate.sh
+        self.activate_sh = activate_sh or ACTIVATE_SH_DEFAULT
         self.remote_python = remote_python or os.environ.get("SLURM_PYTHON", "python3")
 
-        self.default_partition = default_partition or os.environ.get(
-            "SLURM_PARTITION", ""
-        )
+        self.default_partition = default_partition or os.environ.get("SLURM_PARTITION", "")
         self.default_time_limit = os.environ.get("SLURM_TIME", default_time_limit)
         self.default_cpus = os.environ.get("SLURM_CPUS", default_cpus)
         self.default_mem = os.environ.get("SLURM_MEM", default_mem)
@@ -129,15 +150,40 @@ class _PipesBaseSlurmClient(PipesClient):
                 if isinstance(self.runner, LocalRunner):
                     return LocalExecTailMessageReader(path, include_stdio_in_messages=True)
                 return SshExecTailMessageReader(path, include_stdio_in_messages=True)
-
             self._message_reader_factory = _default_reader
 
         # surfaces for the caller to read after run()
         self.last_job_id: Optional[int] = None
         self.last_remote_run_dir: Optional[str] = None
 
-    # ---- helpers ---------------------------------------------------------
+    # -------------------- helpers --------------------
 
+    def _dev_examples_pythonpath(self) -> str:
+        """
+        Return colon-separated paths to examples projects so imports work in dev:
+        dagster-slurm-example, dagster-slurm-example-shared, dagster-slurm-example-hpc-workload.
+        Returns "" if not found.
+        """
+        here = Path(__file__).resolve()
+        root = here
+        for _ in range(8):  # walk up to find repo root
+            candidate = root / "examples" / "projects"
+            if candidate.is_dir():
+                base = candidate
+                break
+            if root.parent == root:
+                return ""
+            root = root.parent
+        else:
+            return ""
+
+        wanted = [
+            "dagster-slurm-example",
+            "dagster-slurm-example-shared",
+            "dagster-slurm-example-hpc-workload",
+        ]
+        parts = [str((base / name)) for name in wanted if (base / name).is_dir()]
+        return ":".join(parts)
     def _make_message_reader(self, path: str, is_staging: bool) -> PipesMessageReader:
         if is_staging:
             return self._message_reader_factory(path)  # remote tail via SSH
@@ -149,6 +195,25 @@ class _PipesBaseSlurmClient(PipesClient):
         mapping = {k: str(v) for k, v in (params or {}).items() if k in _ALLOWED_KEYS}
         return Template(template_text).safe_substitute(mapping)
 
+    def _discover_projects_pythonpath(self, local_payload: str) -> str:
+        """
+        For dev only: find .../examples/projects and add each immediate subdir
+        (so imports like dagster_slurm_example[_shared] resolve without installs).
+        """
+        p = Path(local_payload).resolve()
+        projects_dir: Optional[Path] = None
+        for anc in p.parents:
+            if anc.name == "projects":
+                projects_dir = anc
+                break
+        if not projects_dir or not projects_dir.is_dir():
+            return ""
+        parts: List[str] = []
+        for d in sorted(projects_dir.iterdir()):
+            if d.is_dir():
+                parts.append(str(d))
+        return ":".join(parts)
+
     def _bootstrap_for_backend(
         self,
         *,
@@ -159,26 +224,24 @@ class _PipesBaseSlurmClient(PipesClient):
         session_env: Dict[str, str],
         extra_env: Optional[Dict[str, str]],
     ) -> List[str]:
-        """
-        Return the lines of the job.sh contents for python|ray|spark.
-        We always run a single 'driver' process that emits Pipes JSONL.
-        """
         messages_path = f"{exec_run_dir}/messages.jsonl"
 
         lines: List[str] = [
             "#!/bin/bash",
             "set -euo pipefail",
             f': > "{messages_path}" || true',
+            f'export DAGSTER_PIPES_MESSAGES="{messages_path}"',
+            'export DAGSTER_PIPES_INCLUDE_STDIO="1"',
+            'echo "[$(date -Is)] Exec run dir: ' + exec_run_dir + '"',
             'echo "[$(date -Is)] DAGSTER_PIPES_MESSAGES=${DAGSTER_PIPES_MESSAGES:-unset}"',
-            f'echo "[$(date -Is)] Exec run dir: {exec_run_dir}"',
-            # Pipes bootstrap env (context, messages target, etc.)
+            # Pipes context (DAGSTER_PIPES_CONTEXT etc.)
             *[f'export {k}={shlex.quote(v)}' for k, v in session_env.items()],
         ]
 
         if extra_env:
             lines += [f'export {k}={shlex.quote(str(v))}' for k, v in extra_env.items()]
 
-        # If present, install env inside allocation
+        # If present, install env inside allocation (creates per-run activate.sh)
         lines += [
             (
                 f'if [ -f {shlex.quote(exec_run_dir)}/environment.sh ]; then '
@@ -190,9 +253,30 @@ class _PipesBaseSlurmClient(PipesClient):
             )
         ]
 
-        # Activate environment for the payload
-        lines += [f"source {shlex.quote(self.activate_sh)}"]
+        # Prefer per-run activate.sh (produced by environment.sh). Fallback to global.
+        lines += [
+            f'if [ -f {shlex.quote(exec_run_dir)}/activate.sh ]; then',
+            '  echo "--- sourcing per-run activate.sh ---";',
+            f'  source {shlex.quote(exec_run_dir)}/activate.sh;',
+            'elif [ -f ' + shlex.quote(self.activate_sh) + ' ]; then',
+            '  echo "--- sourcing global activate.sh ---";',
+            f'  source {shlex.quote(self.activate_sh)};',
+            'else',
+            '  echo "WARN: no activate.sh found; continuing without environment activation" >&2;',
+            'fi',
+        ]
 
+        # Dev-only: add examples to PYTHONPATH so example pkgs import without being packed
+        if isinstance(self.runner, LocalRunner):
+            pp = self._dev_examples_pythonpath()
+            lines += [
+                f'export PYTHONPATH="{pp}:${{PYTHONPATH:-}}"' if pp else 'export PYTHONPATH="${PYTHONPATH:-}"',
+                'echo "[$(date -Is)] PYTHONPATH=${PYTHONPATH:-<empty>}"',
+            ]
+        else:
+            lines += ['echo "[$(date -Is)] PYTHONPATH=${PYTHONPATH:-<empty>}"']
+
+        # Backend launcher
         if backend == "python":
             lines += [
                 'echo "--- running python payload ---"',
@@ -201,7 +285,6 @@ class _PipesBaseSlurmClient(PipesClient):
             return lines
 
         if backend == "ray":
-            # Driver connects to Ray inside the payload (ray.init()).
             lines += [
                 'export RAY_ADDRESS="${RAY_ADDRESS:-auto}"',
                 'echo "--- running ray-enabled python payload ---"',
@@ -210,7 +293,6 @@ class _PipesBaseSlurmClient(PipesClient):
             return lines
 
         if backend == "spark":
-            # TODO: Implement spark-specific driver if needed.
             lines += [
                 'echo "--- (spark backend placeholder) running python payload ---"',
                 f'exec {shlex.quote(remote_python)} {shlex.quote(remote_payload_path)}',
@@ -219,7 +301,7 @@ class _PipesBaseSlurmClient(PipesClient):
 
         raise ValueError(f"Unknown COMPUTE_BACKEND={backend!r}")
 
-    # ---- main entry ------------------------------------------------------
+    # -------------------- main --------------------
 
     def run(
         self,
@@ -247,17 +329,18 @@ class _PipesBaseSlurmClient(PipesClient):
         Yields Dagster events (logs/materializations) from the remote Pipes process.
         On success, sets `self.last_job_id` and `self.last_remote_run_dir`.
         """
+        
         run_id = context.run_id or uuid.uuid4().hex
         backend = get_backend()
-        is_staging = isinstance(self.runner, DockerRunner)
 
-        # Activate path selection
-        if is_staging:
-            self.activate_sh = os.environ.get("SLURM_ACTIVATE_SH", self.activate_sh)
-        else:
-            local_activate = os.environ.get("LOCAL_ACTIVATE_SH")
-            if not local_activate:
-                raise ValueError("Set LOCAL_ACTIVATE_SH=~/venv/bin/activate for dev.")
+        is_staging = isinstance(self.runner, DockerRunner)
+        env_sh = Path("examples/environment.sh")
+        lock = Path("examples/pixi.lock")
+        # if (not env_sh.exists()) or (lock.exists() and env_sh.stat().st_mtime < lock.stat().st_mtime):
+        pack_env(log=self.logger)
+        # Optional local fallback activate (no longer required)
+        local_activate = os.environ.get("LOCAL_ACTIVATE_SH", "")
+        if local_activate:
             self.activate_sh = os.path.expanduser(local_activate)
 
         # Resolve locations
@@ -275,36 +358,41 @@ class _PipesBaseSlurmClient(PipesClient):
 
         # Ensure execution directory exists (locally or remotely)
         self.runner.run_command(f"mkdir -p {shlex.quote(exec_run_dir)}")
+        # Pre-create messages file early to avoid 'not created yet' warning
+        self.runner.run_command(f': > {shlex.quote(message_reader_path)} || true')
 
         with open_pipes_session(
             context=context,
             context_injector=self.context_injector,
             message_reader=reader,
         ) as session:
-            # Optionally ship an installer in staging
-            if is_staging:
-                local_installer_path = Path("examples/environment.sh")
-                if not local_installer_path.exists():
-                    raise FileNotFoundError(
-                        "examples/environment.sh not found. Run `pixi run pack` first."
-                    )
-                self.runner.put_file(
-                    str(local_installer_path), f"{exec_run_dir}/environment.sh"
-                )
-
-            # Ship the payload
+            # Always ship the environment installer if it exists in examples/
+            examples_env = Path("examples/environment.sh")
+            if examples_env.exists():
+                self.runner.put_file(str(examples_env), f"{exec_run_dir}/environment.sh")
+            # Ship payload
             payload_filename = Path(local_payload).name
             remote_payload_path = f"{exec_run_dir}/{payload_filename}"
             self.runner.put_file(local_payload, remote_payload_path)
 
-            # Build job.sh for the chosen backend
-            session_env = session.get_bootstrap_env_vars()
+            # Build env exported to the job — force legacy file-writer compatibility
+            pipes_env = session.get_bootstrap_env_vars()
+
+            # Force the external writer to use a file path, in the format expected by your
+            # dagster_pipes version (encoded params in DAGSTER_PIPES_MESSAGES).
+            pipes_env["DAGSTER_PIPES_MESSAGES"] = encode_param(
+                {"path": message_reader_path, "stdio": True}
+            )
+
+            # Ensure no legacy/alternate params vars sneak in (avoid double-specifying).
+            for k in ("DAGSTER_PIPES_MESSAGE_PARAMS", "DAGSTER_PIPES_MESSAGES_PARAMS"):
+                pipes_env.pop(k, None)
             job_script_lines = self._bootstrap_for_backend(
                 backend=backend,
                 exec_run_dir=exec_run_dir,
                 remote_payload_path=remote_payload_path,
                 remote_python=remote_python,
-                session_env=session_env,
+                session_env=pipes_env,
                 extra_env=extra_env,
             )
 
