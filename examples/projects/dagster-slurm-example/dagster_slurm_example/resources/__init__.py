@@ -26,9 +26,9 @@ RESOURCES_STAGING = {"pipes_subprocess_client": pipes_subprocess_client}
 
 RESOURCES_PROD = {"pipes_subprocess_client": pipes_subprocess_client}
 resource_defs_by_deployment_name = {
-    "dev": RESOURCES_LOCAL, ## fully local package on fly
-    "staging": RESOURCES_STAGING, ## cluster but package on fly small data
-    "prod": RESOURCES_PROD, ## CI packaging 
+    "dev": RESOURCES_LOCAL,  ## fully local package on fly
+    "staging": RESOURCES_STAGING,  ## cluster but package on fly small data
+    "prod": RESOURCES_PROD,  ## CI packaging
 }
 
 

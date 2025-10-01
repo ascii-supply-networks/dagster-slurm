@@ -1,9 +1,18 @@
 # runs inside the Slurm allocation
-import os, time, tempfile, textwrap, pathlib
-from dagster_pipes import PipesDefaultMessageWriter
-from ray.job_submission import JobSubmissionClient, JobStatus
+import os
+import pathlib
+import tempfile
+import textwrap
+import time
 
-def main():
+from dagster_pipes import PipesDefaultMessageWriter
+from ray.job_submission import JobStatus, JobSubmissionClient
+
+
+# TODO: fix this example normally a pipes session should look like
+# https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/ray_external.py
+# and also we would not want to generate the file on the fly but want to use a job from VCS
+def main():  # noqa: C901
     with PipesDefaultMessageWriter.from_env() as writer:
         addr = os.environ.get("RAY_DASHBOARD_ADDR", "http://127.0.0.1:8265")
         writer.report_log(f"[slurm→ray] Dashboard: {addr}")
@@ -12,7 +21,8 @@ def main():
         # write a tiny Ray entrypoint into a temp working_dir so Ray can upload it
         work = pathlib.Path(tempfile.mkdtemp(prefix="ray_job_"))
         entry = work / "ray_payload.py"
-        entry.write_text(textwrap.dedent("""
+        entry.write_text(
+            textwrap.dedent("""
 import ray
 
 ray.init()
@@ -23,7 +33,9 @@ def my_function(x):
 
 futures = [my_function.remote(i) for i in range(4)]
 print(ray.get(futures))
-        """).strip() + "\n")
+        """).strip()
+            + "\n"
+        )
 
         job_id = client.submit_job(
             entrypoint=f"python {entry.name}",
@@ -50,6 +62,7 @@ print(ray.get(futures))
             raise SystemExit(1)
 
         writer.report_log("[slurm→ray] Ray job succeeded")
+
 
 if __name__ == "__main__":
     main()

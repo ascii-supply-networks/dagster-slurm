@@ -79,7 +79,7 @@ dagster = "~=1.11.7"
 
 [tool.pixi.feature.cluster.pypi-dependencies]
 ray = { version = "~=2.48.0", extras = ["data", "default"] }
-dagster-ray = ">=0.0.1,<0.25"  
+dagster-ray = ">=0.0.1,<0.25"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
@@ -114,7 +114,7 @@ create-dagster = "~=1.11.7"
 [tool.pixi.tasks.start]
 cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
-env = { DAGSTER_IS_DEV_CLI = "True"}
+env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
 
 # pixi run -e opstooling --frozen build-shared-library
@@ -140,12 +140,21 @@ cwd = "./projects/dagster-slurm-example"
 cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
 description = "Pack dev environment"
 
-depends-on = ["build-shared-library", "build-integrations", "build-hpc-workload", "build-example"]
+depends-on = [
+  "build-shared-library",
+  "build-integrations",
+  "build-hpc-workload",
+  "build-example",
+]
 
 [tool.pixi.tasks.pack-aarch]
 cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable  --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch"
-depends-on = ["build-shared-library", "build-integrations", "build-hpc-workload"]
+depends-on = [
+  "build-shared-library",
+  "build-integrations",
+  "build-hpc-workload",
+]
 
 [tool.pixi.tasks.clean]
 cmd = "pixi run -e opstooling --frozen ./scripts/cleanup_all.sh"
