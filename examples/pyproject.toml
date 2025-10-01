@@ -95,7 +95,7 @@ dagster-slurm-example-shared = { path = "./projects/dagster-slurm-example-shared
 dagster-slurm-example-hpc-workload = { path = "./projects/dagster-slurm-example-hpc-workload", editable = true }
 
 [tool.pixi.feature.secops.dependencies]
-go-sops = "~=3.10.2"
+go-sops = "~=3.11.0"
 age = "~=1.2.1"
 
 [tool.pixi.feature.opstooling.dependencies]
