@@ -1,7 +1,6 @@
 ---
 sidebar_position: 2
 title: Tooling setup
-title: Tooling setup
 ---
 
 ## Call for contribution
