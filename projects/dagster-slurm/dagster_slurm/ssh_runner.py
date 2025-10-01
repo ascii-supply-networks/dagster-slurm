@@ -3,7 +3,7 @@ import shlex
 import time
 from . import ssh_helpers
 
-class DockerRunner:
+class SSHRunner:
     """Executes commands and manages files on a remote Slurm cluster via SSH."""
 
     def __init__(self, logger):

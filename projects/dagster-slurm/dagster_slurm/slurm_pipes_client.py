@@ -6,7 +6,7 @@ from typing import Callable, Dict, Iterable, Iterator, List, Optional, Mapping, 
 from string import Template
 
 from .local_runner import LocalRunner
-from .docker_runner import DockerRunner
+from .ssh_runner import SSHRunner
 from shlex import quote as shq
 
 from dagster import (
@@ -49,7 +49,7 @@ def get_runner(logger):
     env = os.environ.get("DAGSTER_ENV", "dev").lower()
     if env == "staging":
         logger.info("Using SlurmRunner for staging environment.")
-        return DockerRunner(logger)
+        return SSHRunner(logger)
     logger.info("Using LocalRunner for dev environment.")
     return LocalRunner(logger)
 
@@ -333,7 +333,7 @@ class _PipesBaseSlurmClient(PipesClient):
         run_id = context.run_id or uuid.uuid4().hex
         backend = get_backend()
 
-        is_staging = isinstance(self.runner, DockerRunner)
+        is_staging = isinstance(self.runner, SSHRunner)
         env_sh = Path("examples/environment.sh")
         lock = Path("examples/pixi.lock")
         # if (not env_sh.exists()) or (lock.exists() and env_sh.stat().st_mtime < lock.stat().st_mtime):
