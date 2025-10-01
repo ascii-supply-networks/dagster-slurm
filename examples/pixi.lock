@@ -2237,7 +2237,7 @@ packages:
 - pypi: ./projects/dagster-slurm-example
   name: dagster-slurm-example
   version: 1.0.0
-  sha256: a04d265efdda83fc5fcc86d019cc50114b36b6a68359e30fc95ff7f25a6efbdd
+  sha256: 31833c1407a9bd3c3f9ba951af2e5c33f44faf54a84133f5ba46bd5893571dea
   requires_python: '>=3.12'
   editable: true
 - pypi: ./projects/dagster-slurm-example-hpc-workload

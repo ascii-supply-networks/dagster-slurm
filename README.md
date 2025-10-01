@@ -37,6 +37,11 @@ ssh submitter@localhost -p 2223
 sinfo
 ```
 
+```bash
+cd examples
+pixi run -e dev --frozen start
+```
+
 ## basic distribution
 
 initial setup.
