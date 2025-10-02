@@ -7,6 +7,7 @@ from .slurm_pipes_client import _PipesBaseSlurmClient
 
 from pathlib import Path
 
+
 def _resolve_payload_path(payload: str | Path, caller_file: str) -> str:
     p = Path(payload)
     if not p.is_absolute():
@@ -16,8 +17,9 @@ def _resolve_payload_path(payload: str | Path, caller_file: str) -> str:
         raise FileNotFoundError(f"Payload not found: {p} (from '{payload}')")
     return str(p)
 
+
 def make_slurm_pipes_asset(
-    *,  
+    *,
     name: str,
     local_payload: str,
     job_name: str = "pipes_ext",
@@ -40,7 +42,7 @@ def make_slurm_pipes_asset(
             default_time_limit=time_limit,
             default_cpus=cpus,
             default_mem=mem,
-            default_mem_per_cpu=mem_per_cpu
+            default_mem_per_cpu=mem_per_cpu,
         )
     caller_file = inspect.stack()[1].filename
     payload_path = _resolve_payload_path(local_payload, caller_file)
@@ -52,8 +54,8 @@ def make_slurm_pipes_asset(
     if asset_key is not None:
         dec_kwargs["key"] = AssetKey(list(asset_key))
     else:
-        dec_kwargs["name"] = name  
-        
+        dec_kwargs["name"] = name
+
     @asset(**dec_kwargs)
     def _asset(context: AssetExecutionContext):
         for ev in client.run(
@@ -77,7 +79,10 @@ def make_slurm_pipes_asset(
                 yield ev.to_observation()
 
         yield Output(
-            {"job_id": client.last_job_id, "remote_run_dir": client.last_remote_run_dir},
+            {
+                "job_id": client.last_job_id,
+                "remote_run_dir": client.last_remote_run_dir,
+            },
             metadata={
                 "job_id": client.last_job_id,
                 "remote_run_dir": client.last_remote_run_dir,

@@ -8,11 +8,12 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 keywords = ["dagster", "slurm", "hpc", "workflow-orchestration", "ray", "feray"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Topic :: System :: Distributed Computing",
   "Topic :: Software Development :: Libraries :: Python Modules",
@@ -62,4 +63,6 @@ dagster-pipes = "==1.11.7"
 ray = ["ray>=2.48.0"]
 
 [tool.pixi.package.build]
-backend = { name = "pixi-build-python", version = "*", channels = ["https://prefix.dev/conda-forge"] }
+backend = { name = "pixi-build-python", version = "*", channels = [
+  "https://prefix.dev/conda-forge",
+] }
