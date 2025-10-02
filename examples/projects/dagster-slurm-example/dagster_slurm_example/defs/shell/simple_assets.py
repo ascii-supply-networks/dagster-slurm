@@ -27,12 +27,16 @@ def process_data(
                 "INPUT_DATA": "/path/to/input",
                 "OUTPUT_DATA": "/path/to/output",
             },
+            extras={
+                "foo": "bar",
+                "config": {"batch_size": 100},
+            },
         )
     )
     return dg.Output(
         value={"status": "completed"},
         metadata={
-            "deployment": compute.mode,
+            "deployment": str(compute.mode),
             "events_count": len(results),
         },
     )
@@ -41,7 +45,7 @@ def process_data(
 @dg.asset
 def aggregate_results(
     context: dg.AssetExecutionContext,
-    compute: dg.ComputeResource,
+    compute: ComputeResource,
     process_data,  # Dependency
 ) -> dg.Output:
     """Aggregate results from processing."""

@@ -6,24 +6,11 @@ import time
 import threading
 from typing import Dict, List, Optional, Any, Set
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
-from pydantic import Field
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..helpers.ssh_helpers import TERMINAL_STATES
 from ..launchers.base import ExecutionPlan
 from ..resources.slurm import SlurmResource
-
-
-"""Slurm session management for operator fusion."""
-import re
-import shlex
-import time
-import threading
-from typing import Dict, List, Optional, Any, Set
-from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
 from pydantic import Field, PrivateAttr
-from ..helpers.ssh_pool import SSHConnectionPool
-from ..helpers.ssh_helpers import TERMINAL_STATES
-from ..launchers.base import ExecutionPlan
 
 
 class SlurmSessionResource(ConfigurableResource):
@@ -49,6 +36,9 @@ class SlurmSessionResource(ConfigurableResource):
     enable_health_checks: bool = Field(
         default=True, description="Enable node health checks"
     )
+    enable_session: bool = Field(
+        default=True, description="Enable session mode for operator fusion"
+    )
 
     # Private attributes for state management
     _allocation: Optional["SlurmAllocation"] = PrivateAttr(default=None)
@@ -70,17 +60,21 @@ class SlurmSessionResource(ConfigurableResource):
         self.context = context
         self._execution_semaphore = threading.Semaphore(self.max_concurrent_jobs)
 
-        # Start SSH pool
-        self._ssh_pool = SSHConnectionPool(self.slurm.ssh)
-        self._ssh_pool.__enter__()
+        # Only create allocation if session mode is enabled
+        if self.enable_session:
+            # Start SSH pool
+            self._ssh_pool = SSHConnectionPool(self.slurm.ssh)
+            self._ssh_pool.__enter__()
 
-        # Create allocation
-        self._allocation = self._create_allocation()
+            # Create allocation
+            self._allocation = self._create_allocation()
+            self.logger.info(
+                f"Session resource initialized with allocation {self._allocation.slurm_job_id}"
+            )
+        else:
+            self.logger.info("Session mode disabled")
+
         self._initialized = True
-
-        self.logger.info(
-            f"Session resource initialized with allocation {self._allocation.slurm_job_id}"
-        )
 
         return self
 
@@ -126,6 +120,9 @@ class SlurmSessionResource(ConfigurableResource):
                 "Session not initialized. "
                 "This resource must be setup by Dagster before use."
             )
+
+        if not self.enable_session:
+            raise RuntimeError("Session mode is disabled. Cannot execute in session.")
 
         # Rate limiting
         with self._execution_semaphore:

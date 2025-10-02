@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Optional, List, Any, Literal
 from dataclasses import dataclass
 from dagster_slurm.config.runtime import RuntimeVariant
+import dagster as dg
 
 
 @dataclass
@@ -16,7 +17,7 @@ class ExecutionPlan:
     resources: Dict[str, Any]
 
 
-class ComputeLauncher(ABC):
+class ComputeLauncher(dg.ConfigurableResource):
     """Generate execution plans for workloads."""
 
     @abstractmethod

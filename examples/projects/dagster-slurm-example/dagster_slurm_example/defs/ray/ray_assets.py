@@ -1,7 +1,5 @@
 """Assets using Ray launcher for distributed compute."""
 
-from pathlib import Path
-
 import dagster as dg
 from dagster_slurm import ComputeResource, RayLauncher
 
@@ -52,7 +50,10 @@ def distributed_inference(
     Run inference using Ray.
     In session mode, this reuses the same Ray cluster from training!
     """
-    script_path = str(Path(__file__).parent.parent / "payloads" / "infer_ray.py")
+    script_path = dg.file_relative_path(
+        __file__,
+        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/infer_ray.py",
+    )
     ray_launcher = RayLauncher(
         activate_sh=compute.slurm.activate_sh if compute.slurm else None,
         num_gpus_per_node=0,

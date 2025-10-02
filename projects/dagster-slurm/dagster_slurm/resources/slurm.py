@@ -47,6 +47,35 @@ class SlurmResource(ConfigurableResource):
     )
 
     @classmethod
+    def from_env_slurm(cls, ssh: SSHConnectionResource) -> "SlurmResource":
+        """
+        Create a SlurmResource by populating most fields from environment variables,
+        but requires an explicit, pre-configured SSHConnectionResource to be provided.
+
+        Args:
+            ssh: A fully configured SSHConnectionResource instance.
+        """
+        return cls(
+            # Use the provided ssh object directly
+            ssh=ssh,
+            # The rest of the configuration is still loaded from the environment
+            queue=SlurmQueueConfig(
+                partition=os.getenv(
+                    "SLURM_PARTITION", "interactive"
+                ),  # Sensible default
+                time_limit=os.getenv("SLURM_TIME", "00:30:00"),
+                cpus=int(os.getenv("SLURM_CPUS", "2")),
+                mem=os.getenv("SLURM_MEM", "4096M"),
+                mem_per_cpu=os.getenv("SLURM_MEM_PER_CPU", ""),
+                num_nodes=int(os.getenv("SLURM_NUM_NODES", "1")),
+                gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
+            ),
+            remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
+            remote_python=os.getenv("SLURM_PYTHON", "python3"),
+            activate_sh=os.getenv("SLURM_ACTIVATE_SH"),
+        )
+
+    @classmethod
     def from_env(cls) -> "SlurmResource":
         """Create from environment variables."""
         return cls(

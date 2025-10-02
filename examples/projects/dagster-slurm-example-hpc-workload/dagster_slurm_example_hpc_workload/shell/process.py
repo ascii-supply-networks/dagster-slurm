@@ -8,6 +8,7 @@ from dagster_pipes import PipesContext, open_dagster_pipes
 def main():
     context = PipesContext.get()
     context.log.info("Starting data processing...")
+    context.log.debug(context.extras)
     input_path = os.environ.get("INPUT_DATA")
     output_path = os.environ.get("OUTPUT_DATA")
     context.log.info(f"Input: {input_path}")

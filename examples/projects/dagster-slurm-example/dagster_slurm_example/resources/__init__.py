@@ -1,18 +1,15 @@
 import os
 
 import dagster as dg
-from dagster_ray import LocalRay
 from dagster_slurm import (
     BashLauncher,
     ComputeResource,
+    SlurmQueueConfig,
     SlurmResource,
     SlurmSessionResource,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import Environment, ExecutionMode
-
-from .lazy_local_ray import (
-    PipesRayJobClientLazyLocalResource,
-)
 
 
 def get_dagster_deployment_environment(
@@ -36,62 +33,91 @@ def get_resources():
     """Build resource dict based on DAGSTER_DEPLOYMENT."""
     deployment = get_dagster_deployment_environment()
 
-    pipes_subprocess_client = dg.PipesSubprocessClient()
-
     if deployment == Environment.DEVELOPMENT:
         # Local mode: no SSH, no Slurm
-        local_ray = LocalRay(
-            ray_init_options={
-                "ignore_reinit_error": False,
-                "dashboard_host": "127.0.0.1",
-                "dashboard_port": 8265,
-            }
-        )
         return {
             "compute": ComputeResource(
                 mode=ExecutionMode.LOCAL,
                 default_launcher=BashLauncher(),
             ),
-            "pipes_subprocess_client": pipes_subprocess_client,
-            # TODO: Can we remove these eventually?
-            "ray_cluster": local_ray,
-            "pipes_ray_job_client": PipesRayJobClientLazyLocalResource(
-                ray_cluster=local_ray
-            ),
         }
     elif deployment == Environment.STAGING:
         # Slurm per-asset: each asset = separate sbatch
-        slurm = SlurmResource.from_env()
-        # Override for staging
-        slurm.queue.partition = "interactive"
-        slurm.queue.time_limit = "01:00:00"
-        slurm.queue.cpus = 4
-        slurm.queue.gpus_per_node = 0
-        slurm.queue.num_nodes = 1
-        slurm.queue.mem = "4G"
+        ssh_connection = SSHConnectionResource(
+            host="localhost", port=2223, user="submitter", password="submitter"
+        )
+        slurm = SlurmResource(
+            ssh=ssh_connection,
+            queue=SlurmQueueConfig(
+                partition="interactive",
+                num_nodes=1,
+                time_limit="00:30:00",
+                cpus=2,
+                gpus_per_node=0,
+                mem="4096M",
+                mem_per_cpu="",
+                # partition="gpu",  # Alternative: GPU partition
+                # num_nodes=4,  # For multi-node jobs
+                # time_limit="12:00:00",  # Longer jobs
+                # cpus=16,  # More CPUs per task
+                # gpus_per_node=2,  # Request GPUs
+                # mem="64G",  # More memory
+                # mem_per_cpu="4G",  # Alternative: memory per CPU instead of total mem
+            ),
+            remote_base="/home/submitter/dagster",
+        )
+
+        session = SlurmSessionResource(
+            slurm=slurm,
+            num_nodes=2,
+            time_limit="01:00:00",
+            # partition="interactive",  # Override queue partition if needed
+            # max_concurrent_jobs=10,  # Limit concurrent srun jobs in session
+            # enable_health_checks=True,  # Monitor node health
+            # enable_session=True,  # Enable session mode for operator fusion
+        )
         return {
             "compute": ComputeResource(
                 mode=ExecutionMode.SLURM,
                 slurm=slurm,
                 default_launcher=BashLauncher(activate_sh=slurm.activate_sh),
             ),
-            "pipes_subprocess_client": pipes_subprocess_client,
         }
     elif deployment == Environment.PRODUCTION:
         # Slurm session: shared allocation, operator fusion
-        slurm = SlurmResource.from_env()
+        slurm_base = SlurmResource.from_env()
         # Override for prod
-        slurm.queue.partition = "batch"
-        slurm.queue.time_limit = "24:00:00"
-        slurm.queue.cpus = 32
-        slurm.queue.mem = "64G"
-        slurm.queue.num_nodes = 4
-        slurm.queue.gpus_per_node = 1
+        ssh_connection = SSHConnectionResource(
+            host=os.environ["SLURM_EDGE_NODE"],
+            port=int(os.environ["SLURM_EDGE_NODE_PORT"]),
+            user=os.environ["SLURM_EDGE_NODE_USER"],
+            password=os.environ["SLURM_EDGE_NODE_PASSWORD"],
+        )
+        slurm = slurm_base.model_copy(
+            update={
+                "ssh": ssh_connection,
+                "queue": slurm_base.queue.model_copy(
+                    update={
+                        "partition": "batch",
+                        "time_limit": "4:00:00",
+                        "cpus": 8,
+                        "mem": "64G",
+                        "num_nodes": 2,
+                        "gpus_per_node": 0,
+                        # mem_per_cpu="",  # default (use mem instead)
+                    }
+                ),
+            }
+        )
+
         session = SlurmSessionResource(
             slurm=slurm,
             num_nodes=4,
             time_limit="04:00:00",
             enable_session=True,
+            # partition=None,  # default (uses queue.partition)
+            # max_concurrent_jobs=10,  # default
+            # enable_health_checks=True,  # default
         )
         return {
             "compute": ComputeResource(
@@ -100,7 +126,6 @@ def get_resources():
                 session=session,
                 default_launcher=BashLauncher(activate_sh=slurm.activate_sh),
             ),
-            "pipes_subprocess_client": pipes_subprocess_client,
         }
     else:
         raise ValueError(f"Unknown DAGSTER_DEPLOYMENT: {deployment}")

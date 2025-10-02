@@ -117,6 +117,15 @@ cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
 
+[tool.pixi.tasks.start-staging]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "staging" }
+description = "Start dagster webserver in staging mode"
+
+# TODO: for PROD mode we have to package and deploy OUT OF BAND! and need to create a task for this
+# TODO: Add PROD mode
+
 # pixi run -e opstooling --frozen build-shared-library
 [tool.pixi.tasks.build-shared-library]
 cmd = "pixi build -o dist"

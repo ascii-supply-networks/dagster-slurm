@@ -57,7 +57,7 @@ class SparkLauncher(ComputeLauncher):
             "set -euo pipefail",
             "",
             f': > "{messages_path}" || true',
-            f'echo "[$(date -Is)] Starting Spark execution"',
+            f'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark execution"',
             f"export SPARK_HOME={shlex.quote(self.spark_home)}",
             "",
         ]
@@ -90,7 +90,7 @@ class SparkLauncher(ComputeLauncher):
             script_lines.extend(
                 [
                     f'export SPARK_MASTER_URL="{self.master_url}"',
-                    f'echo "[$(date -Is)] Using existing Spark cluster: {self.master_url}"',
+                    f'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Using existing Spark cluster: {self.master_url}"',
                     "",
                 ]
             )
@@ -104,7 +104,7 @@ class SparkLauncher(ComputeLauncher):
             script_lines.extend(
                 [
                     'export SPARK_MASTER_URL="local[*]"',
-                    'echo "[$(date -Is)] Using local Spark"',
+                    'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Using local Spark"',
                     "",
                 ]
             )
@@ -112,7 +112,7 @@ class SparkLauncher(ComputeLauncher):
         # Submit Spark job
         script_lines.extend(
             [
-                'echo "[$(date -Is)] Submitting Spark job..."',
+                'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Submitting Spark job..."',
                 f"$SPARK_HOME/bin/spark-submit \\",
                 f'  --master "$SPARK_MASTER_URL" \\',
                 f"  --executor-memory {self.executor_memory} \\",
@@ -145,29 +145,29 @@ class SparkLauncher(ComputeLauncher):
 
         return [
             "# Start Spark cluster across Slurm allocation",
-            f'echo "[$(date -Is)] Starting Spark on {len(nodes)} nodes"',
+            f'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark on {len(nodes)} nodes"',
             f'HEAD_NODE="{head_node}"',
             "CURRENT_NODE=$(hostname)",
             "",
             "# Start Spark master on head node",
             'if [ "$CURRENT_NODE" == "$HEAD_NODE" ]; then',
-            '  echo "[$(date -Is)] Starting Spark master"',
+            '  echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark master"',
             "  $SPARK_HOME/sbin/start-master.sh",
             "  sleep 10",
             '  MASTER_URL=$(cat $SPARK_HOME/logs/spark-*-org.apache.spark.deploy.master.Master-1-*.out | grep "Starting Spark master" | grep -oP "spark://[^,]+")',
             f'  echo "$MASTER_URL" > {working_dir}/spark_master_url.txt',
-            f'  echo "[$(date -Is)] Spark master started at $MASTER_URL"',
+            f'  echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Spark master started at $MASTER_URL"',
             "fi",
             "",
             "# Start Spark workers",
             "sleep 15",
             f"MASTER_URL=$(cat {working_dir}/spark_master_url.txt)",
             'if [ "$CURRENT_NODE" != "$HEAD_NODE" ]; then',
-            '  echo "[$(date -Is)] Starting Spark worker"',
+            '  echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark worker"',
             '  $SPARK_HOME/sbin/start-worker.sh "$MASTER_URL"',
             "fi",
             "",
             'export SPARK_MASTER_URL="$MASTER_URL"',
-            'echo "[$(date -Is)] Spark cluster ready"',
+            'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Spark cluster ready"',
             "",
         ]
