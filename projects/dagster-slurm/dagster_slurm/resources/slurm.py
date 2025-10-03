@@ -35,15 +35,9 @@ class SlurmResource(ConfigurableResource):
 
     ssh: SSHConnectionResource = Field(description="SSH connection to Slurm cluster")
     queue: SlurmQueueConfig = Field(description="Default queue parameters")
-    remote_base: str = Field(
-        default="/home/submitter",
-        description="Base directory on cluster for Dagster runs",
-    )
-    remote_python: str = Field(
-        default="python3", description="Python executable path on cluster"
-    )
-    activate_sh: Optional[str] = Field(
-        default=None, description="Global environment activation script (fallback)"
+    remote_base: Optional[str] = Field(
+        default=None,
+        description="Base directory on remote system (default: ~/pipelines/<run_id>)",
     )
 
     @classmethod
@@ -90,6 +84,4 @@ class SlurmResource(ConfigurableResource):
                 gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
-            remote_python=os.getenv("SLURM_PYTHON", "python3"),
-            activate_sh=os.getenv("SLURM_ACTIVATE_SH"),
         )

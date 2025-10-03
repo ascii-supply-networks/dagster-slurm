@@ -106,6 +106,7 @@ pixi run pack
 scp -P 2223 environment.sh submitter@localhost:/home/submitter
 ssh submitter@localhost -p 2223
 
+./environment.sh
 # tar -xvf environment.tar
 #pixi exec pixi-unpack environment.tar
 source ./activate.sh

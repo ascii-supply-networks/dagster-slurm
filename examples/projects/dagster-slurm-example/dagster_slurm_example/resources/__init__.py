@@ -44,7 +44,10 @@ def get_resources():
     elif deployment == Environment.STAGING:
         # Slurm per-asset: each asset = separate sbatch
         ssh_connection = SSHConnectionResource(
-            host="localhost", port=2223, user="submitter", password="submitter"
+            host="localhost",
+            port=2223,
+            user=dg.EnvVar("SLURM_EDGE_NODE_USER"),
+            password=dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
         )
         slurm = SlurmResource(
             ssh=ssh_connection,
@@ -64,7 +67,7 @@ def get_resources():
                 # mem="64G",  # More memory
                 # mem_per_cpu="4G",  # Alternative: memory per CPU instead of total mem
             ),
-            remote_base="/home/submitter/dagster",
+            # remote_base="/home/submitter/dagster",
         )
 
         session = SlurmSessionResource(
@@ -80,7 +83,10 @@ def get_resources():
             "compute": ComputeResource(
                 mode=ExecutionMode.SLURM,
                 slurm=slurm,
-                default_launcher=BashLauncher(activate_sh=slurm.activate_sh),
+                default_launcher=BashLauncher(),
+                debug_mode=True,  # NEVER cleanup files
+                auto_detect_platform=True,  # Auto-detect ARM vs x86
+                # pack_platform="linux-aarch64",  # Or explicitly override for testing
             ),
         }
     elif deployment == Environment.PRODUCTION:
@@ -124,7 +130,11 @@ def get_resources():
                 mode=ExecutionMode.SLURM_SESSION,
                 slurm=slurm,
                 session=session,
-                default_launcher=BashLauncher(activate_sh=slurm.activate_sh),
+                default_launcher=BashLauncher(),
+                # debug_mode=True,  # NEVER cleanup files
+                # ONLY ENABLE this for local docker runs!
+                auto_detect_platform=True,  # Auto-detect ARM vs x86
+                # pack_platform="linux-aarch64",  # Or explicitly override for testing
             ),
         }
     else:

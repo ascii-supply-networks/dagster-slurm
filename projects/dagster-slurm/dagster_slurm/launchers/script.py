@@ -1,16 +1,17 @@
 import shlex
-from typing import Dict, Optional, List, Any
+from pathlib import Path
+from typing import Dict, Optional, Any
 from .base import ComputeLauncher, ExecutionPlan
 from dagster_slurm.config.runtime import RuntimeVariant
-from pydantic import Field
 
 
 class BashLauncher(ComputeLauncher):
-    """Executes Python scripts via bash."""
+    """
+    Executes Python scripts via bash.
 
-    activate_sh: Optional[str] = Field(
-        default=None, description="Global activation script (fallback)"
-    )
+    Uses the self-contained pixi environment extracted at runtime.
+    Sources the activation script provided by pixi-pack.
+    """
 
     def prepare_execution(
         self,
@@ -20,102 +21,120 @@ class BashLauncher(ComputeLauncher):
         pipes_context: Dict[str, str],
         extra_env: Optional[Dict[str, str]] = None,
         allocation_context: Optional[Dict[str, Any]] = None,
+        activation_script: Optional[str] = None,  # NEW: Accept activation script
     ) -> ExecutionPlan:
-        """Generate bash execution plan."""
+        """
+        Generate bash execution plan.
 
+        Args:
+            payload_path: Path to Python script on remote host
+            python_executable: Python from extracted environment
+            working_dir: Working directory
+            pipes_context: Dagster Pipes environment variables
+            extra_env: Additional environment variables
+            allocation_context: Slurm allocation info (for session mode)
+            activation_script: Path to activation script (provided by pixi-pack)
+
+        Returns:
+            ExecutionPlan with shell script
+        """
         messages_path = f"{working_dir}/messages.jsonl"
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
 
-        script_lines = [
-            "#!/bin/bash",
-            "set -euo pipefail",
-            "",
-            "# Ensure messages file exists",
-            f': > "{messages_path}" || true',
-            "",
-            f'echo "[$({date_fmt})] ========================================="',
-            f'echo "[$({date_fmt})] Dagster Asset Execution"',
-            f'echo "[$({date_fmt})] Working dir: {working_dir}"',
-            f'echo "[$({date_fmt})] Payload: {payload_path}"',
-            f'echo "[$({date_fmt})] Python: {python_executable}"',
-            f'echo "[$({date_fmt})] ========================================="',
-            "",
-        ]
+        # Quote paths for safety
+        python_quoted = shlex.quote(python_executable)
+        payload_quoted = shlex.quote(payload_path)
 
-        # Dagster Pipes context
-        script_lines.append("# Dagster Pipes environment")
+        # Build header
+        script = f"""#!/bin/bash
+set -euo pipefail
+
+# Ensure messages file exists
+: > "{messages_path}" || true
+
+echo "[$({date_fmt})] ========================================="
+echo "[$({date_fmt})] Dagster Asset Execution"
+echo "[$({date_fmt})] Working dir: {working_dir}"
+echo "[$({date_fmt})] Payload: {payload_path}"
+echo "[$({date_fmt})] Python: {python_executable}"
+echo "[$({date_fmt})] ========================================="
+
+"""
+
+        # Activate environment using provided activation script
+        if activation_script:
+            activation_quoted = shlex.quote(activation_script)
+            script += f"""# Activate pixi-packed environment
+echo "[$({date_fmt})] Activating environment from: {activation_script}"
+source {activation_quoted}
+echo "[$({date_fmt})] Environment activated"
+echo "[$({date_fmt})] Python version: $(python --version 2>&1)"
+echo "[$({date_fmt})] Which python: $(which python)"
+
+"""
+        else:
+            # Fallback - shouldn't happen but be defensive
+            self.logger.warning("No activation script provided, using PATH fallback")
+            env_dir = str(Path(python_executable).parent.parent)
+            env_dir_quoted = shlex.quote(env_dir)
+            script += f"""# WARNING: No activation script provided
+export PATH={env_dir_quoted}/bin:$PATH
+export LD_LIBRARY_PATH={env_dir_quoted}/lib:${{LD_LIBRARY_PATH:-}}
+
+"""
+
+        # Add Dagster Pipes environment
+        script += "# Dagster Pipes environment\n"
         for key, value in pipes_context.items():
-            script_lines.append(f"export {key}={shlex.quote(value)}")
-        script_lines.append("")
+            script += f"export {key}={shlex.quote(value)}\n"
+        script += "\n"
 
-        # Extra environment
+        # Add extra environment variables
         if extra_env:
-            script_lines.append("# Additional environment variables")
+            script += "# Additional environment variables\n"
             for key, value in extra_env.items():
-                script_lines.append(f"export {key}={shlex.quote(str(value))}")
-            script_lines.append("")
+                script += f"export {key}={shlex.quote(str(value))}\n"
+            script += "\n"
 
-        # ✅ FIXED: Environment activation with correct if/elif/else/fi structure
-        script_lines.extend(
-            [
-                "# Install per-run environment if present",
-                f"if [ -f {shlex.quote(working_dir)}/environment.sh ]; then",
-                f'  echo "[$({date_fmt})] Installing per-run environment..."',
-                f"  chmod +x {shlex.quote(working_dir)}/environment.sh",
-                f"  cd {shlex.quote(working_dir)} && ./environment.sh",
-                f'  echo "[$({date_fmt})] Environment installed"',
-                "fi",
-                "",
-                "# Activate environment (per-run or global)",
-                f"if [ -f {shlex.quote(working_dir)}/activate.sh ]; then",
-                f'  echo "[$({date_fmt})] Activating per-run environment"',
-                f"  source {shlex.quote(working_dir)}/activate.sh",
-            ]
-        )
-
-        # ✅ Add elif/else ONLY if activate_sh is provided
-        if self.activate_sh:
-            script_lines.extend(
-                [
-                    f"elif [ -f {shlex.quote(self.activate_sh)} ]; then",
-                    f'  echo "[$({date_fmt})] Activating global environment"',
-                    f"  source {shlex.quote(self.activate_sh)}",
-                ]
-            )
-
-        # ✅ Close the if statement properly
-        script_lines.extend(
-            [
-                "fi",  # ✅ This closes the "if [ -f .../activate.sh ]" statement
-                "",
-            ]
-        )
-
-        # Session allocation context
+        # Add allocation context
         if allocation_context:
-            script_lines.extend(
-                [
-                    "# Slurm allocation context",
-                    f'export SLURM_ALLOCATION_NODES="{",".join(allocation_context.get("nodes", []))}"',
-                    f'export SLURM_ALLOCATION_NUM_NODES="{allocation_context.get("num_nodes", 0)}"',
-                    f'export SLURM_ALLOCATION_HEAD_NODE="{allocation_context.get("head_node", "")}"',
-                    f'echo "[$({date_fmt})] Running in allocation with {allocation_context.get("num_nodes", 0)} nodes"',
-                    "",
-                ]
-            )
+            nodes = ",".join(allocation_context.get("nodes", []))
+            num_nodes = allocation_context.get("num_nodes", 0)
+            head_node = allocation_context.get("head_node", "")
 
-        # Execute payload
-        script_lines.extend(
-            [
-                f'echo "[$({date_fmt})] Launching payload..."',
-                'echo ""',
-                f"exec {shlex.quote(python_executable)} {shlex.quote(payload_path)}",
-            ]
-        )
+            script += f"""# Slurm allocation context
+export SLURM_ALLOCATION_NODES="{nodes}"
+export SLURM_ALLOCATION_NUM_NODES="{num_nodes}"
+export SLURM_ALLOCATION_HEAD_NODE="{head_node}"
+echo "[$({date_fmt})] Running in allocation with {num_nodes} nodes"
+
+"""
+
+        # Add Python verification and execution
+        script += f"""# Verify Python executable
+if [ ! -f {python_quoted} ]; then
+  echo "[$({date_fmt})] ERROR: Python executable not found: {python_executable}"
+  exit 1
+fi
+
+# Verify Python works
+if ! {python_quoted} --version; then
+  echo "[$({date_fmt})] ERROR: Python executable failed to run"
+  exit 1
+fi
+
+# Launch payload
+echo "[$({date_fmt})] Launching payload..."
+echo ""
+exec {python_quoted} {payload_quoted}
+"""
+
+        # Split into lines for ExecutionPlan
+        script_lines = script.split("\n")
 
         return ExecutionPlan(
             kind=RuntimeVariant.SHELL,
             payload=script_lines,
             environment=pipes_context,
-            resources={"cpus": 1, "mem": "1G"},
+            resources={},  # Metadata only
         )

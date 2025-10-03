@@ -1,9 +1,9 @@
 """Unified compute resource - main facade."""
 
-from typing import Optional, Literal
-from dagster import ConfigurableResource, get_dagster_logger
+import os
+from typing import Optional
+from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
 from pydantic import Field
-from regex import R
 from .slurm import SlurmResource
 from .session import SlurmSessionResource
 from ..launchers.base import ComputeLauncher
@@ -11,29 +11,6 @@ from ..launchers.script import BashLauncher
 from ..pipes_clients.local_pipes_client import LocalPipesClient
 from ..pipes_clients.slurm_pipes_client import SlurmPipesClient
 from ..config.environment import ExecutionMode
-from ..config.runtime import RuntimeVariant
-import os
-from typing import Optional, Literal
-from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
-from pydantic import Field
-from .slurm import SlurmResource
-from ..launchers.base import ComputeLauncher
-from ..pipes_clients.local_pipes_client import LocalPipesClient
-from ..pipes_clients.slurm_pipes_client import SlurmPipesClient
-
-
-# dagster_slurm/resources/compute.py (COMPLETE - CORRECTED)
-
-"""Unified compute resource - main facade."""
-import os
-from typing import Optional, Literal
-from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
-from pydantic import Field
-from .slurm import SlurmResource
-from .session import SlurmSessionResource
-from ..launchers.base import ComputeLauncher
-from ..pipes_clients.local_pipes_client import LocalPipesClient
-from ..pipes_clients.slurm_pipes_client import SlurmPipesClient
 
 
 class ComputeResource(ConfigurableResource):
@@ -85,6 +62,26 @@ class ComputeResource(ConfigurableResource):
         default=None, description="Default launcher (auto-created if None)"
     )
 
+    # Debug and platform settings
+    debug_mode: bool = Field(
+        default=False, description="If True, never cleanup remote files (for debugging)"
+    )
+
+    cleanup_on_failure: bool = Field(
+        default=True,
+        description="Whether to cleanup remote files on failure (ignored if debug_mode=True)",
+    )
+
+    auto_detect_platform: bool = Field(
+        default=True,
+        description="Auto-detect platform (ARM vs x86) for pixi pack command",
+    )
+
+    pack_platform: Optional[str] = Field(
+        default=None,
+        description="Override platform for pack command: 'linux-64', 'linux-aarch64', 'osx-arm64'",
+    )
+
     def model_post_init(self, __context):
         """Validate configuration after Pydantic init."""
         # Validate mode-specific requirements
@@ -99,8 +96,22 @@ class ComputeResource(ConfigurableResource):
 
         # Create default launcher if not provided
         if not self.default_launcher:
-            activate_sh = self.slurm.activate_sh if self.slurm else None
-            self.default_launcher = BashLauncher(activate_sh=activate_sh)
+            self.default_launcher = BashLauncher()
+
+        # Log debug mode warning
+        if self.debug_mode:
+            logger = get_dagster_logger()
+            logger.warning("🐛 DEBUG MODE ENABLED: Remote files will NOT be cleaned up")
+
+        # Log platform settings
+        if self.mode in (ExecutionMode.SLURM, ExecutionMode.SLURM_SESSION):
+            logger = get_dagster_logger()
+            if self.pack_platform:
+                logger.info(f"Pack platform explicitly set to: {self.pack_platform}")
+            elif self.auto_detect_platform:
+                logger.info("Pack platform will be auto-detected")
+            else:
+                logger.info("Using default pack command (linux-64)")
 
     def get_pipes_client(
         self,
@@ -119,19 +130,23 @@ class ComputeResource(ConfigurableResource):
         """
         launcher = launcher or self.default_launcher
 
-        if self.mode == "local":
+        if self.mode == ExecutionMode.LOCAL:
             # Local mode: no SSH, no Slurm
             return LocalPipesClient(launcher=launcher)
 
-        elif self.mode == "slurm":
+        elif self.mode == ExecutionMode.SLURM:
             # Per-asset mode: each asset = separate sbatch job
             return SlurmPipesClient(
                 slurm_resource=self.slurm,
                 launcher=launcher,
                 session_resource=None,  # No session
+                cleanup_on_failure=self.cleanup_on_failure,
+                debug_mode=self.debug_mode,
+                auto_detect_platform=self.auto_detect_platform,
+                pack_platform=self.pack_platform,
             )
 
-        else:  # slurm-session
+        else:  # ExecutionMode.SLURM_SESSION
             # Session mode: shared allocation, operator fusion
             # Initialize session if not already done
             if not self.session._initialized:
@@ -141,6 +156,10 @@ class ComputeResource(ConfigurableResource):
                 slurm_resource=self.slurm,
                 launcher=launcher,
                 session_resource=self.session,
+                cleanup_on_failure=self.cleanup_on_failure,
+                debug_mode=self.debug_mode,
+                auto_detect_platform=self.auto_detect_platform,
+                pack_platform=self.pack_platform,
             )
 
     def run(

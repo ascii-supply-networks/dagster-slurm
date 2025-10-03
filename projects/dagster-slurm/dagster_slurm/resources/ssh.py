@@ -149,18 +149,23 @@ class SSHConnectionResource(ConfigurableResource):
         Returns:
             List of command arguments for subprocess.run()
 
+        Note:
+            For password authentication, this returns the base command.
+            Password handling is done separately via pexpect in SSHConnectionPool.
+
+            This method is used by SSHMessageReader which uses ControlMaster,
+            so password auth is already handled by the ControlMaster connection.
+
         Example:
             ['ssh', '-p', '22', '-i', '/path/to/key', 'user@host']
-            # OR
-            ['sshpass', '-p', 'password', 'ssh', '-p', '22', 'user@host']
+            # OR (password auth via ControlMaster)
+            ['ssh', '-p', '22', '-o', 'ControlPath=/tmp/...', 'user@host']
         """
         base_opts = [
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
-            "-o",
-            "BatchMode=yes" if self.uses_key_auth else "no",
             "-o",
             "LogLevel=ERROR",
             "-o",
@@ -183,23 +188,26 @@ class SSHConnectionResource(ConfigurableResource):
                 "PreferredAuthentications=publickey",
                 "-o",
                 "PasswordAuthentication=no",
+                "-o",
+                "BatchMode=yes",
                 *base_opts,
                 *self.extra_opts,
                 f"{self.user}@{self.host}",
             ]
         else:
-            # Password-based authentication (requires sshpass)
+            # Password-based authentication
+            # NOTE: When used with SSHMessageReader, it will add ControlPath
+            # to use the existing ControlMaster connection (password already handled)
             return [
-                "sshpass",
-                "-p",
-                self.password,
                 "ssh",
                 "-p",
                 str(self.port),
                 "-o",
-                "PreferredAuthentications=password",
+                "PreferredAuthentications=password,keyboard-interactive",
                 "-o",
                 "PubkeyAuthentication=no",
+                "-o",
+                "NumberOfPasswordPrompts=1",
                 *base_opts,
                 *self.extra_opts,
                 f"{self.user}@{self.host}",
@@ -212,18 +220,19 @@ class SSHConnectionResource(ConfigurableResource):
         Returns:
             List of command arguments (without source/dest)
 
+        Note:
+            For password authentication, password handling is done via pexpect.
+
         Example:
             ['scp', '-P', '22', '-i', '/path/to/key']
-            # OR
-            ['sshpass', '-p', 'password', 'scp', '-P', '22']
+            # OR (password auth)
+            ['scp', '-P', '22']
         """
         base_opts = [
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
-            "-o",
-            "BatchMode=yes" if self.uses_key_auth else "no",
             "-o",
             "LogLevel=ERROR",
         ]
@@ -237,17 +246,33 @@ class SSHConnectionResource(ConfigurableResource):
                 self.key_path,
                 "-o",
                 "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
                 *base_opts,
                 *self.extra_opts,
             ]
         else:
+            # Password-based authentication (handled by pexpect)
             return [
-                "sshpass",
-                "-p",
-                self.password,
                 "scp",
                 "-P",
                 str(self.port),
+                "-o",
+                "PreferredAuthentications=password",
+                "-o",
+                "PubkeyAuthentication=no",
                 *base_opts,
                 *self.extra_opts,
             ]
+
+    def get_remote_target(self) -> str:
+        """
+        Get the remote target string for SCP commands.
+
+        Returns:
+            String in format 'user@host'
+
+        Example:
+            'username@cluster.example.com'
+        """
+        return f"{self.user}@{self.host}"

@@ -63,6 +63,7 @@ dagster-docker = ">=0.27.0,<0.28"
 dagster-webserver = "~=1.11.7"
 
 [tool.pixi.feature.my-infrastructure.dependencies]
+pexpect = "~=4.9.0"
 [tool.pixi.feature.my-infrastructure.pypi-dependencies]
 dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
 dagster-ray = ">=0.0.20,<1"

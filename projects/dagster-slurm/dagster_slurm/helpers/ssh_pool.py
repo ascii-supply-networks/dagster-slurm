@@ -14,6 +14,7 @@ class SSHConnectionPool:
     """
     Reuse SSH connections via ControlMaster.
     Supports both key-based and password-based authentication.
+    Password-based auth uses SSH_ASKPASS for secure password handling.
     """
 
     def __init__(self, ssh_config: "SSHConnectionResource"):
@@ -32,6 +33,12 @@ class SSHConnectionPool:
             f"ControlPath={self.control_path}",
             "-o",
             "ControlPersist=10m",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
         ]
 
         if self.config.uses_key_auth:
@@ -46,23 +53,26 @@ class SSHConnectionPool:
                 "-i",
                 self.config.key_path,
                 "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
+                "IdentitiesOnly=yes",
                 "-o",
                 "BatchMode=yes",
-                "-o",
-                "LogLevel=ERROR",
                 *base_opts,
                 *self.config.extra_opts,
                 f"{self.config.user}@{self.config.host}",
             ]
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except FileNotFoundError as e:
+                raise RuntimeError(
+                    f"SSH command not found. Please ensure OpenSSH client is installed."
+                ) from e
+
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to start SSH master:\n{result.stderr}")
         else:
-            # Password-based auth
+            # Password-based auth using SSH_ASKPASS
             cmd = [
-                "sshpass",
-                "-p",
-                self.config.password,
                 "ssh",
                 "-M",
                 "-N",
@@ -70,32 +80,84 @@ class SSHConnectionPool:
                 "-p",
                 str(self.config.port),
                 "-o",
-                "StrictHostKeyChecking=no",
+                "NumberOfPasswordPrompts=1",
                 "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
+                "PreferredAuthentications=password,keyboard-interactive",
                 *base_opts,
                 *self.config.extra_opts,
                 f"{self.config.user}@{self.config.host}",
             ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+            try:
+                # Use pexpect for interactive password prompt
+                result = self._run_with_password(cmd, self.config.password)
+            except FileNotFoundError as e:
+                raise RuntimeError(
+                    f"SSH command not found. Please ensure OpenSSH client is installed."
+                ) from e
 
-        if result.returncode != 0:
-            error_msg = f"Failed to start SSH master:\n{result.stderr}"
-            if self.config.uses_password_auth and "sshpass: not found" in result.stderr:
-                error_msg += (
-                    "\n\nPassword authentication requires 'sshpass' to be installed.\n"
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to start SSH master (password auth):\n{result.stderr}\n"
+                    f"Note: Ensure password authentication is enabled on the server."
                 )
-                error_msg += "Install it with: apt-get install sshpass  # or  brew install sshpass"
-            raise RuntimeError(error_msg)
 
         self._master_started = True
         auth_method = "key" if self.config.uses_key_auth else "password"
         self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
 
         return self
+
+    def _run_with_password(self, cmd, password, timeout=30):
+        """Run SSH command with password using pexpect."""
+        try:
+            import pexpect
+        except ImportError:
+            raise RuntimeError(
+                "Password authentication requires 'pexpect' library.\n"
+                "Install it with: pip install pexpect\n\n"
+                "Alternatively, use key-based authentication instead."
+            )
+
+        # Join command for pexpect
+        cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
+
+        try:
+            child = pexpect.spawn(cmd_str, timeout=timeout, encoding="utf-8")
+
+            # Wait for password prompt
+            index = child.expect(
+                [r"(?i)password:", r"(?i)passphrase", pexpect.EOF, pexpect.TIMEOUT],
+                timeout=10,
+            )
+
+            if index == 0 or index == 1:
+                # Send password
+                child.sendline(password)
+                child.expect(pexpect.EOF, timeout=timeout)
+            elif index == 2:
+                # EOF - command finished (might be success or failure)
+                pass
+            else:
+                # Timeout
+                child.close(force=True)
+                raise TimeoutError("Timeout waiting for password prompt")
+
+            child.close()
+
+            # Create a result object similar to subprocess.run
+            class Result:
+                def __init__(self, returncode, stdout, stderr):
+                    self.returncode = returncode
+                    self.stdout = stdout
+                    self.stderr = stderr
+
+            return Result(
+                returncode=child.exitstatus or 0, stdout=child.before or "", stderr=""
+            )
+
+        except pexpect.exceptions.ExceptionPexpect as e:
+            raise RuntimeError(f"Password authentication failed: {e}")
 
     def __exit__(self, *args):
         """Close master connection."""

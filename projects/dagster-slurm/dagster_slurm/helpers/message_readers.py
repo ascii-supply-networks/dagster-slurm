@@ -12,6 +12,7 @@ from pathlib import Path
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
 from ..resources.ssh import SSHConnectionResource
+from .ssh_pool import SSHConnectionPool
 
 
 class LocalMessageReader(PipesMessageReader):
@@ -130,117 +131,253 @@ class LocalMessageReader(PipesMessageReader):
 
 class SSHMessageReader(PipesMessageReader):
     """
-    Tails a remote messages file via SSH.
-    Used for Slurm modes - starts 'tail -F' over SSH.
+    Read Pipes messages from remote file via SSH tail with auto-reconnect.
+
+    Uses SSH ControlMaster connection for efficient tailing.
+    Automatically reconnects if the tail process dies.
     """
 
     def __init__(
         self,
-        messages_path: str,
-        ssh_resource: "SSHConnectionResource",
-        include_stdio: bool = True,
+        remote_path: str,
+        ssh_config,
+        control_path: Optional[str] = None,
+        reconnect_interval: float = 2.0,
+        max_reconnect_attempts: int = 10,
     ):
-        self.messages_path = messages_path
-        self.ssh_resource = ssh_resource
-        self.include_stdio = include_stdio
-        self._proc: Optional[subprocess.Popen] = None
-        self._thread: Optional[threading.Thread] = None
-        self._stop = threading.Event()
+        """
+        Args:
+            remote_path: Path to messages.jsonl on remote host
+            ssh_config: SSHConnectionResource instance
+            control_path: Path to ControlMaster socket (required for password auth)
+            reconnect_interval: Seconds to wait before reconnecting
+            max_reconnect_attempts: Maximum reconnection attempts
+        """
+        self.remote_path = remote_path
+        self.ssh_config = ssh_config
+        self.control_path = control_path
+        self.reconnect_interval = reconnect_interval
+        self.max_reconnect_attempts = max_reconnect_attempts
+        self.logger = get_dagster_logger()
+        self._proc = None
+        self._stop_flag = threading.Event()
+        self._reader_thread = None
 
     @contextmanager
-    def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
-        """Context manager that tails remote file via SSH."""
+    def read_messages(self, handler) -> Iterator[dict]:
+        """
+        Context manager that tails remote messages file with auto-reconnect.
 
-        params = {
-            PipesDefaultMessageWriter.FILE_PATH_KEY: self.messages_path,
-            PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: self.include_stdio,
-        }
+        Yields:
+            Empty dict (no additional params needed)
+        """
+        self.logger.debug(f"Starting SSH message reader for {self.remote_path}")
 
-        # Start SSH tail process
-        tail_cmd = (
-            f"tail -n +1 -F {shlex.quote(self.messages_path)} 2>/dev/null || true"
+        # Start reader thread with auto-reconnect
+        self._reader_thread = threading.Thread(
+            target=self._read_loop_with_reconnect,
+            args=(handler,),
+            daemon=True,
         )
-        remote_cmd = f"bash --noprofile --norc -c {shlex.quote(tail_cmd)}"
+        self._reader_thread.start()
 
-        ssh_cmd = [
+        try:
+            # Yield control back to Dagster
+            yield {}
+
+            # Wait a bit for final messages
+            time.sleep(1.0)
+
+        finally:
+            # Signal stop and cleanup
+            self._stop_flag.set()
+
+            if self._proc:
+                try:
+                    self._proc.terminate()
+                    self._proc.wait(timeout=5)
+                except Exception as e:
+                    self.logger.debug(f"Error terminating tail process: {e}")
+                    try:
+                        self._proc.kill()
+                    except:
+                        pass
+
+            # Wait for reader thread to finish
+            if self._reader_thread and self._reader_thread.is_alive():
+                self._reader_thread.join(timeout=5)
+
+    def _read_loop_with_reconnect(self, handler):
+        """
+        Read loop that automatically reconnects on failure.
+
+        Args:
+            handler: Dagster message handler
+        """
+        reconnect_count = 0
+        last_message_count = 0
+
+        while not self._stop_flag.is_set():
+            try:
+                # Start tail process
+                ssh_cmd = self._build_ssh_tail_command()
+
+                if not all(ssh_cmd):
+                    self.logger.error(f"SSH command contains None values: {ssh_cmd}")
+                    return
+
+                self.logger.debug(
+                    f"Starting tail (attempt {reconnect_count + 1}): {' '.join(str(x) for x in ssh_cmd)}"
+                )
+
+                self._proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                )
+
+                # Reset reconnect counter on successful start
+                reconnect_count = 0
+                message_count = 0
+
+                # Read messages from tail
+                for line in self._proc.stdout:
+                    if self._stop_flag.is_set():
+                        break
+
+                    line = line.strip()
+                    if line:
+                        try:
+                            handler.handle_message(line)
+                            message_count += 1
+                        except Exception as e:
+                            self.logger.warning(f"Error handling message: {e}")
+
+                # Process exited
+                return_code = self._proc.wait()
+
+                if self._stop_flag.is_set():
+                    # Normal shutdown
+                    self.logger.debug(
+                        f"Tail process stopped normally (read {message_count} messages)"
+                    )
+                    break
+
+                # Unexpected exit - try to reconnect
+                stderr = self._proc.stderr.read() if self._proc.stderr else ""
+                self.logger.warning(
+                    f"Tail process exited unexpectedly (code {return_code}). "
+                    f"Read {message_count} messages. stderr: {stderr}"
+                )
+
+                # Check if we're making progress (receiving messages)
+                if message_count > last_message_count:
+                    # Reset counter if we received new messages
+                    reconnect_count = 0
+                    last_message_count = message_count
+                else:
+                    reconnect_count += 1
+
+                if reconnect_count >= self.max_reconnect_attempts:
+                    self.logger.error(
+                        f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. "
+                        "Giving up on message reading."
+                    )
+                    break
+
+                # Wait before reconnecting
+                self.logger.info(f"Reconnecting in {self.reconnect_interval}s...")
+                self._stop_flag.wait(self.reconnect_interval)
+
+            except Exception as e:
+                if self._stop_flag.is_set():
+                    break
+
+                self.logger.error(f"Error in tail process: {e}")
+                reconnect_count += 1
+
+                if reconnect_count >= self.max_reconnect_attempts:
+                    self.logger.error("Max reconnect attempts reached. Giving up.")
+                    break
+
+                self._stop_flag.wait(self.reconnect_interval)
+
+    def _build_ssh_tail_command(self) -> list[str]:
+        """
+        Build SSH command to tail the remote messages file.
+
+        Returns:
+            List of command arguments for subprocess.Popen
+        """
+        base_cmd = [
             "ssh",
             "-p",
-            str(self.ssh_resource.port),
-            "-i",
-            self.ssh_resource.key_path,
+            str(self.ssh_config.port),
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
             "-o",
-            "BatchMode=yes",
-            "-o",
             "LogLevel=ERROR",
-            f"{self.ssh_resource.user}@{self.ssh_resource.host}",
-            remote_cmd,
+            "-o",
+            "ServerAliveInterval=15",  # Keep connection alive
+            "-o",
+            "ServerAliveCountMax=3",
         ]
 
-        self._proc = subprocess.Popen(
-            ssh_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
+        # Use ControlMaster if available (required for password auth)
+        if self.control_path:
+            base_cmd.extend(
+                [
+                    "-o",
+                    f"ControlPath={self.control_path}",
+                    "-o",
+                    "ControlMaster=no",
+                ]
+            )
+            self.logger.debug(f"Using ControlMaster: {self.control_path}")
+        elif self.ssh_config.uses_key_auth:
+            # Key auth - add key
+            base_cmd.extend(
+                [
+                    "-i",
+                    self.ssh_config.key_path,
+                    "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "BatchMode=yes",
+                ]
+            )
+        else:
+            # Password auth without ControlMaster won't work
+            raise RuntimeError(
+                "Password authentication requires ControlMaster. "
+                "Pass control_path to SSHMessageReader constructor."
+            )
 
-        def pump_messages():
-            """Read from SSH stdout and call handler."""
-            logger = get_dagster_logger()
+        # Add extra options
+        base_cmd.extend(self.ssh_config.extra_opts)
 
-            if not self._proc or not self._proc.stdout:
-                return
+        # Add target
+        base_cmd.append(f"{self.ssh_config.user}@{self.ssh_config.host}")
 
-            for line in self._proc.stdout:
-                if self._stop.is_set():
-                    break
+        # Tail command with retry logic
+        # -F: follow by name (handles log rotation)
+        # --retry: keep trying if file doesn't exist yet
+        tail_cmd = f"tail -F --retry -n +1 {self.remote_path} 2>/dev/null || tail -f {self.remote_path}"
+        base_cmd.append(tail_cmd)
 
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    msg = json.loads(line)
-                    handler.handle_message(msg)
-                except json.JSONDecodeError:
-                    # Ignore non-JSON lines (tail startup messages)
-                    pass
-                except Exception as e:
-                    logger.warning(f"Error handling message: {e}")
-
-        # Start pump thread
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=pump_messages, daemon=True, name="ssh-pipes-reader"
-        )
-        self._thread.start()
-
-        try:
-            yield params
-        finally:
-            self._stop.set()
-
-            # Clean up SSH process
-            if self._proc:
-                try:
-                    self._proc.terminate()
-                    self._proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        self._proc.kill()
-                    except Exception:
-                        pass
-
-            # Wait for thread
-            if self._thread:
-                self._thread.join(timeout=2)
+        return base_cmd
 
     def no_messages_debug_text(self) -> str:
+        """
+        Return debug text shown when no messages received.
+        """
         return (
-            f"SSHMessageReader: "
-            f"{self.ssh_resource.user}@{self.ssh_resource.host}:{self.messages_path}"
+            f"SSHMessageReader: {self.ssh_config.user}@{self.ssh_config.host}:"
+            f"{self.remote_path}\n"
+            f"ControlPath: {self.control_path or 'not set'}\n"
+            f"Auth method: {'key' if self.ssh_config.uses_key_auth else 'password'}"
         )

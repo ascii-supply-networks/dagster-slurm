@@ -2,6 +2,7 @@
 
 import uuid
 import shutil
+import platform
 from pathlib import Path
 from typing import Dict, Optional, Any, Iterator
 from dagster import (
@@ -13,9 +14,7 @@ from dagster import (
 )
 from ..launchers.base import ComputeLauncher
 from ..helpers.message_readers import SSHMessageReader
-from ..helpers.env_packaging import (
-    pack_environment_with_pixi,
-)
+from ..helpers.env_packaging import pack_environment_with_pixi
 from ..helpers.metrics import SlurmMetricsCollector
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..helpers.ssh_helpers import TERMINAL_STATES
@@ -28,8 +27,8 @@ class SlurmPipesClient(PipesClient):
     Pipes client for Slurm execution.
 
     Handles:
-    - Packaging environment with pixi pack
-    - Uploading payload via SSH
+    - Packaging environment with pixi pack (self-extracting executable)
+    - Uploading and extracting environment via SSH
     - Submitting to Slurm via sbatch (or srun in session mode)
     - Streaming results via SSH tail
     - Collecting metrics
@@ -45,19 +44,28 @@ class SlurmPipesClient(PipesClient):
         launcher: ComputeLauncher,
         session_resource: Optional["SlurmSessionResource"] = None,
         cleanup_on_failure: bool = True,
+        debug_mode: bool = False,
+        auto_detect_platform: bool = True,
+        pack_platform: Optional[str] = None,
     ):
         """
         Args:
             slurm_resource: Slurm cluster configuration
             launcher: Launcher to generate execution plans
-            session_resource: Optional session resource for operator fusion (changed name)
-            cleanup_on_failure: Whether to cleanup remote files on failure
+            session_resource: Optional session resource for operator fusion
+            cleanup_on_failure: Whether to cleanup remote files on failure (ignored if debug_mode=True)
+            debug_mode: If True, NEVER cleanup files (for debugging)
+            auto_detect_platform: Auto-detect platform for pack command
+            pack_platform: Override platform ('linux-64', 'linux-aarch64', 'osx-arm64')
         """
         super().__init__()
         self.slurm = slurm_resource
         self.launcher = launcher
-        self.session = session_resource  # Now holds SlurmSessionResource, not Manager
+        self.session = session_resource
         self.cleanup_on_failure = cleanup_on_failure
+        self.debug_mode = debug_mode
+        self.auto_detect_platform = auto_detect_platform
+        self.pack_platform = pack_platform
         self.logger = get_dagster_logger()
         self.metrics_collector = SlurmMetricsCollector()
 
@@ -66,7 +74,6 @@ class SlurmPipesClient(PipesClient):
         context: AssetExecutionContext,
         *,
         payload_path: str,
-        python_executable: Optional[str] = None,
         extra_env: Optional[Dict[str, str]] = None,
         extras: Optional[Dict[str, Any]] = None,
         use_session: bool = False,
@@ -77,7 +84,6 @@ class SlurmPipesClient(PipesClient):
         Args:
             context: Dagster execution context
             payload_path: Local path to Python script
-            python_executable: Python on cluster (default: from slurm_resource)
             extra_env: Additional environment variables
             extras: Extra data to pass via Pipes
             use_session: If True and session_resource provided, use shared allocation
@@ -85,43 +91,61 @@ class SlurmPipesClient(PipesClient):
         Yields:
             Dagster events
         """
-        python_executable = python_executable or self.slurm.remote_python
         run_id = context.run_id or uuid.uuid4().hex
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
-
         run_dir = None
-        temp_files = []
         job_id = None
 
         try:
             with ssh_pool:
-                # Pack environment using pixi
-                self.logger.info("Packing environment with pixi...")
-                pack_file = pack_environment_with_pixi()
+                # Detect platform for packing
+                pack_cmd = self._get_pack_command()
 
-                # Setup remote directories
-                remote_base = self.slurm.remote_base
+                # Pack environment using pixi
+                self.logger.info(
+                    f"Packing environment with command: {' '.join(pack_cmd)}"
+                )
+                pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+
+                # Setup remote directories - expand $HOME properly
+                remote_base = self._get_remote_base(run_id, ssh_pool)
                 run_dir = f"{remote_base}/runs/{run_id}"
                 messages_path = f"{run_dir}/messages.jsonl"
+                env_dir = f"{run_dir}/env"
 
+                self.logger.info(f"Creating remote directory: {run_dir}")
                 ssh_pool.run(f"mkdir -p {run_dir}")
+                ssh_pool.run(f"mkdir -p {env_dir}")
 
-                # Upload packed environment
-                self.logger.info(f"Uploading environment to {run_dir}...")
-                ssh_pool.upload_file(str(pack_file), f"{run_dir}/{pack_file.name}")
-                temp_files.append(f"{run_dir}/{pack_file.name}")
+                # Verify directory creation
+                verify_result = ssh_pool.run(f"ls -la {run_dir}")
+                self.logger.debug(f"Remote directory contents:\n{verify_result}")
 
-                # Generate and upload installer
-                temp_dir = Path("/tmp") / f"dagster_{run_id}"
-                temp_dir.mkdir(parents=True, exist_ok=True)
+                # Upload packed environment (self-extracting executable)
+                self.logger.info(
+                    f"Uploading environment ({pack_file.name}) to {run_dir}..."
+                )
+                remote_pack_file = f"{run_dir}/{pack_file.name}"
 
-                # TODO: properly implement this with pack. we have the auto unpacker already
-                raise NotImplementedError("Environment unpacking not implemented yet")
-                # installer = generate_unpack_installer(pack_file, temp_dir)
-                # ssh_pool.upload_file(str(installer), f"{run_dir}/environment.sh")
-                temp_files.append(str(temp_dir))
+                # Use absolute path for upload
+                ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file)
+
+                # Verify upload
+                verify_upload = ssh_pool.run(f"ls -lh {remote_pack_file}")
+                self.logger.info(f"Upload verified:\n{verify_upload}")
+
+                # Extract environment
+                self.logger.info("Extracting environment on remote host...")
+                activation_script = self._extract_environment(
+                    ssh_pool=ssh_pool,
+                    pack_file_path=remote_pack_file,
+                    extract_dir=env_dir,
+                )
+
+                # Python executable from extracted environment
+                python_executable = f"{env_dir}/bin/python"
 
                 # Upload payload
                 payload_name = Path(payload_path).name
@@ -130,7 +154,13 @@ class SlurmPipesClient(PipesClient):
 
                 # Setup Pipes communication
                 context_injector = PipesEnvContextInjector()
-                message_reader = SSHMessageReader(messages_path, self.slurm.ssh)
+                message_reader = SSHMessageReader(
+                    messages_path,
+                    self.slurm.ssh,
+                    control_path=ssh_pool.control_path,
+                    reconnect_interval=2.0,  # Optional: customize
+                    max_reconnect_attempts=10,  # Optional: customize
+                )
 
                 with open_pipes_session(
                     context=context,
@@ -142,8 +172,6 @@ class SlurmPipesClient(PipesClient):
 
                     # Generate execution plan
                     allocation_context = None
-
-                    # CHANGED: Access allocation through session resource
                     if use_session and self.session and self.session._initialized:
                         allocation = self.session._allocation
                         if allocation:
@@ -163,6 +191,7 @@ class SlurmPipesClient(PipesClient):
                         pipes_context=pipes_env,
                         extra_env=extra_env,
                         allocation_context=allocation_context,
+                        activation_script=activation_script,  # Pass to launcher
                     )
 
                     # Execute
@@ -205,35 +234,204 @@ class SlurmPipesClient(PipesClient):
                     for event in session.get_results():
                         yield event
 
-                # Cleanup temp files (keep run_dir for debugging)
-                self._cleanup_temp_files(temp_files)
+                # Don't cleanup in debug mode
+                if self.debug_mode:
+                    self.logger.warning(
+                        f"🐛 DEBUG MODE: Keeping remote directory for inspection: {run_dir}"
+                    )
+                    self.logger.warning(
+                        f"   To inspect: ssh {self.slurm.ssh.user}@{self.slurm.ssh.host} -p {self.slurm.ssh.port}"
+                    )
+                    self.logger.warning(f"   Directory: {run_dir}")
 
         except Exception as e:
             self.logger.error(f"Execution failed: {e}")
 
-            # Cleanup on failure
-            if self.cleanup_on_failure and run_dir:
+            # Cleanup on failure (unless debug mode)
+            if self.cleanup_on_failure and not self.debug_mode and run_dir:
                 try:
                     with ssh_pool:
                         ssh_pool.run(f"rm -rf {run_dir}")
+                        self.logger.info(f"Cleaned up remote directory: {run_dir}")
                 except Exception as cleanup_error:
                     self.logger.warning(f"Cleanup failed: {cleanup_error}")
+            elif self.debug_mode:
+                self.logger.warning(
+                    f"🐛 DEBUG MODE: Keeping failed run directory for inspection: {run_dir}"
+                )
+                self.logger.warning(
+                    f"   To inspect: ssh {self.slurm.ssh.user}@{self.slurm.ssh.host} -p {self.slurm.ssh.port}"
+                )
+                self.logger.warning(f"   Directory: {run_dir}")
 
             raise
+
+    def _get_pack_command(self) -> list[str]:
+        """
+        Determine the appropriate pack command based on platform.
+
+        Returns:
+            List of command arguments for pixi pack
+        """
+        # If explicitly specified, use that
+        if self.pack_platform:
+            platform_map = {
+                "linux-64": ["pixi", "run", "--frozen", "pack"],
+                "linux-aarch64": ["pixi", "run", "--frozen", "pack-aarch"],
+                "osx-arm64": ["pixi", "run", "--frozen", "pack-aarch"],  # docker
+            }
+            cmd = platform_map.get(self.pack_platform)
+            if not cmd:
+                raise ValueError(
+                    f"Unknown pack_platform: {self.pack_platform}. "
+                    f"Valid options: {list(platform_map.keys())}"
+                )
+            return cmd
+
+        # Auto-detect if enabled
+        if self.auto_detect_platform:
+            system = platform.system().lower()
+            machine = platform.machine().lower()
+
+            self.logger.info(f"Auto-detected platform: {system}/{machine}")
+
+            # Map to pack command
+            if system == "darwin" and "arm" in machine:
+                # macOS ARM (M1/M2/M3)
+                self.logger.info("Using pack-aarch for macOS ARM")
+                return ["pixi", "run", "--frozen", "pack-aarch"]
+            elif system == "linux" and ("aarch64" in machine or "arm" in machine):
+                # Linux ARM
+                self.logger.info("Using pack-aarch for Linux ARM")
+                return ["pixi", "run", "--frozen", "pack-aarch"]
+            else:
+                # Default to x86_64
+                self.logger.info("Using pack for x86_64")
+                return ["pixi", "run", "--frozen", "pack"]
+
+        # Default fallback
+        return ["pixi", "run", "--frozen", "pack"]
+
+    def _get_remote_base(self, run_id: str, ssh_pool: SSHConnectionPool) -> str:
+        """
+        Get remote base directory with proper expansion of $HOME.
+
+        Args:
+            run_id: Dagster run ID
+            ssh_pool: SSH connection pool to query remote home
+
+        Returns:
+            Expanded remote base directory path
+        """
+        if hasattr(self.slurm, "remote_base") and self.slurm.remote_base:
+            remote_base = self.slurm.remote_base
+        else:
+            # Query actual HOME directory from remote
+            home_dir = ssh_pool.run("echo $HOME").strip()
+            remote_base = f"{home_dir}/pipelines"
+            self.logger.info(f"No remote_base configured, using: {remote_base}")
+
+        # Expand $HOME if present
+        if "$HOME" in remote_base:
+            home_dir = ssh_pool.run("echo $HOME").strip()
+            remote_base = remote_base.replace("$HOME", home_dir)
+            self.logger.debug(f"Expanded $HOME to: {remote_base}")
+
+        return remote_base
+
+    def _extract_environment(
+        self,
+        ssh_pool: SSHConnectionPool,
+        pack_file_path: str,
+        extract_dir: str,
+    ) -> str:
+        """
+        Extract the self-extracting environment.
+
+        The pixi-pack self-extracting executable will create a complete
+        conda/pixi environment with bin/python and all dependencies.
+
+        Also creates an activate.sh script in the run directory.
+
+        Args:
+            ssh_pool: SSH connection pool
+            pack_file_path: Remote path to packed environment (environment.sh)
+            extract_dir: Directory to extract into
+
+        Returns:
+            Path to activation script
+        """
+        # Make the pack file executable
+        self.logger.debug(f"Making executable: {pack_file_path}")
+        ssh_pool.run(f"chmod +x {pack_file_path}")
+
+        # Execute the self-extracting script
+        # The pixi-pack executable extracts to parent directory by default
+        # and creates an activate.sh there
+        run_dir = str(Path(extract_dir).parent)
+        extract_cmd = f"cd {run_dir} && {pack_file_path}"
+
+        self.logger.debug(f"Running extraction command: {extract_cmd}")
+
+        try:
+            output = ssh_pool.run(extract_cmd, timeout=600)  # 10 minute timeout
+            self.logger.info(f"Extraction output:\n{output}")
+        except Exception as e:
+            self.logger.error(f"Environment extraction failed: {e}")
+            # Try to get more details
+            try:
+                ls_output = ssh_pool.run(f"ls -la {run_dir}")
+                self.logger.error(f"Run directory contents:\n{ls_output}")
+            except:
+                pass
+            raise RuntimeError(
+                f"Failed to extract environment from {pack_file_path}"
+            ) from e
+
+        # Verify extraction - check for activate.sh and python
+        activation_script = f"{run_dir}/activate.sh"
+        verify_cmd = f"test -f {activation_script} && test -f {extract_dir}/bin/python"
+
+        try:
+            ssh_pool.run(verify_cmd)
+            # Also list what we got
+            ls_result = ssh_pool.run(f"ls -la {run_dir}")
+            self.logger.info(f"Environment extracted successfully")
+            self.logger.info(f"Activation script: {activation_script}")
+
+            self.logger.info(f"Python executable: {extract_dir}/bin/python")
+            self.logger.debug(f"Run directory contents:\n{ls_result}")
+
+            # Verify activation script works
+            test_activate = ssh_pool.run(
+                f"bash -c 'source {activation_script} && which python'"
+            )
+            self.logger.debug(
+                f"Activation test - Python location: {test_activate.strip()}"
+            )
+
+            return activation_script
+
+        except Exception as e:
+            # Try to debug what went wrong
+            try:
+                tree_output = ssh_pool.run(f"ls -laR {run_dir} | head -100")
+                self.logger.error(f"Files in run dir:\n{tree_output}")
+            except:
+                pass
+            raise RuntimeError(
+                f"Environment extraction appeared to succeed but validation failed. "
+                f"Expected activate.sh in {run_dir} and bin/python in {extract_dir}"
+            ) from e
 
     def _execute_in_session(
         self,
         execution_plan,
         context: AssetExecutionContext,
     ) -> int:
-        """
-        Execute in shared Slurm allocation.
-
-        CHANGED: Now calls session.execute_in_session() directly
-        """
+        """Execute in shared Slurm allocation."""
         if not self.session:
             raise RuntimeError("Session resource not provided")
-
         if not self.session._initialized:
             raise RuntimeError(
                 "Session not initialized. "
@@ -253,7 +451,6 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
     ) -> int:
         """Execute as standalone sbatch job."""
-
         if execution_plan.kind != "shell_script":
             raise ValueError(
                 f"Standalone mode only supports shell_script, got {execution_plan.kind}"
@@ -267,7 +464,7 @@ class SlurmPipesClient(PipesClient):
 
         # Build sbatch command
         sbatch_opts = [
-            f"-J dagster_{self.slurm.remote_base.split('/')[-1]}",
+            f"-J dagster_{run_dir.split('/')[-1]}",
             f"-D {run_dir}",
             f"-o {run_dir}/slurm-%j.out",
             f"-e {run_dir}/slurm-%j.err",
@@ -335,18 +532,6 @@ class SlurmPipesClient(PipesClient):
             )
             state = output.strip()
             return state.split()[0] if state else ""
-
         except Exception as e:
             self.logger.warning(f"Error querying job state: {e}")
             return ""
-
-    def _cleanup_temp_files(self, temp_files: list):
-        """Remove temporary files."""
-        for path in temp_files:
-            try:
-                if Path(path).is_dir():
-                    shutil.rmtree(path)
-                elif Path(path).exists():
-                    Path(path).unlink()
-            except Exception as e:
-                self.logger.warning(f"Failed to cleanup {path}: {e}")
