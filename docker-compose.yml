@@ -14,11 +14,11 @@ services:
       - slurm-network
 
   slurmdbd:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     build:
       context: services/slurm
       args:
-        SLURM_TAG: ${SLURM_TAG:-slurm-25-05-2-1}
+        SLURM_TAG: ${SLURM_TAG:-slurm-25-05-3-1}
     command: ["slurmdbd"]
     container_name: slurmdbd
     hostname: slurmdbd
@@ -26,6 +26,7 @@ services:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
       - var_log_slurm:/var/log/slurm
+    shm_size: '10gb'
     expose:
       - "6819"
     depends_on:
@@ -34,11 +35,12 @@ services:
       - slurm-network
 
   slurmctld:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmctld"]
     container_name: slurmctld
     hostname: slurmctld
     privileged: true
+    shm_size: '10gb'
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -56,12 +58,12 @@ services:
       - 2223:22
 
   c1:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c1
     container_name: c1
     privileged: true
-    shm_size: '4gb'
+    shm_size: '10gb'
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -71,18 +73,23 @@ services:
       - home_dirs:/home
     expose:
       - "6818"
+      - "6379"      # Ray GCS port
+      - "8265"      # Ray dashboard
+      - "10001"     # Ray client server
     depends_on:
       - "slurmctld"
     networks:
       - slurm-network
 
+    
+
   c2:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c2
     container_name: c2
     privileged: true
-    shm_size: '4gb'
+    shm_size: '10gb'
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -92,6 +99,9 @@ services:
       - home_dirs:/home
     expose:
       - "6818"
+      - "6379"      # Ray GCS port
+      - "8265"      # Ray dashboard
+      - "10001"     # Ray client server
     depends_on:
       - "slurmctld"
     networks:

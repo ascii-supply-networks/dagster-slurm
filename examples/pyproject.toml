@@ -63,6 +63,7 @@ dagster-docker = ">=0.27.0,<0.28"
 dagster-webserver = "~=1.11.7"
 
 [tool.pixi.feature.my-infrastructure.dependencies]
+pexpect = "~=4.9.0"
 [tool.pixi.feature.my-infrastructure.pypi-dependencies]
 dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
 dagster-ray = ">=0.0.20,<1"
@@ -82,6 +83,7 @@ ray = { version = "~=2.48.0", extras = ["data", "default"] }
 dagster-ray = ">=0.0.1,<0.25"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
+loguru = ">=0.7,<1"
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
 dagster-slurm-ray = { path = "../projects/dagster-slurm-ray", editable = true }
 dagster-slurm-spark = { path = "../projects/dagster-slurm-spark", editable = true }
@@ -116,6 +118,15 @@ cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True" }
 description = "Start dagster webserver in dev mode"
+
+[tool.pixi.tasks.start-staging]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "staging" }
+description = "Start dagster webserver in staging mode"
+
+# TODO: for PROD mode we have to package and deploy OUT OF BAND! and need to create a task for this
+# TODO: Add PROD mode
 
 # pixi run -e opstooling --frozen build-shared-library
 [tool.pixi.tasks.build-shared-library]

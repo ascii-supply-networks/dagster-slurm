@@ -7,6 +7,49 @@
 
 ---
 
+Integration for running Dagster assets on Slurm HPC clusters with operator fusion support.
+
+## ✨ features
+
+- **Unified API**: Same asset code works in dev (local), staging (Slurm per-asset), and prod (Slurm session)
+- **Operator Fusion**: Share Slurm allocations across multiple assets (start Ray cluster once, run many jobs)
+- **Pluggable Launchers**: Bash, Ray, Spark - easy to add more
+- **Environment Packaging**: Automatic pixi-based environment packaging for remote execution
+- **Connection Pooling**: SSH ControlMaster for efficient remote operations
+- **Metrics Collection**: Automatic collection of Slurm job metrics (CPU efficiency, memory, node-hours)
+- **Type-Safe**: Built with Pydantic ConfigurableResource
+- **Production-Prepared**: Proper error handling, cleanup, health checks
+
+
+### 📊 Metrics 
+
+Automatic metrics collection for all jobs: 
+
+- Node-hours consumed
+- CPU efficiency
+- Max memory usage
+- Elapsed time
+     
+Visible in Dagster UI metadata. 
+
+
+### 🏗️ Architecture
+
+```
+Asset Layer (user code)
+  ↓
+ComputeResource (facade)
+  ↓
+PipesClient (orchestration)
+  ↓
+Launcher (what to run) + SSH Pool (how to run)
+  ↓
+Slurm Execution
+```
+
+
+## status
+
 Integrating dagster to orchestrate slurm jobs for distributed systems like ray for a better developer experience on supercomputers.
 
 As part of the hackathon (https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375) we intend to work on this integration.
@@ -63,6 +106,7 @@ pixi run pack
 scp -P 2223 environment.sh submitter@localhost:/home/submitter
 ssh submitter@localhost -p 2223
 
+./environment.sh
 # tar -xvf environment.tar
 #pixi exec pixi-unpack environment.tar
 source ./activate.sh

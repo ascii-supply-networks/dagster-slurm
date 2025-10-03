@@ -113,9 +113,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - uses: prefix-dev/setup-pixi@v0.9.0
+      - uses: prefix-dev/setup-pixi@v0.9.1
         with:
-            pixi-version: v0.53.0
+            pixi-version: v0.55.0
             cache: true
             frozen: true
 
@@ -218,9 +218,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - uses: prefix-dev/setup-pixi@v0.9.0
+      - uses: prefix-dev/setup-pixi@v0.9.1
         with:
-            pixi-version: v0.53.0
+            pixi-version: v0.55.0
             cache: true
             frozen: true
 

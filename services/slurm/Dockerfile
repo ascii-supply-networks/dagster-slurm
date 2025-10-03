@@ -49,6 +49,13 @@ RUN set -ex \
  && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
  && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
+# This command creates a .bashrc file for the 'submitter' user.
+# It includes a guard to only source profile scripts in interactive shells,
+# which prevents errors when running non-interactive sbatch jobs.
+COPY submitter.bashrc /home/submitter/.bashrc
+RUN chown submitter:submitter /home/submitter/.bashrc \
+    && chmod +x /home/submitter/.bashrc
+
 EXPOSE 22
 
 RUN pip3 install Cython pytest
@@ -65,7 +72,7 @@ RUN set -ex \
     && chmod +x /usr/local/bin/gosu \
     && gosu nobody true
 
-ARG SLURM_TAG="slurm-25-05-2-1"
+ARG SLURM_TAG="slurm-25-05-3-1"
 
 RUN set -ex \
     && git clone -b ${SLURM_TAG} --single-branch --depth=1 https://github.com/SchedMD/slurm.git \
@@ -106,7 +113,6 @@ COPY cgroup.conf /etc/slurm/cgroup.conf
 RUN set -x \
     && chown slurm:slurm /etc/slurm/slurmdbd.conf \
     && chmod 600 /etc/slurm/slurmdbd.conf
-
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
