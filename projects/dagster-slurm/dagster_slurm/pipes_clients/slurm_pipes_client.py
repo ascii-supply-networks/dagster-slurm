@@ -456,22 +456,30 @@ class SlurmPipesClient(PipesClient):
             extra_slurm_opts: Optional Slurm option overrides
         """
         from ..config.runtime import RuntimeVariant
+        import tempfile
+        from pathlib import Path
 
-        # Determine node count (from extra_opts or execution plan or queue config)
+        # Determine node count
         if extra_slurm_opts and "nodes" in extra_slurm_opts:
             num_nodes = extra_slurm_opts["nodes"]
+        elif self.slurm.queue.num_nodes:
+            num_nodes = self.slurm.queue.num_nodes
         elif "nodes" in execution_plan.resources:
             num_nodes = execution_plan.resources["nodes"]
         else:
-            num_nodes = self.slurm.queue.num_nodes
+            num_nodes = 1
 
-        # If multi-node, inject Slurm environment detection into script
+        self.logger.debug(f"Standalone job will request {num_nodes} node(s)")
+
+        # Get the job script content
+        payload_lines = execution_plan.payload
+
+        # If multi-node Ray/Spark job, inject cluster detection
         if num_nodes > 1 and execution_plan.kind in {
             RuntimeVariant.RAY,
             RuntimeVariant.SPARK,
         }:
             self.logger.info(f"Multi-node {execution_plan.kind} job: {num_nodes} nodes")
-
             slurm_detection = """
     # Detect Slurm allocation for cluster mode
     if [[ -n "$SLURM_JOB_ID" ]] && [[ "$SLURM_JOB_NUM_NODES" -gt 1 ]]; then
@@ -482,7 +490,7 @@ class SlurmPipesClient(PipesClient):
         echo "Detected multi-node Slurm allocation: $SLURM_JOB_NUM_NODES nodes"
     fi
     """
-            payload_lines = execution_plan.payload
+            # Insert after shebang
             job_script_content = (
                 payload_lines[0]
                 + "\n"
@@ -491,11 +499,10 @@ class SlurmPipesClient(PipesClient):
                 + "\n".join(payload_lines[1:])
             )
         else:
-            job_script_content = "\n".join(execution_plan.payload)
+            job_script_content = "\n".join(payload_lines)
 
-        # Write script
+        # Write script to local temp file then upload
         script_path = f"{run_dir}/job.sh"
-
         if not job_script_content.strip():
             raise ValueError("Execution plan generated empty script content")
 
@@ -503,13 +510,53 @@ class SlurmPipesClient(PipesClient):
             f"Writing job script ({len(job_script_content)} bytes) to {script_path}"
         )
 
+        # Check if execution plan has auxiliary scripts (Ray head/worker scripts)
+        auxiliary_scripts = getattr(execution_plan, "auxiliary_scripts", {})
+
         try:
-            ssh_pool.write_file(job_script_content, script_path)
+            # Write main job script to local temp file
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
+                f.write(job_script_content)
+                local_temp_path = f.name
+
+            # Upload the main job script via SFTP
+            ssh_pool.upload_file(local_temp_path, script_path)
+
+            # Clean up local temp file
+            Path(local_temp_path).unlink()
+
+            # Upload auxiliary scripts (e.g., Ray head/worker scripts)
+            if auxiliary_scripts:
+                for script_name, script_content in auxiliary_scripts.items():
+                    remote_script_path = f"{run_dir}/{script_name}"
+                    self.logger.debug(f"Uploading auxiliary script: {script_name}")
+
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", delete=False, suffix=".sh"
+                    ) as f:
+                        f.write(script_content)
+                        local_aux_path = f.name
+
+                    ssh_pool.upload_file(local_aux_path, remote_script_path)
+                    Path(local_aux_path).unlink()
+
+                    # Make executable
+                    ssh_pool.run(f"chmod +x {remote_script_path}")
+            else:
+                self.logger.debug("No auxiliary scripts to upload")
         except Exception as e:
             self.logger.error(f"Failed to write job script: {e}")
+            # Clean up temp files if they exist
+            try:
+                if "local_temp_path" in locals():
+                    Path(local_temp_path).unlink(missing_ok=True)
+                if "local_aux_path" in locals():
+                    Path(local_aux_path).unlink(missing_ok=True)
+            except:
+                pass
             raise RuntimeError(f"Could not write job script to {script_path}") from e
 
-        # Verify and make executable
+        # Verify file was uploaded
         try:
             verify_output = ssh_pool.run(
                 f"test -f {script_path} && wc -l {script_path}"
@@ -519,6 +566,7 @@ class SlurmPipesClient(PipesClient):
             self.logger.error(f"Job script verification failed: {e}")
             raise RuntimeError(f"Job script was not created at {script_path}") from e
 
+        # Make executable
         try:
             ssh_pool.run(f"chmod +x {script_path}")
         except Exception as e:
@@ -526,7 +574,6 @@ class SlurmPipesClient(PipesClient):
             raise RuntimeError(f"Could not make job script executable") from e
 
         # Build sbatch command
-        # extra_slurm_opts will override queue config defaults
         sbatch_cmd = self._build_sbatch_command(
             job_name=f"dagster_{run_dir.split('/')[-1]}",
             working_dir=run_dir,
@@ -638,33 +685,23 @@ class SlurmPipesClient(PipesClient):
         job_id: int,
         ssh_pool: SSHConnectionPool,
         run_dir: str,
+        poll_timeout: int = 3600,
     ):
         """
-        Wait for job completion while streaming stdout/stderr to Dagster stdout/stderr.
-
-        Args:
-            job_id: Slurm job ID
-            ssh_pool: SSH connection pool
-            run_dir: Remote working directory
+        Wait for job completion while streaming stdout/stderr and robustly
+        polling the job state.
         """
         self.logger.info(f"Waiting for job {job_id} with live log streaming...")
-
-        # Determine log file paths
         stdout_path = f"{run_dir}/slurm-{job_id}.out"
         stderr_path = f"{run_dir}/slurm-{job_id}.err"
 
-        # Wait a moment for job to start and create log files
-        time.sleep(2)
+        time.sleep(2)  # Wait for job to start and create log files
 
-        # Start streaming threads
         stop_streaming = threading.Event()
 
         def stream_file(remote_path: str, output_stream, prefix: str):
-            """Stream remote file to local output stream WITHOUT logging to Dagster."""
             try:
-                # Build tail command
                 tail_cmd = self._build_tail_command(remote_path)
-
                 proc = subprocess.Popen(
                     tail_cmd,
                     stdout=subprocess.PIPE,
@@ -672,7 +709,6 @@ class SlurmPipesClient(PipesClient):
                     text=True,
                     bufsize=1,
                 )
-
                 try:
                     while not stop_streaming.is_set():
                         line = proc.stdout.readline()
@@ -681,22 +717,17 @@ class SlurmPipesClient(PipesClient):
                                 break
                             time.sleep(0.1)
                             continue
-
-                        # Write ONLY to output stream (stdout or stderr)
                         output_stream.write(f"{prefix}{line}")
                         output_stream.flush()
-
                 finally:
                     proc.terminate()
                     try:
                         proc.wait(timeout=2)
                     except:
                         proc.kill()
-
             except Exception as e:
                 self.logger.warning(f"Error streaming {remote_path}: {e}")
 
-        # Start stdout streaming thread
         stdout_thread = threading.Thread(
             target=stream_file,
             args=(stdout_path, sys.stdout, "[SLURM] "),
@@ -704,7 +735,6 @@ class SlurmPipesClient(PipesClient):
         )
         stdout_thread.start()
 
-        # Start stderr streaming thread
         stderr_thread = threading.Thread(
             target=stream_file,
             args=(stderr_path, sys.stderr, "[SLURM ERR] "),
@@ -712,47 +742,128 @@ class SlurmPipesClient(PipesClient):
         )
         stderr_thread.start()
 
+        start_time = time.time()
+        last_state = None
+        state_check_count = 0
+
         # Poll job status
         try:
             while True:
-                # Check for cancellation
+                # Check for overall timeout
+                if time.time() - start_time > poll_timeout:
+                    raise RuntimeError(
+                        f"Timed out after {poll_timeout}s waiting for job {job_id} to complete."
+                    )
+
+                # Check for user cancellation request
                 if self._cancellation_requested:
                     self.logger.warning("Cancellation detected during job execution")
-                    raise RuntimeError(f"Job {job_id} was cancelled")
+                    raise RuntimeError(f"Job {job_id} was cancelled by user request")
 
+                # Get current job state
                 state = self._get_job_state(job_id, ssh_pool)
 
+                # Track state changes
+                if state != last_state:
+                    if state:
+                        self.logger.debug(
+                            f"Job {job_id} state changed: {last_state} -> {state}"
+                        )
+                    last_state = state
+                    state_check_count = 0
+                else:
+                    state_check_count += 1
+
+                # Handle empty state
                 if not state:
-                    self.logger.warning("Job state unknown, assuming complete")
-                    break
+                    state_check_count += 1
 
+                    # If we've seen empty state multiple times, check sacct
+                    if state_check_count >= 3:
+                        try:
+                            detailed_output = ssh_pool.run(
+                                f"sacct -j {job_id} -o JobID,State,ExitCode -P 2>/dev/null || true"
+                            )
+                            self.logger.debug(
+                                f"Detailed sacct output:\n{detailed_output}"
+                            )
+
+                            # Parse sacct output
+                            for line in detailed_output.strip().split("\n"):
+                                if str(job_id) in line and "CANCELLED" in line.upper():
+                                    self.logger.warning(
+                                        f"Job {job_id} was cancelled externally"
+                                    )
+                                    self._cancellation_requested = True
+                                    # Give logs time to catch up
+                                    time.sleep(2)
+                                    raise RuntimeError(
+                                        f"Job {job_id} was cancelled externally (detected via sacct). "
+                                        f"The job may have been cancelled by scancel or administrator action."
+                                    )
+                        except RuntimeError:
+                            raise  # Re-raise cancellation detection
+                        except Exception as e:
+                            self.logger.debug(f"Could not get detailed job info: {e}")
+
+                    # Continue polling
+                    if state_check_count < 12:
+                        self.logger.debug(
+                            f"Job {job_id} state unknown (attempt {state_check_count}/12)"
+                        )
+                        time.sleep(5)
+                        continue
+                    else:
+                        # State unknown for too long
+                        self.logger.warning(
+                            f"Job {job_id} state unknown for {state_check_count * 5}s. "
+                            f"Assuming completion."
+                        )
+                        break
+
+                # Check for COMPLETING state (transitional state before terminal)
+                if state == "COMPLETING":
+                    self.logger.debug(
+                        f"Job {job_id} is completing, waiting for terminal state..."
+                    )
+                    time.sleep(2)
+                    continue
+
+                # Handle terminal states
                 if state in TERMINAL_STATES:
-                    self.logger.info(f"Job {job_id} finished: {state}")
+                    self.logger.info(f"Job {job_id} reached terminal state: {state}")
 
-                    # Give streaming threads time to catch up with final output
+                    # Give streaming threads time to catch final output
                     time.sleep(3)
 
-                    if state == "CANCELLED":
-                        raise RuntimeError(f"Job {job_id} was cancelled")
-                    elif state != "COMPLETED":
+                    # Check if it's a cancellation state
+                    if state in {"CANCELLED", "PREEMPTED"}:
+                        self.logger.warning(f"Job {job_id} was {state}")
+                        self._cancellation_requested = True
                         raise RuntimeError(
-                            f"Job {job_id} failed with state: {state}. "
-                            f"Check stdout/stderr above for details."
+                            f"Job {job_id} was {state}. "
+                            f"This may have been triggered by scancel, administrator action, or resource limits."
                         )
 
+                    # Check for other failure states
+                    if state != "COMPLETED":
+                        raise RuntimeError(
+                            f"Job {job_id} did not complete successfully. Final state: {state}. "
+                            f"Check logs for details."
+                        )
+
+                    # Success
+                    self.logger.info(f"Job {job_id} completed successfully")
                     break
 
+                # Job still running
                 time.sleep(5)
 
         finally:
-            # Stop streaming
+            # Stop streaming and clean up
             stop_streaming.set()
-
-            # Wait for threads to finish
             stdout_thread.join(timeout=5)
             stderr_thread.join(timeout=5)
-
-            # Clear current job ID
             self._current_job_id = None
 
     def _build_tail_command(self, remote_path: str) -> list[str]:

@@ -62,6 +62,7 @@ class LocalPipesClient(PipesClient):
         python_executable: Optional[str] = None,
         extra_env: Optional[Dict[str, str]] = None,
         extras: Optional[Dict[str, Any]] = None,
+        extra_slurm_opts: Optional[Dict[str, Any]] = None,
     ) -> Iterator:
         """
         Execute payload locally.

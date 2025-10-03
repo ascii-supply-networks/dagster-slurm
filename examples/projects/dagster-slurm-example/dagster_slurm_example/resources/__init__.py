@@ -113,7 +113,7 @@ def get_resources():
                     dashboard_port=8265,
                     head_startup_timeout=60,
                 ),
-                # debug_mode=True,  # NEVER cleanup files
+                debug_mode=True,  # NEVER cleanup files
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
             ),
             "compute_spark": ComputeResource(

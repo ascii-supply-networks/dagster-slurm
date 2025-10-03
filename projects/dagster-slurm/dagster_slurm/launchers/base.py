@@ -1,7 +1,6 @@
 from typing import Dict, Optional, Any
 from dagster import ConfigurableResource
-from pydantic import Field
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from ..config.runtime import RuntimeVariant
 
 
@@ -13,6 +12,7 @@ class ExecutionPlan:
     payload: list[str]  # Shell script lines
     environment: Dict[str, str]  # Environment variables
     resources: Dict[str, Any]  # Resource requirements
+    auxiliary_scripts: Dict[str, str] = field(default_factory=dict)
 
 
 class ComputeLauncher(ConfigurableResource):

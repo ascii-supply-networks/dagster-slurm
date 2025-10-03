@@ -4,10 +4,14 @@ TERMINAL_STATES = {
     "COMPLETED",
     "FAILED",
     "CANCELLED",
+    "CANCELLED+",
     "TIMEOUT",
     "PREEMPTED",
     "NODE_FAIL",
     "OUT_OF_MEMORY",
+    "BOOT_FAIL",
+    "DEADLINE",
+    "REVOKED",
 }
 
 
