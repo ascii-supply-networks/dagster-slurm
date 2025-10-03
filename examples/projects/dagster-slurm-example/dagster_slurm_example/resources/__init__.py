@@ -4,9 +4,11 @@ import dagster as dg
 from dagster_slurm import (
     BashLauncher,
     ComputeResource,
+    RayLauncher,
     SlurmQueueConfig,
     SlurmResource,
     SlurmSessionResource,
+    SparkLauncher,
     SSHConnectionResource,
 )
 from dagster_slurm.config.environment import Environment, ExecutionMode
@@ -40,6 +42,20 @@ def get_resources():
                 mode=ExecutionMode.LOCAL,
                 default_launcher=BashLauncher(),
             ),
+            "compute_ray": ComputeResource(
+                mode=ExecutionMode.LOCAL,
+                default_launcher=RayLauncher(
+                    num_gpus_per_node=0,
+                    dashboard_port=8265,
+                ),
+            ),
+            "compute_spark": ComputeResource(
+                mode=ExecutionMode.LOCAL,
+                default_launcher=SparkLauncher(
+                    driver_memory="2g",
+                    executor_memory="4g",
+                ),
+            ),
         }
     elif deployment == Environment.STAGING:
         # Slurm per-asset: each asset = separate sbatch
@@ -53,7 +69,7 @@ def get_resources():
             ssh=ssh_connection,
             queue=SlurmQueueConfig(
                 # partition="interactive",
-                num_nodes=1,
+                num_nodes=2,
                 time_limit="00:30:00",
                 cpus=2,
                 gpus_per_node=0,
@@ -88,6 +104,27 @@ def get_resources():
                 # debug_mode=True,  # NEVER cleanup files
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
                 # pack_platform="linux-aarch64",  # Or explicitly override for testing
+            ),
+            "compute_ray": ComputeResource(
+                mode=ExecutionMode.SLURM,
+                slurm=slurm,
+                default_launcher=RayLauncher(
+                    num_gpus_per_node=0,
+                    dashboard_port=8265,
+                    head_startup_timeout=60,
+                ),
+                # debug_mode=True,  # NEVER cleanup files
+                auto_detect_platform=True,  # Auto-detect ARM vs x86
+            ),
+            "compute_spark": ComputeResource(
+                mode=ExecutionMode.SLURM,
+                slurm=slurm,
+                default_launcher=SparkLauncher(
+                    driver_memory="8g",
+                    executor_memory="16g",
+                ),
+                # debug_mode=True,  # NEVER cleanup files
+                auto_detect_platform=True,  # Auto-detect ARM vs x86
             ),
         }
     elif deployment == Environment.PRODUCTION:
@@ -132,12 +169,39 @@ def get_resources():
                 slurm=slurm,
                 session=session,
                 default_launcher=BashLauncher(),
-                enable_cluster_reuse=True,
-                cluster_reuse_tolerance=0.2,
+                # enable_cluster_reuse=True,
+                # cluster_reuse_tolerance=0.2,
                 # debug_mode=True,  # NEVER cleanup files
                 # ONLY ENABLE this for local docker runs!
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
                 # pack_platform="linux-aarch64",  # Or explicitly override for testing
+            ),
+            "compute_ray": ComputeResource(
+                mode=ExecutionMode.SLURM_SESSION,
+                slurm=slurm,
+                session=session,
+                default_launcher=RayLauncher(
+                    # num_gpus_per_node=2,
+                    dashboard_port=8265,
+                    head_startup_timeout=60,
+                ),
+                # enable_cluster_reuse=True,  # Reuse Ray clusters!
+                # cluster_reuse_tolerance=0.2,
+                debug_mode=True,  # NEVER cleanup files
+                auto_detect_platform=True,  # Auto-detect ARM vs x86
+            ),
+            "compute_spark": ComputeResource(
+                mode=ExecutionMode.SLURM_SESSION,
+                slurm=slurm,
+                session=session,
+                default_launcher=SparkLauncher(
+                    driver_memory="16g",
+                    executor_memory="32g",
+                ),
+                # enable_cluster_reuse=True,  # Reuse Spark clusters!
+                # cluster_reuse_tolerance=0.2,
+                debug_mode=True,  # NEVER cleanup files
+                auto_detect_platform=True,  # Auto-detect ARM vs x86
             ),
         }
     else:

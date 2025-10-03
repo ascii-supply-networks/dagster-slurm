@@ -26,6 +26,8 @@ from ..helpers.ssh_pool import SSHConnectionPool
 from ..helpers.ssh_helpers import TERMINAL_STATES
 from ..resources.slurm import SlurmResource
 from ..resources.session import SlurmSessionResource
+from dagster_slurm.config.runtime import RuntimeVariant
+import dagster as dg
 
 
 class SlurmPipesClient(PipesClient):
@@ -88,6 +90,7 @@ class SlurmPipesClient(PipesClient):
         extras: Optional[Dict[str, Any]] = None,
         use_session: bool = False,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> Iterator:
         """
         Execute payload on Slurm cluster with real-time log streaming.
@@ -95,10 +98,12 @@ class SlurmPipesClient(PipesClient):
         Args:
             context: Dagster execution context
             payload_path: Local path to Python script
+            launcher: Ignored (launcher is set at client construction time)
             extra_env: Additional environment variables
             extras: Extra data to pass via Pipes
             use_session: If True and session_resource provided, use shared allocation
             extra_slurm_opts: Override Slurm options (non-session mode)
+            **kwargs: Additional arguments (ignored, for forward compatibility)
 
         Yields:
             Dagster events
@@ -226,6 +231,7 @@ class SlurmPipesClient(PipesClient):
                             execution_plan=execution_plan,
                             run_dir=run_dir,
                             ssh_pool=ssh_pool,
+                            extra_slurm_opts=extra_slurm_opts,
                         )
 
                     self.logger.info(f"Job {job_id} completed successfully")
@@ -438,32 +444,72 @@ class SlurmPipesClient(PipesClient):
         execution_plan,
         run_dir: str,
         ssh_pool: SSHConnectionPool,
+        extra_slurm_opts: Optional[Dict[str, Any]] = None,
     ) -> int:
-        """Execute as standalone sbatch job with real-time log streaming."""
-        if execution_plan.kind != "shell_script":
-            raise ValueError(
-                f"Standalone mode only supports shell_script, got {execution_plan.kind}"
+        """
+        Execute as standalone sbatch job with real-time log streaming.
+
+        Args:
+            execution_plan: Execution plan from launcher
+            run_dir: Remote working directory
+            ssh_pool: SSH connection pool
+            extra_slurm_opts: Optional Slurm option overrides
+        """
+        from ..config.runtime import RuntimeVariant
+
+        # Determine node count (from extra_opts or execution plan or queue config)
+        if extra_slurm_opts and "nodes" in extra_slurm_opts:
+            num_nodes = extra_slurm_opts["nodes"]
+        elif "nodes" in execution_plan.resources:
+            num_nodes = execution_plan.resources["nodes"]
+        else:
+            num_nodes = self.slurm.queue.num_nodes
+
+        # If multi-node, inject Slurm environment detection into script
+        if num_nodes > 1 and execution_plan.kind in {
+            RuntimeVariant.RAY,
+            RuntimeVariant.SPARK,
+        }:
+            self.logger.info(f"Multi-node {execution_plan.kind} job: {num_nodes} nodes")
+
+            slurm_detection = """
+    # Detect Slurm allocation for cluster mode
+    if [[ -n "$SLURM_JOB_ID" ]] && [[ "$SLURM_JOB_NUM_NODES" -gt 1 ]]; then
+        export SLURM_CLUSTER_MODE=1
+        export SLURM_NODES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+        export SLURM_JOB_ID="$SLURM_JOB_ID"
+        export SLURM_JOB_NUM_NODES="$SLURM_JOB_NUM_NODES"
+        echo "Detected multi-node Slurm allocation: $SLURM_JOB_NUM_NODES nodes"
+    fi
+    """
+            payload_lines = execution_plan.payload
+            job_script_content = (
+                payload_lines[0]
+                + "\n"
+                + slurm_detection
+                + "\n"
+                + "\n".join(payload_lines[1:])
             )
+        else:
+            job_script_content = "\n".join(execution_plan.payload)
 
-        # Write script with error checking
+        # Write script
         script_path = f"{run_dir}/job.sh"
-        script_content = "\n".join(execution_plan.payload)
 
-        # Verify script content is not empty
-        if not script_content.strip():
+        if not job_script_content.strip():
             raise ValueError("Execution plan generated empty script content")
 
         self.logger.debug(
-            f"Writing job script ({len(script_content)} bytes) to {script_path}"
+            f"Writing job script ({len(job_script_content)} bytes) to {script_path}"
         )
 
         try:
-            ssh_pool.write_file(script_content, script_path)
+            ssh_pool.write_file(job_script_content, script_path)
         except Exception as e:
             self.logger.error(f"Failed to write job script: {e}")
             raise RuntimeError(f"Could not write job script to {script_path}") from e
 
-        # Verify file was written
+        # Verify and make executable
         try:
             verify_output = ssh_pool.run(
                 f"test -f {script_path} && wc -l {script_path}"
@@ -471,14 +517,8 @@ class SlurmPipesClient(PipesClient):
             self.logger.debug(f"Job script verified: {verify_output.strip()}")
         except Exception as e:
             self.logger.error(f"Job script verification failed: {e}")
-            try:
-                dir_listing = ssh_pool.run(f"ls -la {run_dir}")
-                self.logger.error(f"Directory contents:\n{dir_listing}")
-            except:
-                pass
             raise RuntimeError(f"Job script was not created at {script_path}") from e
 
-        # Make executable
         try:
             ssh_pool.run(f"chmod +x {script_path}")
         except Exception as e:
@@ -486,20 +526,15 @@ class SlurmPipesClient(PipesClient):
             raise RuntimeError(f"Could not make job script executable") from e
 
         # Build sbatch command
-        sbatch_opts = [
-            f"-J dagster_{run_dir.split('/')[-1]}",
-            f"-D {run_dir}",
-            f"-o {run_dir}/slurm-%j.out",
-            f"-e {run_dir}/slurm-%j.err",
-            f"-t {self.slurm.queue.time_limit}",
-            f"-c {self.slurm.queue.cpus}",
-            f"--mem={self.slurm.queue.mem}",
-        ]
-
-        if self.slurm.queue.partition:
-            sbatch_opts.append(f"-p {self.slurm.queue.partition}")
-
-        sbatch_cmd = f"sbatch {' '.join(sbatch_opts)} {script_path}"
+        # extra_slurm_opts will override queue config defaults
+        sbatch_cmd = self._build_sbatch_command(
+            job_name=f"dagster_{run_dir.split('/')[-1]}",
+            working_dir=run_dir,
+            output_file=f"{run_dir}/slurm-%j.out",
+            error_file=f"{run_dir}/slurm-%j.err",
+            script_path=script_path,
+            extra_opts=extra_slurm_opts,
+        )
 
         # Check for cancellation before submission
         if self._cancellation_requested:
@@ -522,6 +557,81 @@ class SlurmPipesClient(PipesClient):
         self._wait_for_job_with_streaming(job_id, ssh_pool, run_dir)
 
         return job_id
+
+    def _build_sbatch_command(
+        self,
+        job_name: str,
+        working_dir: str,
+        output_file: str,
+        error_file: str,
+        script_path: str,
+        extra_opts: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Build sbatch submission command.
+
+        Uses SlurmQueueConfig as defaults, which can be overridden by extra_opts.
+
+        Args:
+            job_name: Job name
+            working_dir: Working directory
+            output_file: Stdout file path
+            error_file: Stderr file path
+            script_path: Path to job script
+            extra_opts: Optional overrides for Slurm options
+                - nodes: int
+                - cpus_per_task: int
+                - mem: str (e.g., "32G")
+                - time_limit: str (e.g., "02:00:00")
+                - gpus_per_node: int
+                - partition: str
+
+        Returns:
+            Complete sbatch command string
+        """
+        sbatch_opts = [
+            f"-J {job_name}",
+            f"-D {working_dir}",
+            f"-o {output_file}",
+            f"-e {error_file}",
+        ]
+
+        # Start with queue config defaults
+        partition = self.slurm.queue.partition
+        time_limit = self.slurm.queue.time_limit
+        cpus = self.slurm.queue.cpus
+        mem = self.slurm.queue.mem
+        num_nodes = self.slurm.queue.num_nodes
+        gpus_per_node = None
+
+        # Override with extra_opts if provided
+        if extra_opts:
+            partition = extra_opts.get("partition", partition)
+            time_limit = extra_opts.get("time_limit", time_limit)
+            cpus = extra_opts.get("cpus_per_task", cpus)
+            mem = extra_opts.get("mem", mem)
+            num_nodes = extra_opts.get("nodes", num_nodes)
+            gpus_per_node = extra_opts.get("gpus_per_node")
+
+        # Build command with final values
+        if partition:
+            sbatch_opts.append(f"-p {partition}")
+
+        sbatch_opts.append(f"-t {time_limit}")
+        sbatch_opts.append(f"-c {cpus}")
+        sbatch_opts.append(f"--mem={mem}")
+
+        # Add node count (important for multi-node jobs)
+        if num_nodes:
+            sbatch_opts.append(f"-N {num_nodes}")
+
+        # Add GPUs if requested
+        if gpus_per_node:
+            sbatch_opts.append(f"--gpus-per-node={gpus_per_node}")
+
+        sbatch_opts.append(script_path)
+
+        return f"sbatch {' '.join(sbatch_opts)}"
 
     def _wait_for_job_with_streaming(
         self,

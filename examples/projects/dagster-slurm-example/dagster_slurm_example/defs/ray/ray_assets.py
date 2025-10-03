@@ -7,7 +7,7 @@ from dagster_slurm import ComputeResource, RayLauncher
 @dg.asset
 def distributed_training(
     context: dg.AssetExecutionContext,
-    compute: ComputeResource,
+    compute_ray: ComputeResource,
 ) -> dg.Output:
     """
     Train model using Ray for distributed compute.
@@ -18,13 +18,14 @@ def distributed_training(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/train_ray.py",
     )
-    # Use Ray launcher instead of default Bash
+
+    # Use Ray launcher - don't pass activation_script here
     ray_launcher = RayLauncher(
-        activate_sh=compute.slurm.activate_sh if compute.slurm else None,
         num_gpus_per_node=0,  # Set to >0 if using GPUs
     )
+
     _ = list(
-        compute.run(
+        compute_ray.run(
             context=context,
             payload_path=script_path,
             launcher=ray_launcher,
@@ -32,8 +33,14 @@ def distributed_training(
                 "MODEL_CONFIG": "config.yaml",
                 "CHECKPOINT_DIR": "/path/to/checkpoints",
             },
+            extra_slurm_opts={
+                "nodes": 1,  # Single node = local Ray mode
+                "cpus_per_task": 2,
+                "mem": "4G",
+            },
         )
     )
+
     return dg.Output(
         value={"model_path": "/path/to/model"},
         metadata={"framework": "ray"},
@@ -43,7 +50,7 @@ def distributed_training(
 @dg.asset
 def distributed_inference(
     context: dg.AssetExecutionContext,
-    compute: ComputeResource,
+    compute_ray: ComputeResource,
     distributed_training,  # Uses trained model
 ) -> dg.Output:
     """
@@ -54,12 +61,13 @@ def distributed_inference(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/infer_ray.py",
     )
+
     ray_launcher = RayLauncher(
-        activate_sh=compute.slurm.activate_sh if compute.slurm else None,
         num_gpus_per_node=0,
     )
+
     _ = list(
-        compute.run(
+        compute_ray.run(
             context=context,
             payload_path=script_path,
             launcher=ray_launcher,
@@ -69,4 +77,5 @@ def distributed_inference(
             },
         )
     )
+
     return dg.Output(value={"predictions_path": "/path/to/predictions"})

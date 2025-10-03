@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 from .base import ComputeLauncher, ExecutionPlan
 from dagster_slurm.config.runtime import RuntimeVariant
+import dagster as dg
 
 
 class BashLauncher(ComputeLauncher):
@@ -74,7 +75,8 @@ echo "[$({date_fmt})] Which python: $(which python)"
 """
         else:
             # Fallback - shouldn't happen but be defensive
-            self.logger.warning("No activation script provided, using PATH fallback")
+            logger = dg.get_dagster_logger()
+            logger.warning("No activation script provided, using PATH fallback")
             env_dir = str(Path(python_executable).parent.parent)
             env_dir_quoted = shlex.quote(env_dir)
             script += f"""# WARNING: No activation script provided

@@ -190,17 +190,24 @@ class ComputeResource(ConfigurableResource):
         Returns:
             LocalPipesClient or SlurmPipesClient
         """
-        launcher = launcher or self.default_launcher
+        # Resolve launcher with fallback to default
+        effective_launcher = launcher or self.default_launcher
+
+        # Ensure we have a launcher
+        if effective_launcher is None:
+            raise ValueError(
+                "No launcher available. Either provide a launcher override or set default_launcher."
+            )
 
         if self.mode == ExecutionMode.LOCAL:
             # Local mode: no SSH, no Slurm
-            return LocalPipesClient(launcher=launcher)
+            return LocalPipesClient(launcher=effective_launcher)
 
         elif self.mode == ExecutionMode.SLURM:
             # Per-asset mode: each asset = separate sbatch job
             return SlurmPipesClient(
                 slurm_resource=self.slurm,
-                launcher=launcher,
+                launcher=effective_launcher,
                 session_resource=None,  # No session
                 cleanup_on_failure=self.cleanup_on_failure,
                 debug_mode=self.debug_mode,
@@ -216,7 +223,7 @@ class ComputeResource(ConfigurableResource):
 
             return SlurmPipesClient(
                 slurm_resource=self.slurm,
-                launcher=launcher,
+                launcher=effective_launcher,
                 session_resource=self.session,
                 cleanup_on_failure=self.cleanup_on_failure,
                 debug_mode=self.debug_mode,
@@ -228,7 +235,7 @@ class ComputeResource(ConfigurableResource):
             # Heterogeneous job mode: handled by run_hetjob()
             return SlurmPipesClient(
                 slurm_resource=self.slurm,
-                launcher=launcher,
+                launcher=effective_launcher,
                 session_resource=None,
                 cleanup_on_failure=self.cleanup_on_failure,
                 debug_mode=self.debug_mode,
@@ -253,7 +260,8 @@ class ComputeResource(ConfigurableResource):
             payload_path: Path to Python script
             launcher: Override launcher for this asset
             extra_slurm_opts: Override Slurm options (non-session mode)
-                - cpus: int
+                - nodes: int
+                - cpus_per_task: int
                 - mem: str (e.g., "32G")
                 - gpus_per_node: int
                 - time_limit: str (e.g., "02:00:00")
@@ -279,7 +287,7 @@ class ComputeResource(ConfigurableResource):
             yield from compute.run(
                 context,
                 "script.py",
-                extra_slurm_opts={"cpus": 16, "mem": "64G", "gpus_per_node": 2}
+                extra_slurm_opts={"nodes": 1, "cpus_per_task": 16, "mem": "64G", "gpus_per_node": 2}
             )
 
             # Session mode: specify resource requirements for cluster reuse
@@ -293,10 +301,13 @@ class ComputeResource(ConfigurableResource):
         self._log_configuration_once()
         logger = get_dagster_logger()
 
+        # Determine effective launcher
+        effective_launcher = launcher or self.default_launcher
+
         # Handle cluster reuse in session mode
         if self.enable_cluster_reuse and resource_requirements:
             cluster_address = self._get_or_create_cluster(
-                launcher=launcher,
+                launcher=effective_launcher,
                 requirements=resource_requirements,
                 context=context,
             )
@@ -304,28 +315,30 @@ class ComputeResource(ConfigurableResource):
             if cluster_address:
                 logger.info(f"♻️  Reusing existing cluster: {cluster_address}")
                 # Update launcher to connect to existing cluster
-                if hasattr(launcher, "ray_address"):
+                if hasattr(effective_launcher, "ray_address"):
                     # Ray launcher
-                    launcher = launcher.model_copy(
+                    effective_launcher = effective_launcher.model_copy(
                         update={"ray_address": cluster_address}
                     )
-                elif hasattr(launcher, "master_url"):
+                elif hasattr(effective_launcher, "master_url"):
                     # Spark launcher
-                    launcher = launcher.model_copy(
+                    effective_launcher = effective_launcher.model_copy(
                         update={"master_url": cluster_address}
                     )
 
-        # Get client
-        client = self.get_pipes_client(context, launcher=launcher)
+        # Create client with effective launcher (default or override)
+        client = self.get_pipes_client(context, launcher=effective_launcher)
 
         # Pass extra Slurm options to the client
         if extra_slurm_opts:
             kwargs["extra_slurm_opts"] = extra_slurm_opts
+            logger.debug(f"Passing extra_slurm_opts to client: {extra_slurm_opts}")
 
         # Add use_session flag for session mode
         if self.mode == ExecutionMode.SLURM_SESSION:
             kwargs.setdefault("use_session", True)
 
+        # Run with the configured client
         yield from client.run(context=context, payload_path=payload_path, **kwargs)
 
     def run_hetjob(
