@@ -1,45 +1,46 @@
-"""Abstract launcher interface."""
-
-from abc import ABC, abstractmethod
-from typing import Dict, Optional, List, Any, Literal
+from typing import Dict, Optional, Any
+from dagster import ConfigurableResource
+from pydantic import Field
 from dataclasses import dataclass
-from dagster_slurm.config.runtime import RuntimeVariant
-import dagster as dg
+from ..config.runtime import RuntimeVariant
 
 
 @dataclass
 class ExecutionPlan:
-    """Unified execution plan - supports multiple backend types."""
+    """Plan for executing a workload."""
 
-    kind: RuntimeVariant
-    payload: Any  # script lines, Ray job, etc.
-    environment: Dict[str, str]
-    resources: Dict[str, Any]
+    kind: RuntimeVariant  # "shell_script", "ray", "spark"
+    payload: list[str]  # Shell script lines
+    environment: Dict[str, str]  # Environment variables
+    resources: Dict[str, Any]  # Resource requirements
 
 
-class ComputeLauncher(dg.ConfigurableResource):
-    """Generate execution plans for workloads."""
+class ComputeLauncher(ConfigurableResource):
+    """Base class for compute launchers."""
 
-    @abstractmethod
     def prepare_execution(
         self,
         payload_path: str,
+        python_executable: str,
         working_dir: str,
         pipes_context: Dict[str, str],
         extra_env: Optional[Dict[str, str]] = None,
         allocation_context: Optional[Dict[str, Any]] = None,
+        activation_script: Optional[str] = None,
     ) -> ExecutionPlan:
         """
         Prepare execution plan.
 
         Args:
-            payload_path: Path to Python script
-            working_dir: Execution directory (contains messages.jsonl)
-            pipes_context: Dagster Pipes environment variables
+            payload_path: Path to Python script on remote
+            python_executable: Python interpreter path
+            working_dir: Working directory
+            pipes_context: Dagster Pipes environment
             extra_env: Additional environment variables
-            allocation_context: Optional session allocation info
+            allocation_context: Slurm allocation info (for session mode)
+            activation_script: Environment activation script
 
         Returns:
-            ExecutionPlan describing how to execute
+            ExecutionPlan with script and metadata
         """
-        pass
+        raise NotImplementedError

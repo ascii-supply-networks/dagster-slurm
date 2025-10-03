@@ -14,11 +14,11 @@ services:
       - slurm-network
 
   slurmdbd:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     build:
       context: services/slurm
       args:
-        SLURM_TAG: ${SLURM_TAG:-slurm-25-05-2-1}
+        SLURM_TAG: ${SLURM_TAG:-slurm-25-05-3-1}
     command: ["slurmdbd"]
     container_name: slurmdbd
     hostname: slurmdbd
@@ -34,7 +34,7 @@ services:
       - slurm-network
 
   slurmctld:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmctld"]
     container_name: slurmctld
     hostname: slurmctld
@@ -56,7 +56,7 @@ services:
       - 2223:22
 
   c1:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c1
     container_name: c1
@@ -77,7 +77,7 @@ services:
       - slurm-network
 
   c2:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-2-1}
+    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c2
     container_name: c2

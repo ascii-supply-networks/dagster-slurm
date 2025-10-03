@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: System :: Distributed Computing",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = []
+dependencies = ["dagster~=1.11.7", "dagster-pipes~=1.11.7", "loguru>=0.7,<1"]
 
 [project.urls]
 Homepage = "https://ascii-supply-networks.github.io/dagster-slurm/"
@@ -56,8 +56,6 @@ uv = "*"
 
 [tool.pixi.package.run-dependencies]
 python = ">=3.12,<3.13"
-dagster = "==1.11.7"
-dagster-pipes = "==1.11.7"
 
 [project.optional-dependencies]
 ray = ["ray>=2.48.0"]

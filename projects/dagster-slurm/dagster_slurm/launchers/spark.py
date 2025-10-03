@@ -1,5 +1,8 @@
+"""Apache Spark launcher."""
+
 import shlex
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, Any
+from pydantic import Field
 from .base import ComputeLauncher, ExecutionPlan
 from dagster_slurm.config.runtime import RuntimeVariant
 
@@ -7,37 +10,26 @@ from dagster_slurm.config.runtime import RuntimeVariant
 class SparkLauncher(ComputeLauncher):
     """
     Apache Spark launcher.
+
     Modes:
-    - Local: Single-node Spark
-    - Session: Spark cluster across Slurm allocation
-    - Standalone: Submit to existing Spark cluster
+    - Local: Single-node Spark (no allocation_context)
+    - Cluster: Spark cluster across Slurm allocation (via allocation_context)
+    - Standalone: Connect to existing Spark cluster (via master_url)
     """
 
-    def __init__(
-        self,
-        *,
-        spark_home: str = "/opt/spark",
-        master_url: Optional[str] = None,
-        executor_memory: str = "4g",
-        executor_cores: int = 2,
-        driver_memory: str = "2g",
-        activate_sh: Optional[str] = None,
-    ):
-        """
-        Args:
-            spark_home: Path to Spark installation
-            master_url: Connect to existing cluster (e.g., spark://host:7077)
-            executor_memory: Memory per executor
-            executor_cores: Cores per executor
-            driver_memory: Driver memory
-            activate_sh: Environment activation script
-        """
-        self.spark_home = spark_home
-        self.master_url = master_url
-        self.executor_memory = executor_memory
-        self.executor_cores = executor_cores
-        self.driver_memory = driver_memory
-        self.activate_sh = activate_sh
+    spark_home: str = Field(
+        default="/opt/spark", description="Path to Spark installation"
+    )
+    master_url: Optional[str] = Field(
+        default=None,
+        description="Connect to existing cluster (e.g., spark://host:7077)",
+    )
+    executor_memory: str = Field(default="4g", description="Memory per executor")
+    executor_cores: int = Field(default=2, description="Cores per executor")
+    driver_memory: str = Field(default="2g", description="Driver memory")
+    num_executors: Optional[int] = Field(
+        default=None, description="Number of executors (None = auto from allocation)"
+    )
 
     def prepare_execution(
         self,
@@ -47,84 +39,109 @@ class SparkLauncher(ComputeLauncher):
         pipes_context: Dict[str, str],
         extra_env: Optional[Dict[str, str]] = None,
         allocation_context: Optional[Dict[str, Any]] = None,
+        activation_script: Optional[str] = None,
     ) -> ExecutionPlan:
         """Generate Spark execution plan."""
 
         messages_path = f"{working_dir}/messages.jsonl"
+        date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
 
-        script_lines = [
-            "#!/bin/bash",
-            "set -euo pipefail",
-            "",
-            f': > "{messages_path}" || true',
-            f'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark execution"',
-            f"export SPARK_HOME={shlex.quote(self.spark_home)}",
-            "",
-        ]
+        python_quoted = shlex.quote(python_executable)
+        payload_quoted = shlex.quote(payload_path)
+        spark_home_quoted = shlex.quote(self.spark_home)
 
-        # Dagster Pipes context
+        # Build header
+        script = f"""#!/bin/bash
+set -euo pipefail
+
+: > "{messages_path}" || true
+echo "[$({date_fmt})] ========================================="
+echo "[$({date_fmt})] Spark Workload Execution"
+echo "[$({date_fmt})] Working dir: {working_dir}"
+echo "[$({date_fmt})] ========================================="
+
+export SPARK_HOME={spark_home_quoted}
+export PATH=$SPARK_HOME/bin:$PATH
+
+"""
+
+        # Environment activation
+        if activation_script:
+            activation_quoted = shlex.quote(activation_script)
+            script += f"""# Activate environment
+echo "[$({date_fmt})] Activating environment..."
+source {activation_quoted}
+echo "[$({date_fmt})] Environment activated"
+
+"""
+
+        # Dagster Pipes environment
+        script += "# Dagster Pipes environment\n"
         for key, value in pipes_context.items():
-            script_lines.append(f"export {key}={shlex.quote(value)}")
-        script_lines.append("")
+            script += f"export {key}={shlex.quote(value)}\n"
+        script += "\n"
 
         # Extra environment
         if extra_env:
+            script += "# Additional environment variables\n"
             for key, value in extra_env.items():
-                script_lines.append(f"export {key}={shlex.quote(str(value))}")
-            script_lines.append("")
-
-        # Environment activation
-        if self.activate_sh:
-            script_lines.extend(
-                [
-                    f"if [ -f {shlex.quote(self.activate_sh)} ]; then",
-                    f"  source {shlex.quote(self.activate_sh)}",
-                    "fi",
-                    "",
-                ]
-            )
+                script += f"export {key}={shlex.quote(str(value))}\n"
+            script += "\n"
 
         # Spark setup based on mode
         if self.master_url:
             # Mode: Connect to existing cluster
-            script_lines.extend(
-                [
-                    f'export SPARK_MASTER_URL="{self.master_url}"',
-                    f'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Using existing Spark cluster: {self.master_url}"',
-                    "",
-                ]
-            )
+            master_quoted = shlex.quote(self.master_url)
+            script += f"""# Connect to existing Spark cluster
+export SPARK_MASTER_URL={master_quoted}
+echo "[$({date_fmt})] Using existing Spark cluster: {self.master_url}"
+
+"""
         elif allocation_context:
             # Mode: Start cluster in Slurm allocation
-            script_lines.extend(
-                self._generate_cluster_startup(allocation_context, working_dir)
+            script += self._generate_cluster_startup(
+                allocation_context, working_dir, date_fmt
             )
         else:
             # Mode: Local Spark
-            script_lines.extend(
-                [
-                    'export SPARK_MASTER_URL="local[*]"',
-                    'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Using local Spark"',
-                    "",
-                ]
-            )
+            script += f"""# Use local Spark
+export SPARK_MASTER_URL="local[*]"
+echo "[$({date_fmt})] Using local Spark"
+
+"""
 
         # Submit Spark job
-        script_lines.extend(
-            [
-                'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Submitting Spark job..."',
-                f"$SPARK_HOME/bin/spark-submit \\",
-                f'  --master "$SPARK_MASTER_URL" \\',
-                f"  --executor-memory {self.executor_memory} \\",
-                f"  --executor-cores {self.executor_cores} \\",
-                f"  --driver-memory {self.driver_memory} \\",
-                f"  {shlex.quote(payload_path)}",
-            ]
+        num_exec = (
+            self.num_executors or (allocation_context.get("num_nodes", 1) - 1)
+            if allocation_context
+            else 1
         )
+
+        script += f"""# Submit Spark job
+echo "[$({date_fmt})] Submitting Spark job..."
+$SPARK_HOME/bin/spark-submit \\
+  --master "$SPARK_MASTER_URL" \\
+  --executor-memory {self.executor_memory} \\
+  --executor-cores {self.executor_cores} \\
+  --driver-memory {self.driver_memory} \\
+  --num-executors {num_exec} \\
+  {payload_quoted}
+
+exit_code=$?
+echo "[$({date_fmt})] Spark job finished with exit code $exit_code"
+
+# Cleanup Spark cluster if we started it
+if [ -f {working_dir}/spark_cleanup.sh ]; then
+  echo "[$({date_fmt})] Cleaning up Spark cluster..."
+  bash {working_dir}/spark_cleanup.sh
+fi
+
+exit $exit_code
+"""
 
         return ExecutionPlan(
             kind=RuntimeVariant.SPARK,
-            payload=script_lines,
+            payload=script.split("\n"),
             environment={**pipes_context, **(extra_env or {})},
             resources={
                 "cpus": self.executor_cores,
@@ -136,38 +153,56 @@ class SparkLauncher(ComputeLauncher):
         self,
         allocation_context: Dict[str, Any],
         working_dir: str,
-    ) -> List[str]:
+        date_fmt: str,
+    ) -> str:
         """Generate Spark cluster startup for Slurm allocation."""
 
         nodes = allocation_context.get("nodes", [])
-        head_node = allocation_context.get("head_node", nodes[0])
-        worker_nodes = nodes[1:] if len(nodes) > 1 else []
+        head_node = allocation_context.get(
+            "head_node", nodes[0] if nodes else "localhost"
+        )
 
-        return [
-            "# Start Spark cluster across Slurm allocation",
-            f'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark on {len(nodes)} nodes"',
-            f'HEAD_NODE="{head_node}"',
-            "CURRENT_NODE=$(hostname)",
-            "",
-            "# Start Spark master on head node",
-            'if [ "$CURRENT_NODE" == "$HEAD_NODE" ]; then',
-            '  echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark master"',
-            "  $SPARK_HOME/sbin/start-master.sh",
-            "  sleep 10",
-            '  MASTER_URL=$(cat $SPARK_HOME/logs/spark-*-org.apache.spark.deploy.master.Master-1-*.out | grep "Starting Spark master" | grep -oP "spark://[^,]+")',
-            f'  echo "$MASTER_URL" > {working_dir}/spark_master_url.txt',
-            f'  echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Spark master started at $MASTER_URL"',
-            "fi",
-            "",
-            "# Start Spark workers",
-            "sleep 15",
-            f"MASTER_URL=$(cat {working_dir}/spark_master_url.txt)",
-            'if [ "$CURRENT_NODE" != "$HEAD_NODE" ]; then',
-            '  echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Starting Spark worker"',
-            '  $SPARK_HOME/sbin/start-worker.sh "$MASTER_URL"',
-            "fi",
-            "",
-            'export SPARK_MASTER_URL="$MASTER_URL"',
-            'echo "$(date +%Y-%m-%dT%H:%M:%S%z)] Spark cluster ready"',
-            "",
-        ]
+        return f"""# Start Spark cluster across Slurm allocation
+echo "[$({date_fmt})] Starting Spark on {len(nodes)} nodes"
+HEAD_NODE="{head_node}"
+
+# Start Spark master on head node
+echo "[$({date_fmt})] Starting Spark master on $HEAD_NODE"
+srun --nodes=1 --ntasks=1 -w $HEAD_NODE \\
+  bash -c '$SPARK_HOME/sbin/start-master.sh' &
+
+sleep 10
+
+# Get master URL
+MASTER_URL=$(srun --nodes=1 --ntasks=1 -w $HEAD_NODE \\
+  bash -c 'cat $SPARK_HOME/logs/spark-*-org.apache.spark.deploy.master.Master-*.out | grep -oP "spark://[^,]+" | head -1')
+
+echo "$MASTER_URL" > {working_dir}/spark_master_url.txt
+echo "[$({date_fmt})] Spark master started at $MASTER_URL"
+
+# Start Spark workers on all nodes
+echo "[$({date_fmt})] Starting Spark workers..."
+for node in {" ".join(nodes)}; do
+  echo "[$({date_fmt})] Starting worker on $node"
+  srun --nodes=1 --ntasks=1 -w $node \\
+    bash -c "$SPARK_HOME/sbin/start-worker.sh $MASTER_URL" &
+  sleep 2
+done
+
+export SPARK_MASTER_URL="$MASTER_URL"
+echo "[$({date_fmt})] Spark cluster ready with {len(nodes)} nodes"
+
+# Create cleanup script
+cat > {working_dir}/spark_cleanup.sh <<'CLEANUP_EOF'
+#!/bin/bash
+echo "[$({date_fmt})] Stopping Spark cluster..."
+for node in {" ".join(nodes)}; do
+  srun --nodes=1 --ntasks=1 -w $node \\
+    bash -c '$SPARK_HOME/sbin/stop-worker.sh' || true
+done
+srun --nodes=1 --ntasks=1 -w {head_node} \\
+  bash -c '$SPARK_HOME/sbin/stop-master.sh' || true
+CLEANUP_EOF
+chmod +x {working_dir}/spark_cleanup.sh
+
+"""

@@ -169,7 +169,7 @@ class SSHMessageReader(PipesMessageReader):
         Context manager that tails remote messages file with auto-reconnect.
 
         Yields:
-            Empty dict (no additional params needed)
+            Params dict with message file path for remote process
         """
         self.logger.debug(f"Starting SSH message reader for {self.remote_path}")
 
@@ -182,16 +182,22 @@ class SSHMessageReader(PipesMessageReader):
         self._reader_thread.start()
 
         try:
-            # Yield control back to Dagster
-            yield {}
+            # Yield the params that the remote process needs
+            yield {"path": self.remote_path}
 
-            # Wait a bit for final messages
+            # Wait for messages - keep reader alive while job runs
+            # The reader will stop when we set the stop flag
             time.sleep(1.0)
 
         finally:
-            # Signal stop and cleanup
+            # Signal stop
+            # self.logger.debug("Stopping message reader...")
             self._stop_flag.set()
 
+            # Give time for final messages to be flushed
+            time.sleep(1.0)
+
+            # Terminate tail process
             if self._proc:
                 try:
                     self._proc.terminate()
@@ -207,6 +213,8 @@ class SSHMessageReader(PipesMessageReader):
             if self._reader_thread and self._reader_thread.is_alive():
                 self._reader_thread.join(timeout=5)
 
+            self.logger.debug("Message reader stopped")
+
     def _read_loop_with_reconnect(self, handler):
         """
         Read loop that automatically reconnects on failure.
@@ -215,7 +223,7 @@ class SSHMessageReader(PipesMessageReader):
             handler: Dagster message handler
         """
         reconnect_count = 0
-        last_message_count = 0
+        total_message_count = 0
 
         while not self._stop_flag.is_set():
             try:
@@ -227,7 +235,8 @@ class SSHMessageReader(PipesMessageReader):
                     return
 
                 self.logger.debug(
-                    f"Starting tail (attempt {reconnect_count + 1}): {' '.join(str(x) for x in ssh_cmd)}"
+                    f"Starting tail (attempt {reconnect_count + 1}): "
+                    f"{' '.join(str(x) for x in ssh_cmd)}"
                 )
 
                 self._proc = subprocess.Popen(
@@ -248,61 +257,95 @@ class SSHMessageReader(PipesMessageReader):
                         break
 
                     line = line.strip()
-                    if line:
-                        try:
-                            handler.handle_message(line)
-                            message_count += 1
-                        except Exception as e:
-                            self.logger.warning(f"Error handling message: {e}")
+                    if not line:
+                        continue
+
+                    try:
+                        # Parse JSON message
+                        message = json.loads(line)
+
+                        # Pass parsed dict to handler
+                        handler.handle_message(message)
+                        message_count += 1
+                        total_message_count += 1
+
+                        # self.logger.debug(
+                        #     f"Received message {total_message_count}: "
+                        #     f"{message.get('method', 'unknown')}"
+                        # )
+
+                    except json.JSONDecodeError as je:
+                        # Log malformed JSON but continue
+                        self.logger.warning(
+                            f"Malformed JSON message: {line[:100]}... Error: {je}"
+                        )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Error handling message: {e}", exc_info=True
+                        )
 
                 # Process exited
                 return_code = self._proc.wait()
 
                 if self._stop_flag.is_set():
                     # Normal shutdown
-                    self.logger.debug(
-                        f"Tail process stopped normally (read {message_count} messages)"
-                    )
+                    # self.logger.debug(
+                    #     f"Tail process stopped normally "
+                    #     f"(read {message_count} messages this session, "
+                    #     f"{total_message_count} total)"
+                    # )
                     break
 
                 # Unexpected exit - try to reconnect
                 stderr = self._proc.stderr.read() if self._proc.stderr else ""
-                self.logger.warning(
-                    f"Tail process exited unexpectedly (code {return_code}). "
-                    f"Read {message_count} messages. stderr: {stderr}"
-                )
 
-                # Check if we're making progress (receiving messages)
-                if message_count > last_message_count:
-                    # Reset counter if we received new messages
-                    reconnect_count = 0
-                    last_message_count = message_count
+                if message_count > 0:
+                    # We received messages, so connection was working
+                    self.logger.info(
+                        f"Tail process exited (code {return_code}). "
+                        f"Read {message_count} messages. Reconnecting..."
+                    )
+                    reconnect_count = 0  # Reset since we made progress
                 else:
+                    # No messages received
+                    self.logger.warning(
+                        f"Tail process exited unexpectedly (code {return_code}). "
+                        f"No messages received. stderr: {stderr}"
+                    )
                     reconnect_count += 1
 
                 if reconnect_count >= self.max_reconnect_attempts:
                     self.logger.error(
                         f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. "
-                        "Giving up on message reading."
+                        f"Total messages received: {total_message_count}"
                     )
                     break
 
                 # Wait before reconnecting
-                self.logger.info(f"Reconnecting in {self.reconnect_interval}s...")
-                self._stop_flag.wait(self.reconnect_interval)
+                if not self._stop_flag.is_set():
+                    self.logger.debug(f"Reconnecting in {self.reconnect_interval}s...")
+                    self._stop_flag.wait(self.reconnect_interval)
 
             except Exception as e:
                 if self._stop_flag.is_set():
                     break
 
-                self.logger.error(f"Error in tail process: {e}")
+                self.logger.error(f"Error in tail process: {e}", exc_info=True)
                 reconnect_count += 1
 
                 if reconnect_count >= self.max_reconnect_attempts:
-                    self.logger.error("Max reconnect attempts reached. Giving up.")
+                    self.logger.error(
+                        f"Max reconnect attempts reached. "
+                        f"Total messages received: {total_message_count}"
+                    )
                     break
 
-                self._stop_flag.wait(self.reconnect_interval)
+                if not self._stop_flag.is_set():
+                    self._stop_flag.wait(self.reconnect_interval)
+
+        # self.logger.info(
+        #     f"Message reader finished. Total messages received: {total_message_count}"
+        # )
 
     def _build_ssh_tail_command(self) -> list[str]:
         """
@@ -322,7 +365,7 @@ class SSHMessageReader(PipesMessageReader):
             "-o",
             "LogLevel=ERROR",
             "-o",
-            "ServerAliveInterval=15",  # Keep connection alive
+            "ServerAliveInterval=15",
             "-o",
             "ServerAliveCountMax=3",
         ]
@@ -366,6 +409,7 @@ class SSHMessageReader(PipesMessageReader):
         # Tail command with retry logic
         # -F: follow by name (handles log rotation)
         # --retry: keep trying if file doesn't exist yet
+        # -n +1: start from beginning of file
         tail_cmd = f"tail -F --retry -n +1 {self.remote_path} 2>/dev/null || tail -f {self.remote_path}"
         base_cmd.append(tail_cmd)
 
@@ -379,5 +423,8 @@ class SSHMessageReader(PipesMessageReader):
             f"SSHMessageReader: {self.ssh_config.user}@{self.ssh_config.host}:"
             f"{self.remote_path}\n"
             f"ControlPath: {self.control_path or 'not set'}\n"
-            f"Auth method: {'key' if self.ssh_config.uses_key_auth else 'password'}"
+            f"Auth method: {'key' if self.ssh_config.uses_key_auth else 'password'}\n\n"
+            f"Check if the remote process is writing messages to the file:\n"
+            f"  ssh {self.ssh_config.user}@{self.ssh_config.host} -p {self.ssh_config.port} "
+            f"'cat {self.remote_path}'"
         )

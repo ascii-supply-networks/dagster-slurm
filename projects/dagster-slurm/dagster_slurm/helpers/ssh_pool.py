@@ -227,13 +227,20 @@ class SSHConnectionPool:
 
     def write_file(self, content: str, remote_path: str):
         """Write content to remote file via heredoc."""
+        if not content:
+            raise ValueError("Cannot write empty content to file")
+
         safe_content = content.replace("'", "'\\''")
         cmd = (
             f"cat > {shlex.quote(remote_path)} <<'DAGSTER_EOF'\n"
             f"{safe_content}\n"
             f"DAGSTER_EOF"
         )
-        self.run(cmd)
+
+        try:
+            self.run(cmd)
+        except Exception as e:
+            raise RuntimeError(f"Failed to write file to {remote_path}") from e
 
     def upload_file(self, local_path: str, remote_path: str):
         """Upload file via SCP using pooled connection."""

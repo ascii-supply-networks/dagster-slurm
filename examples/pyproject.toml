@@ -83,6 +83,7 @@ ray = { version = "~=2.48.0", extras = ["data", "default"] }
 dagster-ray = ">=0.0.1,<0.25"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
+loguru = ">=0.7,<1"
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
 dagster-slurm-ray = { path = "../projects/dagster-slurm-ray", editable = true }
 dagster-slurm-spark = { path = "../projects/dagster-slurm-spark", editable = true }

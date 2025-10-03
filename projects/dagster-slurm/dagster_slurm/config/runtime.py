@@ -6,6 +6,6 @@ class RuntimeVariant(StrEnum):
     Defines the runtime
     """
 
-    SHELL = "shell"
+    SHELL = "shell_script"
     RAY = "ray"
     SPARK = "spark"

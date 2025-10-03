@@ -16,3 +16,4 @@ class ExecutionMode(StrEnum):
     LOCAL = "local"
     SLURM = "slurm"
     SLURM_SESSION = "slurm-session"
+    SLURM_HETJOB = "slurm-hetjob"

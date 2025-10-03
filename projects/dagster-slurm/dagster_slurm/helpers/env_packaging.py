@@ -43,7 +43,6 @@ def pack_environment_with_pixi(
     # pixi will automatically walk up to find pixi.toml
     cwd = str(project_dir.resolve()) if project_dir else None
 
-    logger.info(f"Running pixi pack from: {cwd or 'current directory'}")
     logger.debug(f"Command: {shlex.join(pack_cmd)}")
     logger.debug(f"Timeout: {timeout}s")
 

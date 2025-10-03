@@ -1,6 +1,7 @@
 """Slurm session management for operator fusion."""
 
 import re
+from loguru import logger
 import shlex
 import time
 import threading
@@ -355,3 +356,65 @@ class SlurmAllocation:
     def cancel(self, ssh_pool: SSHConnectionPool):
         """Cancel the allocation."""
         ssh_pool.run(f"scancel {self.slurm_job_id}")
+
+
+class SessionResourcePool:
+    """
+    Manages reusable Ray/Spark clusters in session mode.
+    """
+
+    def __init__(
+        self,
+        session: SlurmSessionResource,
+        keep_alive: bool = True,
+        resource_tolerance: float = 0.2,  # 20% tolerance for reuse
+    ):
+        self.session = session
+        self.keep_alive = keep_alive
+        self.resource_tolerance = resource_tolerance
+        self._active_clusters = {}  # cluster_id -> cluster_info
+
+    def get_or_create_ray_cluster(
+        self,
+        required_cpus: int,
+        required_gpus: int,
+        required_memory_gb: int,
+    ):
+        """
+        Get existing Ray cluster if resources are close enough,
+        otherwise create new one.
+        """
+        # Check if we have a compatible cluster
+        for cluster_id, info in self._active_clusters.items():
+            if info["type"] == "ray":
+                # Check if resources are within tolerance
+                cpu_match = (
+                    abs(info["cpus"] - required_cpus) / required_cpus
+                    < self.resource_tolerance
+                )
+                gpu_match = info["gpus"] == required_gpus  # GPUs must match exactly
+                mem_match = (
+                    abs(info["memory_gb"] - required_memory_gb) / required_memory_gb
+                    < self.resource_tolerance
+                )
+
+                if cpu_match and gpu_match and mem_match:
+                    logger.info(f"Reusing existing Ray cluster {cluster_id}")
+                    return info["address"]
+
+        # No compatible cluster - create new one
+        logger.info("Creating new Ray cluster")
+        cluster_address = self._start_ray_cluster(
+            required_cpus, required_gpus, required_memory_gb
+        )
+
+        cluster_id = f"ray_{uuid.uuid4().hex[:8]}"
+        self._active_clusters[cluster_id] = {
+            "type": "ray",
+            "address": cluster_address,
+            "cpus": required_cpus,
+            "gpus": required_gpus,
+            "memory_gb": required_memory_gb,
+        }
+
+        return cluster_address

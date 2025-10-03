@@ -52,7 +52,7 @@ def get_resources():
         slurm = SlurmResource(
             ssh=ssh_connection,
             queue=SlurmQueueConfig(
-                partition="interactive",
+                # partition="interactive",
                 num_nodes=1,
                 time_limit="00:30:00",
                 cpus=2,
@@ -79,12 +79,13 @@ def get_resources():
             # enable_health_checks=True,  # Monitor node health
             # enable_session=True,  # Enable session mode for operator fusion
         )
+
         return {
             "compute": ComputeResource(
                 mode=ExecutionMode.SLURM,
                 slurm=slurm,
                 default_launcher=BashLauncher(),
-                debug_mode=True,  # NEVER cleanup files
+                # debug_mode=True,  # NEVER cleanup files
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
                 # pack_platform="linux-aarch64",  # Or explicitly override for testing
             ),
@@ -104,7 +105,7 @@ def get_resources():
                 "ssh": ssh_connection,
                 "queue": slurm_base.queue.model_copy(
                     update={
-                        "partition": "batch",
+                        # "partition": "batch",
                         "time_limit": "4:00:00",
                         "cpus": 8,
                         "mem": "64G",
@@ -131,6 +132,8 @@ def get_resources():
                 slurm=slurm,
                 session=session,
                 default_launcher=BashLauncher(),
+                enable_cluster_reuse=True,
+                cluster_reuse_tolerance=0.2,
                 # debug_mode=True,  # NEVER cleanup files
                 # ONLY ENABLE this for local docker runs!
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
