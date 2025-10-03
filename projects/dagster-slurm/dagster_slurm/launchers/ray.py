@@ -59,53 +59,38 @@ class RayLauncher(ComputeLauncher):
     ) -> ExecutionPlan:
         """Generate Ray execution plan."""
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
+        python_command = f"{shlex.quote(python_executable)} {shlex.quote(payload_path)}"
 
-        # The main sbatch script doesn't run the payload directly anymore,
-        # so we don't need to quote these here. They are passed to the template generator.
-
-        # Build header for the main sbatch job script
+        # Build header for the main script
         script = f"""#!/bin/bash
-  set -euo pipefail
-  echo "[$({date_fmt})] ========================================="
-  echo "[$({date_fmt})] Ray Workload Launcher"
-  echo "[$({date_fmt})] Working dir: {working_dir}"
-  echo "[$({date_fmt})] ========================================="
-  """
-
-        # This top-level script only needs to source the environment once
-        # to find the `srun` command and the auxiliary scripts.
-        if activation_script:
-            activation_quoted = shlex.quote(activation_script)
-            script += f"""# Activate environment for the launcher script
-  echo "[$({date_fmt})] Activating environment for launcher..."
-  source {activation_quoted}
-  echo "[$({date_fmt})] Launcher environment activated"
-  """
-
-        # Dagster Pipes and extra_env need to be exported so the driver script inherits them.
-        script += "# Exporting environment variables for driver script...\n"
+set -euo pipefail
+echo "[$({date_fmt})] ========================================="
+echo "[$({date_fmt})] Ray Workload Launcher"
+echo "[$({date_fmt})] Working dir: {working_dir}"
+echo "[$({date_fmt})] ========================================="
+"""
+        # Export all environment variables
+        script += "# Exporting environment variables...\n"
         for key, value in {**pipes_context, **(extra_env or {})}.items():
             script += f"export {key}={shlex.quote(str(value))}\n"
         script += "\n"
 
-        # Initialize auxiliary_scripts dict
         auxiliary_scripts = {}
 
         # Ray setup based on mode
         if self.ray_address:
-            # Mode: Connect to existing cluster (doesn't use the template)
-            python_command = (
-                f"{shlex.quote(python_executable)} {shlex.quote(payload_path)}"
-            )
+            # Mode: Connect to existing cluster.
             script += f"""# Connect to existing Ray cluster
-  export RAY_ADDRESS={shlex.quote(self.ray_address)}
-  echo "[$({date_fmt})] Connecting to Ray cluster: {self.ray_address}"
-  echo "[$({date_fmt})] Executing payload..."
-  {python_command}
-  """
+export RAY_ADDRESS={shlex.quote(self.ray_address)}
+echo "[$({date_fmt})] Connecting to Ray cluster: {self.ray_address}"
+echo "[$({date_fmt})] Executing payload..."
+"""
+            if activation_script:
+                script += f"source {shlex.quote(activation_script)}\n"
+            script += f"{python_command}\n"
+
         elif allocation_context:
-            # Mode: Start cluster in Slurm allocation (session mode)
-            # **FIX:** Add validation check for activation_script
+            # Mode: Start cluster in a pre-existing Slurm allocation (session mode)
             if not activation_script:
                 raise ValueError(
                     "An 'activation_script' is required for multi-node Ray execution in session mode."
@@ -116,59 +101,54 @@ class RayLauncher(ComputeLauncher):
                 payload_path=payload_path,
                 working_dir=working_dir,
                 date_fmt=date_fmt,
-                activation_script=activation_script,  # This is now safe
+                activation_script=activation_script,
                 allocation_context=allocation_context,
             )
             script += cluster_payload
             auxiliary_scripts.update(aux_scripts)
+
         else:
-            # Mode: Detect if running in multi-node Slurm job, otherwise local
+            # Mode: Standalone job. Could be multi-node (on Slurm) or single-node (local or Slurm).
             script += f"""# Detect Ray mode
-  if [[ -n "${{SLURM_CLUSTER_MODE:-}}" && "${{SLURM_JOB_NUM_NODES:-1}}" -gt 1 ]]; then
-      echo "[$({date_fmt})] Detected multi-node Slurm allocation ($SLURM_JOB_NUM_NODES nodes)"
-  """
-            # **FIX:** Add validation check for activation_script
+if [[ -n "${{SLURM_JOB_ID:-}}" && "${{SLURM_JOB_NUM_NODES:-1}}" -gt 1 ]]; then
+    echo "[$({date_fmt})] Detected multi-node Slurm allocation ($SLURM_JOB_NUM_NODES nodes)"
+"""
+            # ** THE MINIMAL FIX IS HERE **
+            # We now use the ROBUST template generator for the multi-node Slurm case.
+            # It requires an activation script, so we add a check.
             if not activation_script:
-                raise ValueError(
-                    "An 'activation_script' is required for multi-node Ray execution."
+                script += '    echo "ERROR: An activation_script is required for multi-node Ray execution but was not provided." >&2; exit 1\n'
+            else:
+                cluster_payload, aux_scripts = self._generate_cluster_template(
+                    python_executable=python_executable,
+                    payload_path=payload_path,
+                    working_dir=working_dir,
+                    date_fmt=date_fmt,
+                    activation_script=activation_script,
+                    allocation_context=None,
                 )
+                script += cluster_payload
+                auxiliary_scripts.update(aux_scripts)
 
-            # Call the new template generator for standalone mode
-            cluster_payload, aux_scripts = self._generate_cluster_template(
-                python_executable=python_executable,
-                payload_path=payload_path,
-                working_dir=working_dir,
-                date_fmt=date_fmt,
-                activation_script=activation_script,  # This is now safe
-                allocation_context=None,
-            )
-            # Indent the payload to fit inside the if-statement
-            for line in cluster_payload.split("\n"):
-                script += f"    {line}\n"
-
-            auxiliary_scripts.update(aux_scripts)
-
-            script += f"""else
-      echo "[$({date_fmt})] Single-node mode - starting local Ray"
-  """
-            # Add local template for single-node jobs
-            local_lines = self._generate_local_template(date_fmt)
+            script += f"""
+else
+    echo "[$({date_fmt})] Single-node mode detected. Starting local Ray cluster..."
+"""
+            # This 'local' block is used for both true local dev and single-node Slurm jobs.
+            # It works for both because it correctly handles an optional activation_script.
+            local_lines = self._generate_local_template(date_fmt, activation_script)
             script += local_lines
 
-            # In local mode, run the payload directly after startup
-            python_command = (
-                f"{shlex.quote(python_executable)} {shlex.quote(payload_path)}"
-            )
             script += f"""
-  echo "[$({date_fmt})] Executing payload in local mode..."
-  {python_command}
-  """
+echo "[$({date_fmt})] Executing payload in local mode..."
+{python_command}
+"""
             script += "fi\n\n"
 
         return ExecutionPlan(
             kind=RuntimeVariant.RAY,
             payload=script.split("\n"),
-            environment={},  # Env vars are now exported directly in the script
+            environment={},
             resources={
                 "nodes": allocation_context.get("num_nodes", 1)
                 if allocation_context
@@ -178,54 +158,59 @@ class RayLauncher(ComputeLauncher):
             auxiliary_scripts=auxiliary_scripts,
         )
 
-    def _generate_local_template(self, date_fmt: str) -> str:
-        """Generate Ray startup for local mode."""
+    def _generate_local_template(
+        self, date_fmt: str, activation_script: Optional[str]
+    ) -> str:
+        """Generate Ray startup for local (single-node) mode."""
         # Build object store argument if specified
         obj_store = ""
         if self.object_store_memory_gb is not None:
             bytes_value = self.object_store_memory_gb * 1_000_000_000
             obj_store = f"--object-store-memory={bytes_value}"
 
-        return f"""# Start local Ray cluster
-echo "[$({date_fmt})] Starting local Ray cluster"
+        # **THE FIX IS HERE**: Only add the activation block if the script is provided.
+        activation_block = ""
+        if activation_script:
+            activation_block = f"""
+    # Activate environment for local Ray
+    echo "[$({date_fmt})] Activating environment for local Ray..."
+    source {shlex.quote(activation_script)}
+    echo "[$({date_fmt})] Environment activated."
+    """
+        # The rest of the function remains the same
+        return f"""{activation_block}
+    # Start local Ray cluster
+    echo "[$({date_fmt})] Starting local Ray cluster"
+    # Cleanup function - MUST be defined before trap
+    cleanup_ray() {{
+      echo "[$({date_fmt})] Stopping Ray..."
+      ray stop --force || true
+      echo "[$({date_fmt})] Ray stopped"
+    }}
+    # Set trap BEFORE starting Ray
+    trap cleanup_ray EXIT SIGINT SIGTERM
+    # Start Ray head
+    ray start --head --port={self.ray_port} \\
+      --dashboard-host=127.0.0.1 --dashboard-port={self.dashboard_port} \\
+      --num-gpus={self.num_gpus_per_node} {obj_store}
+    export RAY_ADDRESS="127.0.0.1:{self.ray_port}"
+    # Wait for Ray to be ready
+    echo "[$({date_fmt})] Waiting for Ray to be ready..."
+    for i in $(seq 1 {self.head_startup_timeout}); do
+      if ray status --address "$RAY_ADDRESS" &>/dev/null; then
+        echo "[$({date_fmt})] Ray is ready (local mode)"
+        break
+      fi
+      if [[ $i -eq {self.head_startup_timeout} ]]; then
+        echo "[$({date_fmt})] ERROR: Ray failed to start within {self.head_startup_timeout} seconds" >&2
+        exit 1
+      fi
+      sleep 1
+    done
+    echo "[$({date_fmt})] Ray cluster ready"
+    ray status --address "$RAY_ADDRESS" 2>/dev/null || true
+    """
 
-# Cleanup function - MUST be defined before trap
-cleanup_ray() {{
-  echo "[$({date_fmt})] Stopping Ray..."
-  ray stop --force || true
-  echo "[$({date_fmt})] Ray stopped"
-}}
-
-# Set trap BEFORE starting Ray
-trap cleanup_ray EXIT SIGINT SIGTERM
-
-# Start Ray head
-ray start --head --port={self.ray_port} \\
-  --dashboard-host=127.0.0.1 --dashboard-port={self.dashboard_port} \\
-  --num-gpus={self.num_gpus_per_node} {obj_store}
-
-export RAY_ADDRESS="127.0.0.1:{self.ray_port}"
-
-# Wait for Ray to be ready
-echo "[$({date_fmt})] Waiting for Ray to be ready..."
-for i in $(seq 1 {self.head_startup_timeout}); do
-  if ray status --address "$RAY_ADDRESS" &>/dev/null; then
-    echo "[$({date_fmt})] Ray is ready (local mode)"
-    break
-  fi
-  if [[ $i -eq {self.head_startup_timeout} ]]; then
-    echo "[$({date_fmt})] ERROR: Ray failed to start within {self.head_startup_timeout} seconds" >&2
-    exit 1
-  fi
-  sleep 1
-done
-
-echo "[$({date_fmt})] Ray cluster ready"
-ray status --address "$RAY_ADDRESS" 2>/dev/null || true
-
-"""
-
-    # --------------------------
     def _generate_cluster_template(
         self,
         python_executable: str,
