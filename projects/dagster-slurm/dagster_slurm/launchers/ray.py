@@ -215,12 +215,9 @@ ray status --address "$RAY_ADDRESS" 2>/dev/null || true
         allocation_context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, dict]:
         """
-        Generate ROBUST Ray cluster startup using inline bash.
-        This version correctly runs ray start --block in the foreground of the srun step
-        and validates readiness by running `ray status` via srun on the head node.
-
-        Returns:
-            Tuple of (main_script, empty_dict) - no auxiliary scripts needed!
+        Generates a robust and simple Ray cluster startup script.
+        - Moves readiness-check logic into the worker nodes.
+        - The main script simply launches daemons and then the user payload.
         """
         redis_pw = self.redis_password or "$(uuidgen)"
 
@@ -230,164 +227,38 @@ ray status --address "$RAY_ADDRESS" 2>/dev/null || true
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
             obj_store_arg = f"--object-store-memory={bytes_value}"
 
-        # Determine temp dir and sentinel based on mode
+        # Determine temp dir path
         if allocation_context:
             slurm_job_id = allocation_context.get("slurm_job_id", "$$")
             temp_dir_path = f"/tmp/ray-{slurm_job_id}"
         else:
             temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
-
         temp_dir_arg = f"--temp-dir={temp_dir_path}"
 
-        # Determine the script logic based on mode
+        # Determine node script and variables based on mode
         if allocation_context:
-            # Session mode: Use pre-parsed node list
             nodes = allocation_context.get("nodes", [])
-            num_nodes = len(nodes)
-
-            if num_nodes == 0:
-                return (
-                    'echo "ERROR: No nodes found in allocation context." >&2; exit 1',
-                    {},
-                )
-
-            nodes_str = " ".join(nodes)
-
-            main_script = f"""# ========================================
-  # Robust Ray Cluster Startup (Session Mode)
-  # ========================================
-  echo "[$({date_fmt})] Starting Ray on {num_nodes} nodes"
-
-  # Cleanup function
-  cleanup() {{
-    echo "[$({date_fmt})] Performing cleanup..."
-    wait || true
-    rm -rf {temp_dir_path} || true
-    echo "[$({date_fmt})] Cleanup complete"
-  }}
-  trap cleanup EXIT SIGINT SIGTERM
-
-  # ===== Compute head address =====
-  redis_password={redis_pw}
-
-  # Get all nodes in allocation (pre-parsed)
-  nodes_array=({nodes_str})
-  head_node="${{nodes_array[0]}}"
-
-  # Get IP from head node
-  ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address | awk '{{print $1}}')
-  port={self.ray_port}
-  ip_head="$ip:$port"
-  export RAY_ADDRESS="$ip_head"
-
-  echo "[$({date_fmt})] Head node: $head_node | IP: $ip_head"
-
-  # ===== Start HEAD =====
-  echo "[$({date_fmt})] Starting Ray head at $head_node"
-  srun --export=ALL --nodes=1 --ntasks=1 -w "$head_node" \\
-  bash --noprofile --norc -c '
-    set -euo pipefail
-    
-    cleanup_node() {{ 
-      echo "Head received signal, stopping..."
-      ray stop -v --grace-period {self.grace_period} || true
-      exit 0
-    }}
-    trap cleanup_node TERM INT
-
-    echo "Ray head process starting in foreground..."
-    ray start --head -v \\
-      --node-ip-address="'"$ip"'" \\
-      --port="'"$port"'" \\
-      --dashboard-host=0.0.0.0 \\
-      --dashboard-port={self.dashboard_port} \\
-      --num-gpus={self.num_gpus_per_node} \\
-      {obj_store_arg} \\
-      {temp_dir_arg} \\
-      --redis-password="'"$redis_password"'" \\
-      --block
-  ' &
-
-  # ===== Wait for head ready =====
-  echo "[$({date_fmt})] Waiting for Ray head to be ready..."
-  for i in $(seq 1 40); do
-    # CRITICAL: Run ray status ON THE HEAD NODE
-    if srun --nodes=1 --ntasks=1 -w "$head_node" ray status --address "$ip_head" --redis_password "$redis_password" &>/dev/null; then
-      echo "[$({date_fmt})] Ray head is ready."
-      break
-    fi
-    if [[ $i -eq 40 ]]; then
-      echo "[$({date_fmt})] ERROR: Ray head failed to become ready." >&2
-      srun --nodes=1 --ntasks=1 -w "$head_node" pgrep -fla ray || echo "No ray processes found on head."
-      exit 1
-    fi
-    echo "Attempt $i/40: Ray head not ready yet, waiting..."
-    sleep 2
-  done
-
-  # ===== Start WORKERS =====
-  worker_num=$(({num_nodes} - 1))
-  if (( worker_num > 0 )); then
-    for ((i = 1; i < {num_nodes}; i++)); do
-      node_i="${{nodes_array[$i]}}"
-      echo "[$({date_fmt})] Starting worker $i at $node_i"
-      
-      srun --export=ALL --nodes=1 --ntasks=1 -w "$node_i" \\
-      bash --noprofile --norc -c '
-        set -euo pipefail
-        
-        cleanup_node() {{ 
-          echo "Worker received signal, stopping..."
-          ray stop -v --grace-period {self.grace_period} || true
-          exit 0
-        }}
-        trap cleanup_node TERM INT
-        
-        echo "Ray worker process starting in foreground..."
-        ray start -v \\
-          --address="'"$ip_head"'" \\
-          --redis-password="'"$redis_password"'" \\
-          --num-gpus={self.num_gpus_per_node} \\
-          {obj_store_arg} \\
-          {temp_dir_arg} \\
-          --block
-      ' &
-      
-      sleep 1
-    done
-  fi
-
-  echo "[$({date_fmt})] All Ray nodes started. Waiting for workers to register..."
-  sleep 5
-
-  # Verify cluster
-  echo "[$({date_fmt})] Ray cluster status:"
-  srun --nodes=1 --ntasks=1 -w "$head_node" ray status --address "$ip_head" --redis_password "$redis_password" 2>&1 || echo "Status check skipped"
-  """
+            num_nodes_var = str(len(nodes))
+            nodes_array_init = f"nodes_array=({' '.join(nodes)})"
         else:
-            # Standalone mode: Detect from environment
-            main_script = f"""# ========================================
-  # Robust Ray Cluster Startup (Standalone Mode)
-  # ========================================
-  echo "[$({date_fmt})] Starting Ray on $SLURM_JOB_NUM_NODES nodes"
+            num_nodes_var = "$SLURM_JOB_NUM_NODES"
+            nodes_array_init = 'nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST"); nodes_array=($nodes)'
 
-  # Cleanup function
-  cleanup() {{
-    echo "[$({date_fmt})] Performing cleanup..."
-    # srun steps will be terminated by the job ending, which triggers their internal traps
-    wait || true
-    # Clean up the temp directory
-    srun --nodes=1 --ntasks=1 -w "$head_node" rm -rf {temp_dir_path} || true
-    echo "[$({date_fmt})] Cleanup complete"
-  }}
-  trap cleanup EXIT SIGINT SIGTERM
+        main_script = f"""# ========================================
+  # Ray Cluster Startup
+  # ========================================
+  echo "[$({date_fmt})] Starting Ray on {num_nodes_var} nodes"
+
+  # This trap ensures that when the main script exits, it waits for all
+  # backgrounded srun processes to complete. Slurm's job teardown will
+  # send SIGTERM to these steps, allowing them to clean up gracefully.
+  trap 'echo "Main script finished, waiting for srun steps..."; wait' EXIT
 
   # ===== Compute head address =====
   redis_password={redis_pw}
 
-  # Get all nodes in allocation (from Slurm env)
-  nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
-  nodes_array=($nodes)
+  # Initialize node array based on mode
+  {nodes_array_init}
   head_node="${{nodes_array[0]}}"
 
   # Get IP from head node
@@ -399,21 +270,15 @@ ray status --address "$RAY_ADDRESS" 2>/dev/null || true
   echo "[$({date_fmt})] Head node: $head_node | IP: $ip_head"
 
   # ===== Start HEAD =====
-  echo "[$({date_fmt})] Starting Ray head at $head_node"
-  # The srun step is backgrounded, but the command inside it runs in the foreground
+  echo "[$({date_fmt})] Launching Ray head on $head_node..."
+  # The srun step is backgrounded, but the 'ray start --block' command inside it runs in the foreground of that step.
   srun --export=ALL --nodes=1 --ntasks=1 -w "$head_node" \\
   bash --noprofile --norc -c '
-    set -euo pipefail
-    
-    # This trap will catch SIGTERM from Slurm when the job ends
-    cleanup_node() {{ 
-      echo "Head received signal, stopping Ray..."
-      ray stop -v --grace-period {self.grace_period} || true
-      exit 0
-    }}
+    set -e
+    cleanup_node() {{ echo "Head received signal, stopping Ray..."; ray stop -v || true; rm -rf {temp_dir_path}; exit 0; }}
     trap cleanup_node TERM INT
-
-    echo "Ray head process starting in foreground..."
+    
+    echo "Ray head starting..."
     ray start --head -v \\
       --node-ip-address="'"$ip"'" \\
       --port="'"$port"'" \\
@@ -426,46 +291,37 @@ ray status --address "$RAY_ADDRESS" 2>/dev/null || true
       --block
   ' &
 
-  # ===== Wait for head ready =====
-  echo "[$({date_fmt})] Waiting for Ray head to be ready..."
-  # Add a small initial sleep to allow the srun step to begin execution
-  sleep 3
-
-  for i in $(seq 1 40); do
-    # CRITICAL: Run ray status ON THE HEAD NODE where we know the environment is correct
-    if srun --nodes=1 --ntasks=1 -w "$head_node" ray status --address "$ip_head" --redis_password "$redis_password" &>/dev/null; then
-      echo "[$({date_fmt})] Ray head is ready."
-      break
-    fi
-    if [[ $i -eq 40 ]]; then
-      echo "[$({date_fmt})] ERROR: Ray head failed to become ready in 80 seconds." >&2
-      # Add diagnostic to see if the ray process is even running on the head node
-      srun --nodes=1 --ntasks=1 -w "$head_node" pgrep -fla ray || echo "No ray processes found on head."
-      exit 1
-    fi
-    echo "Attempt $i/40: Ray head not ready yet, waiting..."
-    sleep 2
-  done
+  # Give head a moment to start before launching workers
+  echo "[$({date_fmt})] Waiting 5s for head process to initialize..."
+  sleep 5
 
   # ===== Start WORKERS =====
-  worker_num=$(($SLURM_JOB_NUM_NODES - 1))
+  worker_num=$(({num_nodes_var} - 1))
   if (( worker_num > 0 )); then
-    for ((i = 1; i < SLURM_JOB_NUM_NODES; i++)); do
+    for ((i = 1; i < {num_nodes_var}; i++)); do
       node_i="${{nodes_array[$i]}}"
-      echo "[$({date_fmt})] Starting worker $i at $node_i"
+      echo "[$({date_fmt})] Launching worker $i on $node_i..."
       
       srun --export=ALL --nodes=1 --ntasks=1 -w "$node_i" \\
       bash --noprofile --norc -c '
-        set -euo pipefail
-        
-        cleanup_node() {{ 
-          echo "Worker received signal, stopping Ray..."
-          ray stop -v --grace-period {self.grace_period} || true
-          exit 0
-        }}
+        set -e
+        cleanup_node() {{ echo "Worker received signal, stopping Ray..."; ray stop -v || true; rm -rf {temp_dir_path}; exit 0; }}
         trap cleanup_node TERM INT
+
+        # Worker waits for the head to be reachable before attempting to start.
+        echo "Worker on $(hostname) is waiting for head at '"$ip_head"'..."
+        for try in {{1..120}}; do # Wait for up to 2 minutes
+          if timeout 1 bash -c "cat < /dev/null > /dev/tcp/$(echo "'"$ip_head"'" | cut -d: -f1)/$(echo "'"$ip_head"'" | cut -d: -f2)"; then
+            echo "Worker on $(hostname) can reach head. Starting ray worker..."
+            break
+          fi
+          if [[ $try -eq 120 ]]; then
+            echo "ERROR: Worker on $(hostname) could not connect to head after 120 seconds." >&2
+            exit 1
+          fi
+          sleep 1
+        done
         
-        echo "Ray worker process starting in foreground..."
         ray start -v \\
           --address="'"$ip_head"'" \\
           --redis-password="'"$redis_password"'" \\
@@ -479,13 +335,9 @@ ray status --address "$RAY_ADDRESS" 2>/dev/null || true
     done
   fi
 
-  echo "[$({date_fmt})] All Ray nodes started. Waiting for workers to register..."
-  sleep 5
-
-  # Verify cluster
-  echo "[$({date_fmt})] Ray cluster status:"
-  srun --nodes=1 --ntasks=1 -w "$head_node" ray status --address "$ip_head" --redis_password "$redis_password" 2>&1 || echo "Status check skipped"
+  echo "[$({date_fmt})] All Ray srun steps launched. The user payload will now run."
+  echo "[$({date_fmt})] The ray.init() in the python script is responsible for the final connection wait."
+  # The main script now continues to the user payload.
   """
-
-        # No auxiliary scripts needed!
+        # No auxiliary scripts are needed with this inline approach.
         return main_script, {}
