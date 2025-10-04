@@ -1,6 +1,6 @@
 import ray
 
-ray.init(num_cpus=1)
+ray.init(num_cpus=1)  # type: ignore
 
 
 @ray.remote
@@ -11,4 +11,4 @@ def my_function(x):
 futures = [my_function.remote(i) for i in range(4)]
 print(ray.get(futures))
 
-ray.shutdown()
+ray.shutdown()  # type: ignore

@@ -24,7 +24,7 @@ def get_dagster_deployment_environment(
         return environment
     except ValueError as e:
         # 4. Handle the case where the string is not a valid environment
-        valid_envs = [e.value for e in Environment]
+        valid_envs = [e.value for e in Environment]  # type: ignore
         raise ValueError(
             f"'{deployment}' is not a valid environment. "
             f"Please set {deployment_key} to one of: {valid_envs}"

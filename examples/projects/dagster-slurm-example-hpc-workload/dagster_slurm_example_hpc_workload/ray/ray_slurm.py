@@ -13,7 +13,7 @@ from ray.job_submission import JobStatus, JobSubmissionClient
 # https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/ray_external.py
 # and also we would not want to generate the file on the fly but want to use a job from VCS
 def main():  # noqa: C901
-    with PipesDefaultMessageWriter.from_env() as writer:
+    with PipesDefaultMessageWriter.from_env() as writer:  # type: ignore
         addr = os.environ.get("RAY_DASHBOARD_ADDR", "http://127.0.0.1:8265")
         writer.report_log(f"[slurm→ray] Dashboard: {addr}")
         client = JobSubmissionClient(address=addr)

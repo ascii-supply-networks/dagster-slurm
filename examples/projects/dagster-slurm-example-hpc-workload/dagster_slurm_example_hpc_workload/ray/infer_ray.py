@@ -20,13 +20,13 @@ def main():
     model_path = os.environ.get("MODEL_PATH")
     context.log.info(f"Loading model from: {model_path}")
 
-    if not ray.is_initialized():
+    if not ray.is_initialized():  # type: ignore
         context.log.info("Connecting to Ray cluster...")
 
         # Initialize with normal logging (you'll see the logs)
-        ray.init(
-            address=os.environ.get("RAY_ADDRESS", "auto"),
-            logging_level="INFO",  # Keep normal logging
+        ray.init(  # type: ignore
+            address=os.environ.get("RAY_ADDRESS", "auto"),  # type: ignore
+            logging_level="INFO",  # Keep normal logging  # type: ignore
         )
 
         # CRITICAL: Wait for Ray's async connection logs to finish
@@ -34,7 +34,7 @@ def main():
         sys.stdout.flush()
         sys.stderr.flush()
 
-        context.log.info(f"Connected to Ray at {ray.get_runtime_context().gcs_address}")
+        context.log.info(f"Connected to Ray at {ray.get_runtime_context().gcs_address}")  # type: ignore
     # Distributed inference
     num_batches = 20
     futures = [run_inference_batch.remote(i) for i in range(num_batches)]
