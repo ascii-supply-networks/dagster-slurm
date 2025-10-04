@@ -200,7 +200,7 @@ class SSHMessageReader(PipesMessageReader):
                     self.logger.debug(f"Error terminating tail process: {e}")
                     try:
                         self._proc.kill()
-                    except:
+                    except:  # noqa: E722
                         pass
 
             # Wait for reader thread to finish

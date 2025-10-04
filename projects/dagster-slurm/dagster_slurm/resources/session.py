@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from typing import List, Optional, Set
+import uuid
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
 from loguru import logger
@@ -221,7 +222,7 @@ class SlurmSessionResource(ConfigurableResource):
                 try:
                     self._ssh_pool.run(f"test -f {working_dir}/head_node.txt")
                     return
-                except:
+                except:  # noqa: E722
                     pass
             elif state in TERMINAL_STATES:
                 raise RuntimeError(f"Allocation {job_id} failed with state: {state}")

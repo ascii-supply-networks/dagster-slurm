@@ -350,7 +350,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                         self.logger.error(
                             f"Component {i} log (last 50 lines):\n{log_content}"
                         )
-                except:
+                except:  # noqa: E722
                     break
 
             # Get main job output
@@ -360,7 +360,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                 )
                 if job_out.strip():
                     self.logger.error(f"Job output (last 100 lines):\n{job_out}")
-            except:
+            except:  # noqa: E722
                 pass
 
             # Get main job errors
@@ -370,7 +370,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                 )
                 if job_err.strip():
                     self.logger.error(f"Job errors (last 100 lines):\n{job_err}")
-            except:
+            except:  # noqa: E722
                 pass
 
         except Exception as e:
@@ -396,7 +396,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                     logs[i] = log_content
                 else:
                     break  # No more components
-            except:
+            except:  # noqa: E722
                 break
 
         return logs

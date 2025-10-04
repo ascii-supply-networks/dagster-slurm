@@ -409,7 +409,7 @@ class SlurmPipesClient(PipesClient):
             try:
                 tree_output = ssh_pool.run(f"ls -laR {run_dir} | head -100")
                 self.logger.error(f"Files in run dir:\n{tree_output}")
-            except:
+            except:  # noqa: E722
                 pass
             raise RuntimeError(
                 f"Environment extraction appeared to succeed but validation failed. "
@@ -551,7 +551,7 @@ class SlurmPipesClient(PipesClient):
                     Path(local_temp_path).unlink(missing_ok=True)
                 if "local_aux_path" in locals():
                     Path(local_aux_path).unlink(missing_ok=True)
-            except:
+            except:  # noqa: E722
                 pass
             raise RuntimeError(f"Could not write job script to {script_path}") from e
 
@@ -721,7 +721,7 @@ class SlurmPipesClient(PipesClient):
                     proc.terminate()
                     try:
                         proc.wait(timeout=2)
-                    except:
+                    except:  # noqa: E722
                         proc.kill()
             except Exception as e:
                 self.logger.warning(f"Error streaming {remote_path}: {e}")
