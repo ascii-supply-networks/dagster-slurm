@@ -23,7 +23,7 @@ dev = [
   "taplo>=0.9.3,<0.10",
   "pytest>=8.3.4,<9",
   "pytest-mock>=3.14.0,<4",
-  "pytest-cov~=6.0.0",
+  "pytest-cov~=7.0.0",
   "ruff>=0.12.8,<1",
   "pyrefly>=0.27.2,<1",
   "python-semantic-release~=10.3.1",
@@ -44,6 +44,7 @@ uv = ">=0.8.6"
 build = ">=1.3.0"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 pytest = ">=8.3.4,<9"
+pytest-cov = "~=7.0.0"
 
 [tool.pixi.feature.explore.dependencies]
 ipykernel = "~=6.29"
@@ -73,6 +74,7 @@ release = { cmd = "uv run semantic-release publish", description = "Make new rel
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
 lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects --python-interpreter $PIXI_PROJECT_ROOT/.pixi/envs/build/bin/python3.12", description = "Lint" }
 test = { cmd = "uv run -- pytest projects", description = "Run all unit tests" }
+testpixi = { cmd = "pytest --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
 
 [tool.pixi.feature.build.tasks.sync]
 cmd = "uv sync --all-packages"

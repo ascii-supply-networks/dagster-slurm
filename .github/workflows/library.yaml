@@ -81,7 +81,7 @@ jobs:
             frozen: true
       - run: pixi run -e build --frozen lint
 
-      - run: pixi run -e build --frozen test
+      - run: pixi run -e build --frozen testpixi
 
       - run: pixi run -e build --frozen build-lib
 
