@@ -195,5 +195,5 @@ def _format_size(size_bytes: int) -> str:
     for unit in ["B", "KiB", "MiB", "GiB"]:
         if size_bytes < 1024.0:
             return f"{size_bytes:.2f} {unit}"
-        size_bytes /= 1024.0
+        size_bytes /= 1024.0  # type: ignore
     return f"{size_bytes:.2f} TiB"
