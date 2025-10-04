@@ -43,6 +43,7 @@ explore = { features = ["build", "explore"], solve-group = "explore" }
 uv = ">=0.8.6"
 build = ">=1.3.0"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
+pytest = ">=8.3.4,<9"
 
 [tool.pixi.feature.explore.dependencies]
 ipykernel = "~=6.29"
