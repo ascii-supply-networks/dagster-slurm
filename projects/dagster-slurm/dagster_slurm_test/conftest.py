@@ -1,13 +1,14 @@
 """Pytest configuration and fixtures."""
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 from dagster_slurm import (
-    SSHConnectionResource,
-    SlurmResource,
-    SlurmQueueConfig,
     ComputeResource,
+    SlurmQueueConfig,
+    SlurmResource,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
 

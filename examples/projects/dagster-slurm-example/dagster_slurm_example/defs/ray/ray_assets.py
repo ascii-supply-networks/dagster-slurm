@@ -9,10 +9,9 @@ def distributed_training(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
 ) -> dg.Output:
-    """
-    Train model using Ray for distributed compute.
+    """Train model using Ray for distributed compute.
     In dev: starts local Ray
-    In prod session: starts Ray cluster across allocated nodes
+    In prod session: starts Ray cluster across allocated nodes.
     """
     script_path = dg.file_relative_path(
         __file__,
@@ -53,8 +52,7 @@ def distributed_inference(
     compute_ray: ComputeResource,
     distributed_training,  # Uses trained model
 ) -> dg.Output:
-    """
-    Run inference using Ray.
+    """Run inference using Ray.
     In session mode, this reuses the same Ray cluster from training!
     """
     script_path = dg.file_relative_path(

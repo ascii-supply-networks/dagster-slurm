@@ -1,11 +1,9 @@
 """Tests for launchers."""
 
-import pytest
 from dagster_slurm.launchers import (
     BashLauncher,
     RayLauncher,
     SparkLauncher,
-    ExecutionPlan,
 )
 
 

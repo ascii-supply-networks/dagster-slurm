@@ -2,22 +2,18 @@
 
 import json
 import os
-import shlex
 import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import Iterator, Optional, Dict, Any
-from pathlib import Path
+from typing import Any, Dict, Iterator, Optional
+
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
-from ..resources.ssh import SSHConnectionResource
-from .ssh_pool import SSHConnectionPool
 
 
 class LocalMessageReader(PipesMessageReader):
-    """
-    Tails a local messages file.
+    """Tails a local messages file.
     Used for local dev mode.
     """
 
@@ -38,7 +34,6 @@ class LocalMessageReader(PipesMessageReader):
     @contextmanager
     def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
         """Context manager that tails messages file."""
-
         params = {
             PipesDefaultMessageWriter.FILE_PATH_KEY: self.messages_path,
             PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: self.include_stdio,
@@ -130,8 +125,7 @@ class LocalMessageReader(PipesMessageReader):
 
 
 class SSHMessageReader(PipesMessageReader):
-    """
-    Read Pipes messages from remote file via SSH tail with auto-reconnect.
+    """Read Pipes messages from remote file via SSH tail with auto-reconnect.
 
     Uses SSH ControlMaster connection for efficient tailing.
     Automatically reconnects if the tail process dies.
@@ -145,13 +139,13 @@ class SSHMessageReader(PipesMessageReader):
         reconnect_interval: float = 2.0,
         max_reconnect_attempts: int = 10,
     ):
-        """
-        Args:
-            remote_path: Path to messages.jsonl on remote host
-            ssh_config: SSHConnectionResource instance
-            control_path: Path to ControlMaster socket (required for password auth)
-            reconnect_interval: Seconds to wait before reconnecting
-            max_reconnect_attempts: Maximum reconnection attempts
+        """Args:
+        remote_path: Path to messages.jsonl on remote host
+        ssh_config: SSHConnectionResource instance
+        control_path: Path to ControlMaster socket (required for password auth)
+        reconnect_interval: Seconds to wait before reconnecting
+        max_reconnect_attempts: Maximum reconnection attempts.
+
         """
         self.remote_path = remote_path
         self.ssh_config = ssh_config
@@ -165,11 +159,11 @@ class SSHMessageReader(PipesMessageReader):
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
-        """
-        Context manager that tails remote messages file with auto-reconnect.
+        """Context manager that tails remote messages file with auto-reconnect.
 
         Yields:
             Params dict with message file path for remote process
+
         """
         self.logger.debug(f"Starting SSH message reader for {self.remote_path}")
 
@@ -216,11 +210,11 @@ class SSHMessageReader(PipesMessageReader):
             self.logger.debug("Message reader stopped")
 
     def _read_loop_with_reconnect(self, handler):
-        """
-        Read loop that automatically reconnects on failure.
+        """Read loop that automatically reconnects on failure.
 
         Args:
             handler: Dagster message handler
+
         """
         reconnect_count = 0
         total_message_count = 0
@@ -348,11 +342,11 @@ class SSHMessageReader(PipesMessageReader):
         # )
 
     def _build_ssh_tail_command(self) -> list[str]:
-        """
-        Build SSH command to tail the remote messages file.
+        """Build SSH command to tail the remote messages file.
 
         Returns:
             List of command arguments for subprocess.Popen
+
         """
         base_cmd = [
             "ssh",
@@ -416,9 +410,7 @@ class SSHMessageReader(PipesMessageReader):
         return base_cmd
 
     def no_messages_debug_text(self) -> str:
-        """
-        Return debug text shown when no messages received.
-        """
+        """Return debug text shown when no messages received."""
         return (
             f"SSHMessageReader: {self.ssh_config.user}@{self.ssh_config.host}:"
             f"{self.remote_path}\n"

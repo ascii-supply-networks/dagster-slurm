@@ -1,14 +1,16 @@
 import shlex
 from pathlib import Path
-from typing import Dict, Optional, Any
-from .base import ComputeLauncher, ExecutionPlan
-from dagster_slurm.config.runtime import RuntimeVariant
+from typing import Any, Dict, Optional
+
 import dagster as dg
+
+from dagster_slurm.config.runtime import RuntimeVariant
+
+from .base import ComputeLauncher, ExecutionPlan
 
 
 class BashLauncher(ComputeLauncher):
-    """
-    Executes Python scripts via bash.
+    """Executes Python scripts via bash.
 
     Uses the self-contained pixi environment extracted at runtime.
     Sources the activation script provided by pixi-pack.
@@ -22,10 +24,9 @@ class BashLauncher(ComputeLauncher):
         pipes_context: Dict[str, str],
         extra_env: Optional[Dict[str, str]] = None,
         allocation_context: Optional[Dict[str, Any]] = None,
-        activation_script: Optional[str] = None,  # NEW: Accept activation script
+        activation_script: Optional[str] = None,
     ) -> ExecutionPlan:
-        """
-        Generate bash execution plan.
+        """Generate bash execution plan.
 
         Args:
             payload_path: Path to Python script on remote host
@@ -38,6 +39,7 @@ class BashLauncher(ComputeLauncher):
 
         Returns:
             ExecutionPlan with shell script
+
         """
         messages_path = f"{working_dir}/messages.jsonl"
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
@@ -138,5 +140,5 @@ exec {python_quoted} {payload_quoted}
             kind=RuntimeVariant.SHELL,
             payload=script_lines,
             environment=pipes_context,
-            resources={},  # Metadata only
+            resources={},
         )

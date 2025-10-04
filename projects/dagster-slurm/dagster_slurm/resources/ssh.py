@@ -1,14 +1,14 @@
 """SSH connection configuration resource."""
 
 import os
-from typing import Optional, List
+from typing import List, Optional
+
 from dagster import ConfigurableResource
 from pydantic import Field, model_validator
 
 
 class SSHConnectionResource(ConfigurableResource):
-    """
-    SSH connection settings.
+    """SSH connection settings.
 
     Supports two authentication methods:
     1. SSH key (recommended for automation)
@@ -17,22 +17,29 @@ class SSHConnectionResource(ConfigurableResource):
     Either key_path OR password must be provided (not both).
 
     Examples:
-        # Key-based auth
-        ssh = SSHConnectionResource(
-            host="cluster.example.com",
-            user="username",
-            key_path="~/.ssh/id_rsa",
-        )
+        .. code-block:: python
 
-        # Password-based auth
-        ssh = SSHConnectionResource(
-            host="cluster.example.com",
-            user="username",
-            password="secret123",
-        )
+            # Key-based auth
+            ssh = SSHConnectionResource(
+                host="cluster.example.com",
+                user="username",
+                key_path="~/.ssh/id_rsa",
+            )
+
+        .. code-block:: python
+
+            # Password-based auth
+            ssh = SSHConnectionResource(
+                host="cluster.example.com",
+                user="username",
+                password="secret123",
+            )
+
+        .. code-block:: python
 
         # From environment variables
         ssh = SSHConnectionResource.from_env()
+
     """
 
     host: str = Field(description="SSH hostname or IP address")
@@ -89,16 +96,15 @@ class SSHConnectionResource(ConfigurableResource):
 
     @classmethod
     def from_env(cls, prefix: str = "SLURM_SSH") -> "SSHConnectionResource":
-        """
-        Create from environment variables.
+        """Create from environment variables.
 
         Environment variables:
-            {prefix}_HOST - SSH hostname (required)
-            {prefix}_PORT - SSH port (optional, default: 22)
-            {prefix}_USER - SSH username (required)
-            {prefix}_KEY - Path to SSH key (optional)
-            {prefix}_PASSWORD - SSH password (optional)
-            {prefix}_OPTS_EXTRA - Additional SSH options (optional)
+            ``{prefix}``_HOST - SSH hostname (required)
+            ``{prefix}``_PORT - SSH port (optional, default: 22)
+            ``{prefix}``_USER - SSH username (required)
+            ``{prefix}``_KEY - Path to SSH key (optional)
+            ``{prefix}``_PASSWORD - SSH password (optional)
+            ``{prefix}``_OPTS_EXTRA - Additional SSH options (optional)
 
         Either KEY or PASSWORD must be set (not both).
 
@@ -112,11 +118,17 @@ class SSHConnectionResource(ConfigurableResource):
             ValueError: If required variables missing or both auth methods specified
 
         Example:
+
+        .. code-block:: bash
+
             export SLURM_SSH_HOST=cluster.example.com
             export SLURM_SSH_USER=username
             export SLURM_SSH_KEY=~/.ssh/id_rsa
             # OR
             export SLURM_SSH_PASSWORD=secret123
+
+        ...
+
         """
         import shlex
 
@@ -143,8 +155,7 @@ class SSHConnectionResource(ConfigurableResource):
         )
 
     def get_ssh_base_command(self) -> List[str]:
-        """
-        Build base SSH command for subprocess.
+        """Build base SSH command for subprocess.
 
         Returns:
             List of command arguments for subprocess.run()
@@ -160,6 +171,7 @@ class SSHConnectionResource(ConfigurableResource):
             ['ssh', '-p', '22', '-i', '/path/to/key', 'user@host']
             # OR (password auth via ControlMaster)
             ['ssh', '-p', '22', '-o', 'ControlPath=/tmp/...', 'user@host']
+
         """
         base_opts = [
             "-o",
@@ -214,8 +226,7 @@ class SSHConnectionResource(ConfigurableResource):
             ]
 
     def get_scp_base_command(self) -> List[str]:
-        """
-        Build base SCP command for file transfers.
+        """Build base SCP command for file transfers.
 
         Returns:
             List of command arguments (without source/dest)
@@ -227,6 +238,7 @@ class SSHConnectionResource(ConfigurableResource):
             ['scp', '-P', '22', '-i', '/path/to/key']
             # OR (password auth)
             ['scp', '-P', '22']
+
         """
         base_opts = [
             "-o",
@@ -266,13 +278,13 @@ class SSHConnectionResource(ConfigurableResource):
             ]
 
     def get_remote_target(self) -> str:
-        """
-        Get the remote target string for SCP commands.
+        """Get the remote target string for SCP commands.
 
         Returns:
             String in format 'user@host'
 
         Example:
             'username@cluster.example.com'
+
         """
         return f"{self.user}@{self.host}"

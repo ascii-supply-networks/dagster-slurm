@@ -9,4 +9,7 @@ This section covers the main components of the library.
 
 <a id="module-dagster_slurm_ray"></a>
 
-### dagster_slurm_ray.hello_ray() → str
+### dagster_slurm_ray.hello_ray()
+
+* **Return type:**
+  `str`

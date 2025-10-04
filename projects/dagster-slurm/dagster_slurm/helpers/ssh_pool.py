@@ -1,18 +1,20 @@
 """SSH connection pooling via ControlMaster."""
 
-import uuid
-import subprocess
 import shlex
-import time
-from typing import Optional
+import subprocess
+import uuid
 from pathlib import Path
+from typing import Optional
+
 from dagster import get_dagster_logger
-from ..resources.ssh import SSHConnectionResource
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..resources.ssh import SSHConnectionResource
 
 
 class SSHConnectionPool:
-    """
-    Reuse SSH connections via ControlMaster.
+    """Reuse SSH connections via ControlMaster.
     Supports both key-based and password-based authentication.
     Password-based auth uses SSH_ASKPASS for secure password handling.
     """
@@ -65,7 +67,7 @@ class SSHConnectionPool:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             except FileNotFoundError as e:
                 raise RuntimeError(
-                    f"SSH command not found. Please ensure OpenSSH client is installed."
+                    "SSH command not found. Please ensure OpenSSH client is installed."
                 ) from e
 
             if result.returncode != 0:
@@ -93,7 +95,7 @@ class SSHConnectionPool:
                 result = self._run_with_password(cmd, self.config.password)
             except FileNotFoundError as e:
                 raise RuntimeError(
-                    f"SSH command not found. Please ensure OpenSSH client is installed."
+                    "SSH command not found. Please ensure OpenSSH client is installed."
                 ) from e
 
             if result.returncode != 0:
@@ -180,8 +182,7 @@ class SSHConnectionPool:
                 self.logger.warning(f"Error closing SSH master: {e}")
 
     def run(self, cmd: str, timeout: Optional[int] = None) -> str:
-        """
-        Run command using pooled connection.
+        """Run command using pooled connection.
 
         Args:
             cmd: Shell command to execute
@@ -192,6 +193,7 @@ class SSHConnectionPool:
 
         Raises:
             RuntimeError: If command fails or pool not started
+
         """
         if not self._master_started:
             raise RuntimeError("SSH pool not started - use context manager")

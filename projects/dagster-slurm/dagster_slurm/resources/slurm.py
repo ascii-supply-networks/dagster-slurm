@@ -1,15 +1,15 @@
-import dagster as dg
-from pydantic import Field
 import os
 from typing import Optional
+
+import dagster as dg
 from dagster import ConfigurableResource
 from pydantic import Field
+
 from .ssh import SSHConnectionResource
 
 
 class SlurmQueueConfig(dg.ConfigurableResource):
-    """
-    Default Slurm job submission parameters.
+    """Default Slurm job submission parameters.
     These can be overridden per-asset via metadata or function arguments.
     """
 
@@ -28,8 +28,7 @@ class SlurmQueueConfig(dg.ConfigurableResource):
 
 
 class SlurmResource(ConfigurableResource):
-    """
-    Complete Slurm cluster configuration.
+    """Complete Slurm cluster configuration.
     Combines SSH connection, queue defaults, and cluster-specific paths.
     """
 
@@ -42,12 +41,12 @@ class SlurmResource(ConfigurableResource):
 
     @classmethod
     def from_env_slurm(cls, ssh: SSHConnectionResource) -> "SlurmResource":
-        """
-        Create a SlurmResource by populating most fields from environment variables,
+        """Create a SlurmResource by populating most fields from environment variables,
         but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
         Args:
             ssh: A fully configured SSHConnectionResource instance.
+
         """
         return cls(
             # Use the provided ssh object directly

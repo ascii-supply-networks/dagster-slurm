@@ -1,15 +1,17 @@
 """Ray cluster launcher with robust startup/shutdown."""
 
 import shlex
-from typing import Dict, Optional, Any
-from .base import ComputeLauncher, ExecutionPlan
-from dagster_slurm.config.runtime import RuntimeVariant
+from typing import Any, Dict, Optional
+
 from pydantic import Field
+
+from dagster_slurm.config.runtime import RuntimeVariant
+
+from .base import ComputeLauncher, ExecutionPlan
 
 
 class RayLauncher(ComputeLauncher):
-    """
-    Ray distributed computing launcher.
+    """Ray distributed computing launcher.
 
     Features:
     - Robust cluster startup with sentinel-based shutdown
@@ -220,12 +222,12 @@ echo "[$({date_fmt})] Executing payload in local mode..."
         activation_script: str,  # Now a required argument
         allocation_context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, dict]:
-        """
-        Generates a robust Ray cluster startup script using a head-node-driven architecture.
+        """Generates a robust Ray cluster startup script using a head-node-driven architecture.
         The main sbatch script simply launches a driver script on the head node.
 
         Returns:
             Tuple of (main_script_payload, auxiliary_scripts_dict)
+
         """
         redis_pw = self.redis_password or "$(uuidgen)"
 

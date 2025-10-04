@@ -2,9 +2,7 @@ from enum import StrEnum
 
 
 class RuntimeVariant(StrEnum):
-    """
-    Defines the runtime
-    """
+    """Defines the runtime."""
 
     SHELL = "shell_script"
     RAY = "ray"

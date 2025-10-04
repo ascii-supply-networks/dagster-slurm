@@ -1,10 +1,11 @@
 """Environment packaging using pixi pack."""
 
-import subprocess
-import shlex
 import re
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Optional
+
 from dagster import get_dagster_logger
 
 
@@ -13,8 +14,7 @@ def pack_environment_with_pixi(
     pack_cmd: Optional[list[str]] = None,
     timeout: int = 600,
 ) -> Path:
-    """
-    Pack environment using 'pixi pack'.
+    """Pack environment using 'pixi pack'.
 
     This creates a self-contained environment package:
     - If --create-executable: self-extracting shell script (environment.sh)
@@ -33,6 +33,7 @@ def pack_environment_with_pixi(
         FileNotFoundError: If pixi.toml not found or packed file can't be located
         ValueError: If pack task not defined or environment not found
         subprocess.CalledProcessError: If pixi pack fails
+
     """
     logger = get_dagster_logger()
 
@@ -138,12 +139,12 @@ def pack_environment_with_pixi(
 
 
 def _extract_pack_path_from_output(output: str, base_dir: Path) -> Optional[Path]:
-    """
-    Extract pack file path from pixi-pack output.
+    """Extract pack file path from pixi-pack output.
 
     Examples:
         "Created pack at /path/to/environment.sh with size 318.74 MiB"
         "Packed environment to: /path/to/file.tar.bz2"
+
     """
     patterns = [
         # Match: "Created pack at <PATH> with size"

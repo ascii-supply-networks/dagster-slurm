@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-import os, socket, time, json
-from pathlib import Path
+import json
+import os
+import socket
+import time
 from datetime import datetime
+from pathlib import Path
 
 OUT_DIR = Path(os.environ.get("JOB_OUTPUT_DIR", "/data/results"))
 LOG_DIR = Path(os.environ.get("JOB_LOG_DIR", "/data/logs"))

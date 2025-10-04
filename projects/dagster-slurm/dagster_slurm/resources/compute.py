@@ -1,24 +1,23 @@
 """Unified compute resource - main facade."""
 
-import os
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
-from pydantic import Field, PrivateAttr
-from .slurm import SlurmResource
-from .session import SlurmSessionResource
+from pydantic import Field, PrivateAttr, model_validator
+
+from ..config.environment import ExecutionMode
+from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..launchers.script import BashLauncher
+from ..managers.hetjob import HeterogeneousJobManager, HetJobComponent
 from ..pipes_clients.local_pipes_client import LocalPipesClient
 from ..pipes_clients.slurm_pipes_client import SlurmPipesClient
-from ..config.environment import ExecutionMode
-from ..managers.hetjob import HeterogeneousJobManager, HetJobComponent
-from ..helpers.ssh_pool import SSHConnectionPool
-from pydantic import model_validator
+from .session import SlurmSessionResource
+from .slurm import SlurmResource
 
 
 class ComputeResource(ConfigurableResource):
-    """
-    Unified compute resource - adapts to deployment.
+    """Unified compute resource - adapts to deployment.
 
     This is the main facade that assets depend on.
     Hides complexity of local vs Slurm vs session execution.
@@ -143,7 +142,6 @@ class ComputeResource(ConfigurableResource):
 
     def _log_configuration_once(self):
         """Log configuration info exactly once per instance."""
-
         logger = get_dagster_logger()
 
         # Log debug mode warning
@@ -180,8 +178,7 @@ class ComputeResource(ConfigurableResource):
         context: InitResourceContext,
         launcher: Optional[ComputeLauncher] = None,
     ):
-        """
-        Get appropriate Pipes client for this mode.
+        """Get appropriate Pipes client for this mode.
 
         Args:
             context: Dagster resource context
@@ -189,6 +186,7 @@ class ComputeResource(ConfigurableResource):
 
         Returns:
             LocalPipesClient or SlurmPipesClient
+
         """
         # Resolve launcher with fallback to default
         effective_launcher = launcher or self.default_launcher
@@ -252,8 +250,7 @@ class ComputeResource(ConfigurableResource):
         resource_requirements: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
-        """
-        Execute asset with optional resource overrides.
+        """Execute asset with optional resource overrides.
 
         Args:
             context: Dagster execution context
@@ -276,27 +273,36 @@ class ComputeResource(ConfigurableResource):
             Dagster events
 
         Examples:
-            # Simple execution with default resources
-            yield from compute.run(context, "script.py")
+            .. code-block:: python
 
-            # Override launcher for this asset
-            ray_launcher = RayLauncher(num_gpus_per_node=4)
-            yield from compute.run(context, "script.py", launcher=ray_launcher)
+                # Simple execution with default resources
+                yield from compute.run(context, "script.py")
 
-            # Non-session mode: override Slurm resources
-            yield from compute.run(
-                context,
-                "script.py",
-                extra_slurm_opts={"nodes": 1, "cpus_per_task": 16, "mem": "64G", "gpus_per_node": 2}
-            )
+            .. code-block:: python
 
-            # Session mode: specify resource requirements for cluster reuse
-            yield from compute.run(
-                context,
-                "script.py",
-                launcher=RayLauncher(num_gpus_per_node=2),
-                resource_requirements={"cpus": 32, "gpus": 2, "memory_gb": 128, "framework": "ray"}
-            )
+                # Override launcher for this asset
+                ray_launcher = RayLauncher(num_gpus_per_node=4)
+                yield from compute.run(context, "script.py", launcher=ray_launcher)
+
+            .. code-block:: python
+
+                # Non-session mode: override Slurm resources
+                yield from compute.run(
+                    context,
+                    "script.py",
+                    extra_slurm_opts={"nodes": 1, "cpus_per_task": 16, "mem": "64G", "gpus_per_node": 2}
+                )
+
+            .. code-block:: python
+
+                # Session mode: specify resource requirements for cluster reuse
+                yield from compute.run(
+                    context,
+                    "script.py",
+                    launcher=RayLauncher(num_gpus_per_node=2),
+                    resource_requirements={"cpus": 32, "gpus": 2, "memory_gb": 128, "framework": "ray"}
+                )
+
         """
         self._log_configuration_once()
         logger = get_dagster_logger()
@@ -347,8 +353,7 @@ class ComputeResource(ConfigurableResource):
         assets: List[Tuple[str, str, Dict[str, Any]]],
         launchers: Optional[Dict[str, ComputeLauncher]] = None,
     ):
-        """
-        Run multiple assets as a heterogeneous Slurm job.
+        """Run multiple assets as a heterogeneous Slurm job.
 
         Submit all assets together with their specific resource requirements.
         Only waits in queue ONCE, but each asset gets the resources it needs.
@@ -368,18 +373,21 @@ class ComputeResource(ConfigurableResource):
             Dagster events
 
         Example:
-            compute.run_hetjob(
-                context,
-                assets=[
-                    ("prep", "prep.py", {"nodes": 1, "cpus_per_task": 8, "mem": "32G"}),
-                    ("train", "train.py", {"nodes": 4, "cpus_per_task": 32, "mem": "128G", "gpus_per_node": 2}),
-                    ("infer", "infer.py", {"nodes": 8, "cpus_per_task": 16, "mem": "64G", "gpus_per_node": 1}),
-                ],
-                launchers={
-                    "train": RayLauncher(num_gpus_per_node=2),
-                    "infer": RayLauncher(num_gpus_per_node=1),
-                }
-            )
+            .. code-block:: python
+
+                compute.run_hetjob(
+                    context,
+                    assets=[
+                        ("prep", "prep.py", {"nodes": 1, "cpus_per_task": 8, "mem": "32G"}),
+                        ("train", "train.py", {"nodes": 4, "cpus_per_task": 32, "mem": "128G", "gpus_per_node": 2}),
+                        ("infer", "infer.py", {"nodes": 8, "cpus_per_task": 16, "mem": "64G", "gpus_per_node": 1}),
+                    ],
+                    launchers={
+                        "train": RayLauncher(num_gpus_per_node=2),
+                        "infer": RayLauncher(num_gpus_per_node=1),
+                    }
+                )
+
         """
         if self.mode != ExecutionMode.SLURM_HETJOB:
             raise ValueError("run_hetjob only supported in slurm-hetjob mode")
@@ -438,7 +446,6 @@ class ComputeResource(ConfigurableResource):
                 ssh_pool.upload_file(payload_path, remote_payload)
 
                 # Generate execution script for this component
-                from ..launchers.base import ExecutionPlan
 
                 # Create fake pipes context for this component
                 pipes_context = {
@@ -546,8 +553,7 @@ class ComputeResource(ConfigurableResource):
         requirements: Dict[str, Any],
         context,
     ) -> Optional[str]:
-        """
-        Get existing cluster if resources match, otherwise return None to create new.
+        """Get existing cluster if resources match, otherwise return None to create new.
 
         Args:
             launcher: Launcher for this asset
@@ -556,6 +562,7 @@ class ComputeResource(ConfigurableResource):
 
         Returns:
             Cluster address if reusable cluster found, None otherwise
+
         """
         if not self.enable_cluster_reuse:
             return None
@@ -604,8 +611,7 @@ class ComputeResource(ConfigurableResource):
         gpus: int,
         memory_gb: int,
     ):
-        """
-        Register a newly created cluster for future reuse.
+        """Register a newly created cluster for future reuse.
 
         Args:
             cluster_address: Address of the cluster (e.g., "10.0.0.1:6379")
@@ -613,6 +619,7 @@ class ComputeResource(ConfigurableResource):
             cpus: Total CPUs in cluster
             gpus: Total GPUs in cluster
             memory_gb: Total memory in GB
+
         """
         if not self.enable_cluster_reuse:
             return
@@ -636,8 +643,7 @@ class ComputeResource(ConfigurableResource):
         )
 
     def teardown(self, context: InitResourceContext):
-        """
-        Teardown method called by Dagster at end of run.
+        """Teardown method called by Dagster at end of run.
         Ensures session resources and clusters are cleaned up.
         """
         logger = get_dagster_logger()

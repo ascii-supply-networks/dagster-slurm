@@ -1,22 +1,22 @@
 """Slurm session management for operator fusion."""
 
 import re
-from loguru import logger
-import shlex
-import time
 import threading
-from typing import Dict, List, Optional, Any, Set
+import time
+from typing import List, Optional, Set
+
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
-from ..helpers.ssh_pool import SSHConnectionPool
+from loguru import logger
+from pydantic import Field, PrivateAttr
+
 from ..helpers.ssh_helpers import TERMINAL_STATES
+from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ExecutionPlan
 from ..resources.slurm import SlurmResource
-from pydantic import Field, PrivateAttr
 
 
 class SlurmSessionResource(ConfigurableResource):
-    """
-    Slurm session resource for operator fusion.
+    """Slurm session resource for operator fusion.
 
     This is a proper Dagster resource that manages the lifecycle
     of a Slurm allocation across multiple assets in a run.
@@ -50,8 +50,7 @@ class SlurmSessionResource(ConfigurableResource):
     def setup_for_execution(
         self, context: InitResourceContext
     ) -> "SlurmSessionResource":
-        """
-        Called by Dagster when resource is initialized for a run.
+        """Called by Dagster when resource is initialized for a run.
         This is the proper Dagster resource lifecycle hook.
         """
         if self._initialized:
@@ -80,8 +79,7 @@ class SlurmSessionResource(ConfigurableResource):
         return self
 
     def teardown_after_execution(self, context: InitResourceContext) -> None:
-        """
-        Called by Dagster when resource is torn down after run completion.
+        """Called by Dagster when resource is torn down after run completion.
         This is the proper Dagster resource lifecycle hook.
         """
         if not self._initialized:
@@ -112,8 +110,7 @@ class SlurmSessionResource(ConfigurableResource):
         execution_plan: ExecutionPlan,
         asset_key: str,
     ) -> int:
-        """
-        Execute workload in the shared allocation.
+        """Execute workload in the shared allocation.
         Thread-safe for parallel asset execution.
         """
         if not self._initialized:
@@ -278,7 +275,6 @@ class SlurmAllocation:
         ssh_pool: SSHConnectionPool,
     ) -> int:
         """Execute plan in this allocation via srun."""
-
         if execution_plan.kind != "shell_script":
             raise ValueError(
                 f"Session mode only supports shell_script plans, got {execution_plan.kind}"
@@ -359,9 +355,7 @@ class SlurmAllocation:
 
 
 class SessionResourcePool:
-    """
-    Manages reusable Ray/Spark clusters in session mode.
-    """
+    """Manages reusable Ray/Spark clusters in session mode."""
 
     def __init__(
         self,
@@ -380,8 +374,7 @@ class SessionResourcePool:
         required_gpus: int,
         required_memory_gb: int,
     ):
-        """
-        Get existing Ray cluster if resources are close enough,
+        """Get existing Ray cluster if resources are close enough,
         otherwise create new one.
         """
         # Check if we have a compatible cluster

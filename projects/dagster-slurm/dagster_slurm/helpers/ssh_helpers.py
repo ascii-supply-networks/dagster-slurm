@@ -16,14 +16,13 @@ TERMINAL_STATES = {
 
 
 def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
-    """
-    Run SSH command via connection pool, return (stdout, stderr, returncode).
+    """Run SSH command via connection pool, return (stdout, stderr, returncode).
 
     Note: This is a legacy function for compatibility.
     New code should use SSHConnectionPool directly.
     """
-    import subprocess
     import shlex
+    import subprocess
 
     remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
 
@@ -50,8 +49,7 @@ def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
 
 
 def ssh_check(cmd: str, ssh_resource) -> str:
-    """
-    Run SSH command, raise on failure.
+    """Run SSH command, raise on failure.
 
     Note: This is a legacy function for compatibility.
     New code should use SSHConnectionPool directly.

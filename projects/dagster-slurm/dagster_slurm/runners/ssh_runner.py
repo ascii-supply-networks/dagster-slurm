@@ -5,23 +5,23 @@ import re
 import shlex
 import time
 from typing import List
+
 from dagster import get_dagster_logger
+
 from ..helpers.ssh_helpers import (
-    ssh_check,
-    ssh_run,
-    scp_put,
-    ssh_write_file,
-    ssh_mkdir,
-    ssh_job_state,
     TERMINAL_STATES,
+    scp_put,
+    ssh_check,
+    ssh_job_state,
+    ssh_mkdir,
+    ssh_write_file,
 )
-from .base import Runner
 from ..resources.ssh import SSHConnectionResource
+from .base import Runner
 
 
 class SSHRunner(Runner):
-    """
-    Executes scripts on remote Slurm cluster via SSH.
+    """Executes scripts on remote Slurm cluster via SSH.
     Used for staging/prod modes.
     """
 

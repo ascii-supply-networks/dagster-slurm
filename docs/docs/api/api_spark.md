@@ -9,4 +9,7 @@ This section covers the main components of the library.
 
 <a id="module-dagster_slurm_spark"></a>
 
-### dagster_slurm_spark.hello_spark() → str
+### dagster_slurm_spark.hello_spark()
+
+* **Return type:**
+  `str`

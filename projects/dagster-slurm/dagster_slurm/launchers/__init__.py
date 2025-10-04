@@ -1,8 +1,8 @@
 """Workload launchers."""
 
 from .base import ComputeLauncher, ExecutionPlan
-from .script import BashLauncher
 from .ray import RayLauncher
+from .script import BashLauncher
 from .spark import SparkLauncher
 
 __all__ = [

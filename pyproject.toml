@@ -56,6 +56,8 @@ bun = ">=1.2.19,<2"
 sphinx = "~=8.2.3"
 [tool.pixi.feature.docs.pypi-dependencies]
 sphinx-rtd-theme = "~=3.0.2"
+autodoc-pydantic = "~=2.2.0"
+sphinx-autodoc-typehints = "~=3.2.0"
 myst-parser = "~=4.0.1"
 sphinx-markdown-builder = ">=0.6.8,<1"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }

@@ -1,26 +1,26 @@
 """Local Pipes client for dev mode."""
 
-import sys
 import os
+import sys
 import uuid
-import shutil
 from pathlib import Path
-from typing import Dict, Optional, Any, Iterator
+from typing import Any, Dict, Iterator, Optional
+
 from dagster import (
     AssetExecutionContext,
     PipesClient,
     PipesEnvContextInjector,
-    open_pipes_session,
     get_dagster_logger,
+    open_pipes_session,
 )
-from ..runners.local_runner import LocalRunner
-from ..launchers.base import ComputeLauncher
+
 from ..helpers.message_readers import LocalMessageReader
+from ..launchers.base import ComputeLauncher
+from ..runners.local_runner import LocalRunner
 
 
 class LocalPipesClient(PipesClient):
-    """
-    Pipes client for local execution (dev mode).
+    """Pipes client for local execution (dev mode).
     No SSH, no Slurm - just runs scripts locally via subprocess.
     """
 
@@ -30,11 +30,11 @@ class LocalPipesClient(PipesClient):
         base_dir: str = "/tmp/dagster_local_runs",
         require_pixi: bool = True,
     ):
-        """
-        Args:
-            launcher: Launcher to generate execution plans
-            base_dir: Base directory for run artifacts
-            require_pixi: Require active pixi environment
+        """Args:
+        launcher: Launcher to generate execution plans
+        base_dir: Base directory for run artifacts
+        require_pixi: Require active pixi environment.
+
         """
         super().__init__()
         self.launcher = launcher
@@ -64,8 +64,7 @@ class LocalPipesClient(PipesClient):
         extras: Optional[Dict[str, Any]] = None,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
     ) -> Iterator:
-        """
-        Execute payload locally.
+        """Execute payload locally.
 
         Args:
             context: Dagster execution context
@@ -76,6 +75,7 @@ class LocalPipesClient(PipesClient):
 
         Yields:
             Dagster events (materializations, logs, etc.)
+
         """
         # Use current Python by default
         if python_executable is None:

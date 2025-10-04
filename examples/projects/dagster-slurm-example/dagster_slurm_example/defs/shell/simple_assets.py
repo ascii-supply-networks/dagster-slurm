@@ -20,8 +20,7 @@ def process_data(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
 ) -> dg.Output:
-    """
-    Process data using bash script.
+    """Process data using bash script.
     Works in all modes (dev/staging/prod) without code changes.
     """
     # Path to your processing script

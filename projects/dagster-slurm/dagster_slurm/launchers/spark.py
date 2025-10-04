@@ -1,15 +1,17 @@
 """Apache Spark launcher."""
 
 import shlex
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
+
 from pydantic import Field
-from .base import ComputeLauncher, ExecutionPlan
+
 from dagster_slurm.config.runtime import RuntimeVariant
+
+from .base import ComputeLauncher, ExecutionPlan
 
 
 class SparkLauncher(ComputeLauncher):
-    """
-    Apache Spark launcher.
+    """Apache Spark launcher.
 
     Modes:
     - Local: Single-node Spark (no allocation_context)
@@ -42,11 +44,10 @@ class SparkLauncher(ComputeLauncher):
         activation_script: Optional[str] = None,
     ) -> ExecutionPlan:
         """Generate Spark execution plan."""
-
         messages_path = f"{working_dir}/messages.jsonl"
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
 
-        python_quoted = shlex.quote(python_executable)
+        shlex.quote(python_executable)
         payload_quoted = shlex.quote(payload_path)
         spark_home_quoted = shlex.quote(self.spark_home)
 
@@ -156,7 +157,6 @@ exit $exit_code
         date_fmt: str,
     ) -> str:
         """Generate Spark cluster startup for Slurm allocation."""
-
         nodes = allocation_context.get("nodes", [])
         head_node = allocation_context.get(
             "head_node", nodes[0] if nodes else "localhost"

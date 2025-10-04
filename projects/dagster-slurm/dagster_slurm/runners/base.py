@@ -5,8 +5,7 @@ from typing import List
 
 
 class Runner(ABC):
-    """
-    Abstract base for execution runners.
+    """Abstract base for execution runners.
 
     Runners handle the "how" of execution:
     - LocalRunner: subprocess on local machine
@@ -22,8 +21,7 @@ class Runner(ABC):
         working_dir: str,
         wait: bool = True,
     ) -> int:
-        """
-        Execute a shell script.
+        """Execute a shell script.
 
         Args:
             script_lines: Bash script lines (including shebang)
@@ -32,13 +30,13 @@ class Runner(ABC):
 
         Returns:
             Job/process ID
+
         """
         pass
 
     @abstractmethod
     def upload_file(self, local_path: str, remote_path: str) -> None:
-        """
-        Upload file to execution environment.
+        """Upload file to execution environment.
 
         For LocalRunner: copy within filesystem
         For remote: handled by SSHConnectionPool

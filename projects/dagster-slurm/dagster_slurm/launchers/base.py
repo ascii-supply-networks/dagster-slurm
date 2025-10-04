@@ -1,6 +1,8 @@
-from typing import Dict, Optional, Any
-from dagster import ConfigurableResource
 from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+from dagster import ConfigurableResource
+
 from ..config.runtime import RuntimeVariant
 
 
@@ -28,8 +30,7 @@ class ComputeLauncher(ConfigurableResource):
         allocation_context: Optional[Dict[str, Any]] = None,
         activation_script: Optional[str] = None,
     ) -> ExecutionPlan:
-        """
-        Prepare execution plan.
+        """Prepare execution plan.
 
         Args:
             payload_path: Path to Python script on remote
@@ -42,5 +43,6 @@ class ComputeLauncher(ConfigurableResource):
 
         Returns:
             ExecutionPlan with script and metadata
+
         """
         raise NotImplementedError

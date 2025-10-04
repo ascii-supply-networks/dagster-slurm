@@ -1,38 +1,36 @@
 """Slurm Pipes client for remote execution."""
 
-import uuid
-import shutil
 import platform
-import subprocess
-import sys
-import time
-import threading
 import re
 import signal
+import subprocess
+import sys
+import threading
+import time
+import uuid
 from pathlib import Path
-from typing import Dict, Optional, Any, Iterator
+from typing import Any, Dict, Iterator, Optional
+
 from dagster import (
     AssetExecutionContext,
     PipesClient,
     PipesEnvContextInjector,
-    open_pipes_session,
     get_dagster_logger,
+    open_pipes_session,
 )
-from ..launchers.base import ComputeLauncher
-from ..helpers.message_readers import SSHMessageReader
+
 from ..helpers.env_packaging import pack_environment_with_pixi
+from ..helpers.message_readers import SSHMessageReader
 from ..helpers.metrics import SlurmMetricsCollector
-from ..helpers.ssh_pool import SSHConnectionPool
 from ..helpers.ssh_helpers import TERMINAL_STATES
-from ..resources.slurm import SlurmResource
+from ..helpers.ssh_pool import SSHConnectionPool
+from ..launchers.base import ComputeLauncher
 from ..resources.session import SlurmSessionResource
-from dagster_slurm.config.runtime import RuntimeVariant
-import dagster as dg
+from ..resources.slurm import SlurmResource
 
 
 class SlurmPipesClient(PipesClient):
-    """
-    Pipes client for Slurm execution with real-time log streaming and cancellation support.
+    """Pipes client for Slurm execution with real-time log streaming and cancellation support.
 
     Features:
     - Real-time stdout/stderr streaming to Dagster logs
@@ -56,15 +54,15 @@ class SlurmPipesClient(PipesClient):
         auto_detect_platform: bool = True,
         pack_platform: Optional[str] = None,
     ):
-        """
-        Args:
-            slurm_resource: Slurm cluster configuration
-            launcher: Launcher to generate execution plans
-            session_resource: Optional session resource for operator fusion
-            cleanup_on_failure: Whether to cleanup remote files on failure
-            debug_mode: If True, never cleanup files (for debugging)
-            auto_detect_platform: Auto-detect platform (ARM vs x86) for pixi pack
-            pack_platform: Override platform ('linux-64', 'linux-aarch64', 'osx-arm64')
+        """Args:
+        slurm_resource: Slurm cluster configuration
+        launcher: Launcher to generate execution plans
+        session_resource: Optional session resource for operator fusion
+        cleanup_on_failure: Whether to cleanup remote files on failure
+        debug_mode: If True, never cleanup files (for debugging)
+        auto_detect_platform: Auto-detect platform (ARM vs x86) for pixi pack
+        pack_platform: Override platform ('linux-64', 'linux-aarch64', 'osx-arm64').
+
         """
         super().__init__()
         self.slurm = slurm_resource
@@ -92,8 +90,7 @@ class SlurmPipesClient(PipesClient):
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Iterator:
-        """
-        Execute payload on Slurm cluster with real-time log streaming.
+        """Execute payload on Slurm cluster with real-time log streaming.
 
         Args:
             context: Dagster execution context
@@ -107,6 +104,7 @@ class SlurmPipesClient(PipesClient):
 
         Yields:
             Dagster events
+
         """
         run_id = context.run_id or uuid.uuid4().hex
 
@@ -307,11 +305,11 @@ class SlurmPipesClient(PipesClient):
             self._cancellation_requested = False
 
     def _cancel_slurm_job(self, job_id: int):
-        """
-        Cancel a Slurm job.
+        """Cancel a Slurm job.
 
         Args:
             job_id: Slurm job ID to cancel
+
         """
         if not self._ssh_pool:
             self.logger.warning(f"Cannot cancel job {job_id}: no SSH connection")
@@ -394,8 +392,8 @@ class SlurmPipesClient(PipesClient):
 
         try:
             ssh_pool.run(verify_cmd)
-            ls_result = ssh_pool.run(f"ls -la {run_dir}")
-            self.logger.info(f"Environment extracted successfully")
+            ssh_pool.run(f"ls -la {run_dir}")
+            self.logger.info("Environment extracted successfully")
 
             # Test activation
             test_activate = ssh_pool.run(
@@ -446,18 +444,19 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
     ) -> int:
-        """
-        Execute as standalone sbatch job with real-time log streaming.
+        """Execute as standalone sbatch job with real-time log streaming.
 
         Args:
             execution_plan: Execution plan from launcher
             run_dir: Remote working directory
             ssh_pool: SSH connection pool
             extra_slurm_opts: Optional Slurm option overrides
+
         """
-        from ..config.runtime import RuntimeVariant
         import tempfile
         from pathlib import Path
+
+        from ..config.runtime import RuntimeVariant
 
         # Determine node count
         if extra_slurm_opts and "nodes" in extra_slurm_opts:
@@ -571,7 +570,7 @@ class SlurmPipesClient(PipesClient):
             ssh_pool.run(f"chmod +x {script_path}")
         except Exception as e:
             self.logger.error(f"Failed to chmod job script: {e}")
-            raise RuntimeError(f"Could not make job script executable") from e
+            raise RuntimeError("Could not make job script executable") from e
 
         # Build sbatch command
         sbatch_cmd = self._build_sbatch_command(
@@ -614,8 +613,7 @@ class SlurmPipesClient(PipesClient):
         script_path: str,
         extra_opts: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Build sbatch submission command.
+        """Build sbatch submission command.
 
         Uses SlurmQueueConfig as defaults, which can be overridden by extra_opts.
 
@@ -635,6 +633,7 @@ class SlurmPipesClient(PipesClient):
 
         Returns:
             Complete sbatch command string
+
         """
         sbatch_opts = [
             f"-J {job_name}",
@@ -687,8 +686,7 @@ class SlurmPipesClient(PipesClient):
         run_dir: str,
         poll_timeout: int = 3600,
     ):
-        """
-        Wait for job completion while streaming stdout/stderr and robustly
+        """Wait for job completion while streaming stdout/stderr and robustly
         polling the job state.
         """
         self.logger.info(f"Waiting for job {job_id} with live log streaming...")
@@ -867,14 +865,14 @@ class SlurmPipesClient(PipesClient):
             self._current_job_id = None
 
     def _build_tail_command(self, remote_path: str) -> list[str]:
-        """
-        Build SSH tail command for streaming logs.
+        """Build SSH tail command for streaming logs.
 
         Args:
             remote_path: Remote file path to tail
 
         Returns:
             Command list for subprocess.Popen
+
         """
         cmd = [
             "ssh",

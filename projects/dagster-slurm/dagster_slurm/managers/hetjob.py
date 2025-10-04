@@ -2,11 +2,13 @@
 
 import re
 import time
-from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Dict, List, Optional
+
 from dagster import get_dagster_logger
-from ..helpers.ssh_pool import SSHConnectionPool
+
 from ..helpers.ssh_helpers import TERMINAL_STATES
+from ..helpers.ssh_pool import SSHConnectionPool
 from ..resources.slurm import SlurmResource
 
 
@@ -25,8 +27,7 @@ class HetJobComponent:
 
 
 class HeterogeneousJobManager:
-    """
-    Manages Slurm heterogeneous jobs.
+    """Manages Slurm heterogeneous jobs.
 
     Submits multiple resource configurations in ONE sbatch,
     avoiding multiple queue waits.
@@ -42,6 +43,7 @@ class HeterogeneousJobManager:
 
         job_id = manager.submit_heterogeneous_job(components, "ml_pipeline")
         manager.wait_for_completion(job_id)
+
     """
 
     def __init__(
@@ -50,11 +52,11 @@ class HeterogeneousJobManager:
         ssh_pool: SSHConnectionPool,
         working_dir: str,
     ):
-        """
-        Args:
-            slurm_resource: Slurm configuration
-            ssh_pool: Active SSH connection pool
-            working_dir: Remote working directory
+        """Args:
+        slurm_resource: Slurm configuration
+        ssh_pool: Active SSH connection pool
+        working_dir: Remote working directory.
+
         """
         self.slurm = slurm_resource
         self.ssh_pool = ssh_pool
@@ -66,8 +68,7 @@ class HeterogeneousJobManager:
         components: List[HetJobComponent],
         job_name: str,
     ) -> int:
-        """
-        Submit heterogeneous job with multiple resource configurations.
+        """Submit heterogeneous job with multiple resource configurations.
         
         Args:
             components: List of job components with different resources
@@ -81,8 +82,8 @@ class HeterogeneousJobManager:
                    --het-group=1 --nodes=1 --mem=32G : \
                    --het-group=2 --nodes=8 --gres=gpu:1 --mem=64G \
                    wrapper_script.sh
-        """
 
+        """
         if not components:
             raise ValueError("Must provide at least one component")
 
@@ -162,8 +163,7 @@ class HeterogeneousJobManager:
         return job_id
 
     def _generate_wrapper_script(self, components: List[HetJobComponent]) -> str:
-        """
-        Generate wrapper script that runs each component on its allocated resources.
+        """Generate wrapper script that runs each component on its allocated resources.
 
         Uses SLURM_HET_SIZE and SLURM_PROCID to dispatch to correct component.
 
@@ -174,7 +174,6 @@ class HeterogeneousJobManager:
         - SLURM_JOB_NODELIST: Nodes allocated to this component
         - SLURM_JOB_NUM_NODES: Number of nodes in this component
         """
-
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
 
         script = f"""#!/bin/bash
@@ -246,8 +245,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
         poll_interval: int = 5,
         timeout: Optional[int] = None,
     ):
-        """
-        Wait for heterogeneous job to complete.
+        """Wait for heterogeneous job to complete.
 
         Args:
             job_id: Slurm job ID
@@ -256,6 +254,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
 
         Raises:
             RuntimeError: If job fails or times out
+
         """
         self.logger.info(f"Waiting for heterogeneous job {job_id} to complete...")
 
@@ -297,14 +296,14 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
             time.sleep(poll_interval)
 
     def _get_job_state(self, job_id: int) -> str:
-        """
-        Query job state from Slurm.
+        """Query job state from Slurm.
 
         Args:
             job_id: Slurm job ID
 
         Returns:
             Job state string (e.g., "RUNNING", "COMPLETED", "FAILED")
+
         """
         try:
             # Try squeue first (for running jobs)
@@ -327,11 +326,11 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
             return ""
 
     def _log_failure_details(self, job_id: int):
-        """
-        Log detailed information about failed job.
+        """Log detailed information about failed job.
 
         Args:
             job_id: Slurm job ID
+
         """
         try:
             # Get job details from sacct
@@ -378,14 +377,14 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
             self.logger.warning(f"Could not retrieve failure details: {e}")
 
     def get_component_logs(self, job_id: int) -> Dict[int, str]:
-        """
-        Retrieve logs from all components.
+        """Retrieve logs from all components.
 
         Args:
             job_id: Slurm job ID
 
         Returns:
             Dict mapping component ID to log content
+
         """
         logs = {}
 
@@ -403,11 +402,11 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
         return logs
 
     def cancel_job(self, job_id: int):
-        """
-        Cancel a running heterogeneous job.
+        """Cancel a running heterogeneous job.
 
         Args:
             job_id: Slurm job ID
+
         """
         self.logger.info(f"Canceling heterogeneous job {job_id}")
         try:

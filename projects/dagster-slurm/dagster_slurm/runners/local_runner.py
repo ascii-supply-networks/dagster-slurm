@@ -1,18 +1,18 @@
 """Local execution runner."""
 
 import os
-import subprocess
-import shlex
 import shutil
+import subprocess
 from pathlib import Path
 from typing import List
+
 from dagster import get_dagster_logger
+
 from .base import Runner
 
 
 class LocalRunner(Runner):
-    """
-    Executes scripts locally via subprocess.
+    """Executes scripts locally via subprocess.
     Used for dev mode - no SSH, no Slurm.
     """
 
@@ -26,8 +26,7 @@ class LocalRunner(Runner):
         working_dir: str,
         wait: bool = True,
     ) -> int:
-        """
-        Execute shell script locally.
+        """Execute shell script locally.
 
         Args:
             script_lines: Bash script lines (including shebang)
@@ -36,6 +35,7 @@ class LocalRunner(Runner):
 
         Returns:
             Process ID
+
         """
         # Ensure working dir exists
         Path(working_dir).mkdir(parents=True, exist_ok=True)

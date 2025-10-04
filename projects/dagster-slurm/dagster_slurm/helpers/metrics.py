@@ -2,9 +2,8 @@
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+
 from dagster import get_dagster_logger
-from .ssh_helpers import ssh_check
 
 
 @dataclass
@@ -32,8 +31,7 @@ class SlurmMetricsCollector:
         job_id: int,
         ssh_pool,
     ) -> SlurmJobMetrics:
-        """
-        Query sacct for detailed job statistics.
+        """Query sacct for detailed job statistics.
 
         Args:
             job_id: Slurm job ID
@@ -41,6 +39,7 @@ class SlurmMetricsCollector:
 
         Returns:
             SlurmJobMetrics with detailed stats
+
         """
         cmd = (
             f"sacct -j {job_id} -X -n -P "
@@ -90,9 +89,8 @@ class SlurmMetricsCollector:
             return self._empty_metrics(job_id)
 
     def _parse_time(self, time_str: str) -> float:
-        """
-        Parse Slurm time format to seconds.
-        Formats: MM:SS, HH:MM:SS, DD-HH:MM:SS
+        """Parse Slurm time format to seconds.
+        Formats: MM:SS, HH:MM:SS, DD-HH:MM:SS.
         """
         if not time_str or time_str == "00:00:00":
             return 0.0
@@ -119,9 +117,8 @@ class SlurmMetricsCollector:
         return float(total_seconds)
 
     def _parse_memory(self, mem_str: str) -> float:
-        """
-        Parse Slurm memory format to MB.
-        Formats: 1234K, 1234M, 1234G, 1234T
+        """Parse Slurm memory format to MB.
+        Formats: 1234K, 1234M, 1234G, 1234T.
         """
         if not mem_str:
             return 0.0

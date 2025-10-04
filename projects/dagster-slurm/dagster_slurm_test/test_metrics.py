@@ -1,7 +1,6 @@
 """Tests for metrics collection."""
 
-import pytest
-from dagster_slurm.helpers.metrics import SlurmMetricsCollector, SlurmJobMetrics
+from dagster_slurm.helpers.metrics import SlurmMetricsCollector
 
 
 def test_parse_time():

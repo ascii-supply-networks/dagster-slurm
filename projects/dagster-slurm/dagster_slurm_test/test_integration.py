@@ -1,15 +1,12 @@
 """Integration tests."""
 
-import pytest
-from pathlib import Path
 from dagster import AssetExecutionContext, asset, materialize
-from dagster_slurm import ComputeResource, BashLauncher
+from dagster_slurm import ComputeResource
 from dagster_slurm.config.environment import ExecutionMode
 
 
 def test_local_asset_execution(temp_dir):
     """Test complete local asset execution."""
-
     # Create test payload
     payload = temp_dir / "test_payload.py"
     payload.write_text("""
@@ -41,7 +38,6 @@ with open_dagster_pipes() as context:
 
 def test_bash_launcher_integration(temp_dir):
     """Test bash launcher integration."""
-
     payload = temp_dir / "bash_payload.py"
     payload.write_text("""
 import os

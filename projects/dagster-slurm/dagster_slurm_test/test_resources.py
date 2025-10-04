@@ -1,12 +1,11 @@
 """Tests for resources."""
 
 import pytest
-import os
 from dagster_slurm import (
-    SSHConnectionResource,
-    SlurmResource,
-    SlurmQueueConfig,
     ComputeResource,
+    SlurmQueueConfig,
+    SlurmResource,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
 
@@ -110,8 +109,6 @@ def test_compute_resource_validation():
 
 """Tests for runners."""
 
-import pytest
-from pathlib import Path
 from dagster_slurm.runners import LocalRunner
 
 

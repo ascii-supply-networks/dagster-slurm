@@ -8,8 +8,7 @@ class Environment(StrEnum):
 
 
 class ExecutionMode(StrEnum):
-    """
-    Defines the execution modes for the application.
+    """Defines the execution modes for the application.
     Members of this enum behave like strings.
     """
 
