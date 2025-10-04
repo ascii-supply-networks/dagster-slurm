@@ -42,6 +42,7 @@ explore = { features = ["build", "explore"], solve-group = "explore" }
 [tool.pixi.feature.build.pypi-dependencies]
 uv = ">=0.8.6"
 build = ">=1.3.0"
+dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 
 [tool.pixi.feature.explore.dependencies]
 ipykernel = "~=6.29"
@@ -69,7 +70,7 @@ clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
-lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects", description = "Lint" }
+lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects --python-interpreter $PIXI_PROJECT_ROOT/.pixi/envs/build/bin/python3.12", description = "Lint" }
 test = { cmd = "uv run -- pytest projects", description = "Run all unit tests" }
 
 [tool.pixi.feature.build.tasks.sync]
