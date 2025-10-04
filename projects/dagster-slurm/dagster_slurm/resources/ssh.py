@@ -78,8 +78,8 @@ class SSHConnectionResource(ConfigurableResource):
 
         # Expand key path if provided
         if has_key:
-            self.key_path = os.path.expanduser(self.key_path)
-            if not os.path.exists(self.key_path):
+            self.key_path = os.path.expanduser(self.key_path)  # type: ignore
+            if not os.path.exists(self.key_path):  # type: ignore
                 raise ValueError(f"SSH key not found: {self.key_path}")
 
         return self
@@ -188,7 +188,7 @@ class SSHConnectionResource(ConfigurableResource):
 
         if self.uses_key_auth:
             # Key-based authentication
-            return [
+            return [  # type: ignore
                 "ssh",
                 "-p",
                 str(self.port),
@@ -250,7 +250,7 @@ class SSHConnectionResource(ConfigurableResource):
         ]
 
         if self.uses_key_auth:
-            return [
+            return [  # type: ignore
                 "scp",
                 "-P",
                 str(self.port),

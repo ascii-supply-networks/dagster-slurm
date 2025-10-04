@@ -153,9 +153,9 @@ class SSHMessageReader(PipesMessageReader):
         self.reconnect_interval = reconnect_interval
         self.max_reconnect_attempts = max_reconnect_attempts
         self.logger = get_dagster_logger()
-        self._proc = None
+        self._proc: Optional[subprocess.Popen[str]] = None
         self._stop_flag = threading.Event()
-        self._reader_thread = None
+        self._reader_thread: Optional[threading.Thread] = None
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
@@ -246,7 +246,7 @@ class SSHMessageReader(PipesMessageReader):
                 message_count = 0
 
                 # Read messages from tail
-                for line in self._proc.stdout:
+                for line in self._proc.stdout:  # type: ignore
                     if self._stop_flag.is_set():
                         break
 

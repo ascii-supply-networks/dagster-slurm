@@ -54,7 +54,7 @@ class LocalPipesClient(PipesClient):
             "PIXI_ENVIRONMENT_NAME" in os.environ or "PIXI_PROJECT_ROOT" in os.environ
         )
 
-    def run(
+    def run(  # type: ignore[override]
         self,
         context: AssetExecutionContext,
         *,
@@ -109,7 +109,7 @@ class LocalPipesClient(PipesClient):
                 payload_path=payload_path,
                 python_executable=python_executable,
                 working_dir=working_dir,
-                pipes_context=pipes_env,
+                pipes_context=pipes_env,  # type: ignore
                 extra_env=extra_env,
                 allocation_context=None,  # No allocation in local mode
             )

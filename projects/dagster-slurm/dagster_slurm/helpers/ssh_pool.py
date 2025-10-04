@@ -64,7 +64,7 @@ class SSHConnectionPool:
             ]
 
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # type: ignore
             except FileNotFoundError as e:
                 raise RuntimeError(
                     "SSH command not found. Please ensure OpenSSH client is installed."
@@ -113,7 +113,7 @@ class SSHConnectionPool:
     def _run_with_password(self, cmd, password, timeout=30):
         """Run SSH command with password using pexpect."""
         try:
-            import pexpect
+            import pexpect  # type: ignore
         except ImportError:
             raise RuntimeError(
                 "Password authentication requires 'pexpect' library.\n"

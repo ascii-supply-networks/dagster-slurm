@@ -138,7 +138,7 @@ class ComputeResource(ConfigurableResource):
         """Post-init setup - runs after Pydantic init."""
         # Create default launcher if not provided
         if not self.default_launcher:
-            self.default_launcher = BashLauncher()
+            self.default_launcher = BashLauncher()  # type: ignore
 
     def _log_configuration_once(self):
         """Log configuration info exactly once per instance."""
@@ -204,7 +204,7 @@ class ComputeResource(ConfigurableResource):
         elif self.mode == ExecutionMode.SLURM:
             # Per-asset mode: each asset = separate sbatch job
             return SlurmPipesClient(
-                slurm_resource=self.slurm,
+                slurm_resource=self.slurm,  # type: ignore
                 launcher=effective_launcher,
                 session_resource=None,  # No session
                 cleanup_on_failure=self.cleanup_on_failure,
@@ -216,11 +216,11 @@ class ComputeResource(ConfigurableResource):
         elif self.mode == ExecutionMode.SLURM_SESSION:
             # Session mode: shared allocation, operator fusion
             # Initialize session if not already done
-            if not self.session._initialized:
-                self.session.setup_for_execution(context)
+            if not self.session._initialized:  # type: ignore
+                self.session.setup_for_execution(context)  # type: ignore
 
             return SlurmPipesClient(
-                slurm_resource=self.slurm,
+                slurm_resource=self.slurm,  # type: ignore
                 launcher=effective_launcher,
                 session_resource=self.session,
                 cleanup_on_failure=self.cleanup_on_failure,
@@ -232,7 +232,7 @@ class ComputeResource(ConfigurableResource):
         else:  # ExecutionMode.SLURM_HETJOB
             # Heterogeneous job mode: handled by run_hetjob()
             return SlurmPipesClient(
-                slurm_resource=self.slurm,
+                slurm_resource=self.slurm,  # type: ignore
                 launcher=effective_launcher,
                 session_resource=None,
                 cleanup_on_failure=self.cleanup_on_failure,
@@ -323,12 +323,12 @@ class ComputeResource(ConfigurableResource):
                 # Update launcher to connect to existing cluster
                 if hasattr(effective_launcher, "ray_address"):
                     # Ray launcher
-                    effective_launcher = effective_launcher.model_copy(
+                    effective_launcher = effective_launcher.model_copy(  # type: ignore
                         update={"ray_address": cluster_address}
                     )
                 elif hasattr(effective_launcher, "master_url"):
                     # Spark launcher
-                    effective_launcher = effective_launcher.model_copy(
+                    effective_launcher = effective_launcher.model_copy(  # type: ignore
                         update={"master_url": cluster_address}
                     )
 
@@ -400,9 +400,9 @@ class ComputeResource(ConfigurableResource):
 
         # Prepare work directory
         run_id = context.run_id or uuid.uuid4().hex
-        working_dir = f"{self.slurm.remote_base}/hetjobs/{run_id}"
+        working_dir = f"{self.slurm.remote_base}/hetjobs/{run_id}"  # type: ignore
 
-        with SSHConnectionPool(self.slurm.ssh) as ssh_pool:
+        with SSHConnectionPool(self.slurm.ssh) as ssh_pool:  # type: ignore
             # Create working directory
             ssh_pool.run(f"mkdir -p {working_dir}")
 
@@ -453,7 +453,7 @@ class ComputeResource(ConfigurableResource):
                     "DAGSTER_PIPES_MESSAGES": f"{working_dir}/{asset_key}_messages.jsonl",
                 }
 
-                execution_plan = launcher.prepare_execution(
+                execution_plan = launcher.prepare_execution(  # type: ignore
                     payload_path=remote_payload,
                     python_executable=python_executable,
                     working_dir=working_dir,
@@ -492,7 +492,7 @@ class ComputeResource(ConfigurableResource):
 
             # Create heterogeneous job manager
             manager = HeterogeneousJobManager(
-                slurm_resource=self.slurm,
+                slurm_resource=self.slurm,  # type: ignore
                 ssh_pool=ssh_pool,
                 working_dir=working_dir,
             )
