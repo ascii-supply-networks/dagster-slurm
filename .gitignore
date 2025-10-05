@@ -1263,3 +1263,4 @@ slides/slides-export.pdf
 *.tar
 examples/activate.sh
 examples/environment.sh
+examples/deployment_metadata.json

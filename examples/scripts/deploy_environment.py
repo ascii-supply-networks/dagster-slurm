@@ -3,10 +3,12 @@ import os
 import subprocess
 import sys
 from loguru import logger
+import json
 
 from dagster_slurm import SSHConnectionResource
 from dagster_slurm.helpers.env_packaging import pack_environment_with_pixi
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
+from pathlib import Path
 
 def get_git_commit_hash() -> str:
     """Retrieves the current git commit hash."""
@@ -29,7 +31,13 @@ def main():
     parser.add_argument(
         "--platform",
         help="Specify the target platform for pixi pack (e.g., 'linux-aarch64', 'linux-64').",
-        default=None,
+        default="linux-64",
+    )
+    parser.add_argument(
+        "--output-json",
+        help="Path to write the deployment metadata JSON file.",
+        type=Path,
+        default="deployment_metadata.json",
     )
     args = parser.parse_args()
 
@@ -107,7 +115,21 @@ def main():
             ssh_pool.run(verify_cmd)
             logger.info("Environment extracted and verified successfully.")
 
-            print(deployment_path)
+            logger.info(f"Deployed to path: {deployment_path}")
+
+            metadata = {
+                "git_commit_full": commit_hash,
+                "git_commit_short": commit_hash[:7],
+                "deployment_path": deployment_path,
+                "platform": args.platform or "default",
+            }
+
+            print("xxxxyyy")
+            
+            with open(args.output_json, "w") as f:
+                json.dump(metadata, f, indent=2)
+            print("xxxx")
+            logger.info(f"Successfully wrote deployment metadata to {args.output_json}")
 
         except Exception as e:
             logger.error(f"Deployment failed: {e}")
