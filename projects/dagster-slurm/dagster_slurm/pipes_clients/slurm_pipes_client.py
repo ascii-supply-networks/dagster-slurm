@@ -53,6 +53,7 @@ class SlurmPipesClient(PipesClient):
         debug_mode: bool = False,
         auto_detect_platform: bool = True,
         pack_platform: Optional[str] = None,
+        pre_deployed_env_path: Optional[str] = None,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -78,6 +79,7 @@ class SlurmPipesClient(PipesClient):
         self._current_job_id = None
         self._ssh_pool = None
         self._cancellation_requested = False
+        self.pre_deployed_env_path = pre_deployed_env_path
 
     def run(  # type: ignore[override]
         self,
@@ -130,40 +132,58 @@ class SlurmPipesClient(PipesClient):
                 # Store control path for log streaming
                 self._control_path = ssh_pool.control_path  # type: ignore
 
-                # Pack environment using pixi
-                self.logger.info("Packing environment with pixi...")
-                pack_cmd = self._get_pack_command()
-                pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+                if self.pre_deployed_env_path:
+                    self.logger.info(
+                        f"PROD mode: Using pre-deployed environment at: {self.pre_deployed_env_path}"
+                    )
 
-                # Setup remote directories
-                remote_base = self._get_remote_base(run_id, ssh_pool)
-                run_dir = f"{remote_base}/runs/{run_id}"
-                messages_path = f"{run_dir}/messages.jsonl"
-                env_dir = f"{run_dir}/env"
+                    # Define paths based on the pre-deployed location
+                    env_base_dir = self.pre_deployed_env_path
+                    env_dir = f"{env_base_dir}/env"
+                    activation_script = f"{env_base_dir}/activate.sh"
+                    python_executable = f"{env_dir}/bin/python"
 
-                self.logger.debug(f"Creating remote directory: {run_dir}")
-                ssh_pool.run(f"mkdir -p {run_dir}")
-                ssh_pool.run(f"mkdir -p {env_dir}")
+                    # We still need a run-specific directory for logs, payload, etc.
+                    remote_base = self._get_remote_base(run_id, ssh_pool)
+                    run_dir = f"{remote_base}/runs/{run_id}"
+                    messages_path = f"{run_dir}/messages.jsonl"
+                    self.logger.debug(f"Creating remote run directory: {run_dir}")
+                    ssh_pool.run(f"mkdir -p {run_dir}")
+                else:
+                    # Pack environment using pixi
+                    self.logger.info("Packing environment with pixi...")
+                    pack_cmd = self._get_pack_command()
+                    pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
 
-                # Check for cancellation
-                if self._cancellation_requested:
-                    raise RuntimeError("Execution cancelled before job submission")
+                    # Setup remote directories
+                    remote_base = self._get_remote_base(run_id, ssh_pool)
+                    run_dir = f"{remote_base}/runs/{run_id}"
+                    messages_path = f"{run_dir}/messages.jsonl"
+                    env_dir = f"{run_dir}/env"
 
-                # Upload packed environment
-                self.logger.debug(f"Uploading environment to {run_dir}...")
-                remote_pack_file = f"{run_dir}/{pack_file.name}"
-                ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file)
+                    self.logger.debug(f"Creating remote directory: {run_dir}")
+                    ssh_pool.run(f"mkdir -p {run_dir}")
+                    ssh_pool.run(f"mkdir -p {env_dir}")
 
-                # Extract environment
-                self.logger.debug("Extracting environment on remote host...")
-                activation_script = self._extract_environment(
-                    ssh_pool=ssh_pool,
-                    pack_file_path=remote_pack_file,
-                    extract_dir=env_dir,
-                )
+                    # Check for cancellation
+                    if self._cancellation_requested:
+                        raise RuntimeError("Execution cancelled before job submission")
 
-                # Python executable from extracted environment
-                python_executable = f"{env_dir}/bin/python"
+                    # Upload packed environment
+                    self.logger.debug(f"Uploading environment to {run_dir}...")
+                    remote_pack_file = f"{run_dir}/{pack_file.name}"
+                    ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file)
+
+                    # Extract environment
+                    self.logger.debug("Extracting environment on remote host...")
+                    activation_script = self._extract_environment(
+                        ssh_pool=ssh_pool,
+                        pack_file_path=remote_pack_file,
+                        extract_dir=env_dir,
+                    )
+
+                    # Python executable from extracted environment
+                    python_executable = f"{env_dir}/bin/python"
 
                 # Upload payload
                 payload_name = Path(payload_path).name

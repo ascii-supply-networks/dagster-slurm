@@ -7,11 +7,12 @@ from dagster_slurm import (
     RayLauncher,
     SlurmQueueConfig,
     SlurmResource,
-    SlurmSessionResource,
+    # SlurmSessionResource,
     SparkLauncher,
     SSHConnectionResource,
 )
 from dagster_slurm.config.environment import Environment, ExecutionMode
+from loguru import logger
 
 
 def get_dagster_deployment_environment(
@@ -57,7 +58,7 @@ def get_resources():
                 ),
             ),
         }
-    elif deployment == Environment.STAGING:
+    elif deployment == Environment.STAGING_DOCKER:
         # Slurm per-asset: each asset = separate sbatch
         ssh_connection = SSHConnectionResource(
             host="localhost",
@@ -84,16 +85,6 @@ def get_resources():
                 # mem_per_cpu="4G",  # Alternative: memory per CPU instead of total mem
             ),
             # remote_base="/home/submitter/dagster",
-        )
-
-        session = SlurmSessionResource(
-            slurm=slurm,
-            num_nodes=2,
-            time_limit="01:00:00",
-            # partition="interactive",  # Override queue partition if needed
-            # max_concurrent_jobs=10,  # Limit concurrent srun jobs in session
-            # enable_health_checks=True,  # Monitor node health
-            # enable_session=True,  # Enable session mode for operator fusion
         )
 
         return {
@@ -127,15 +118,40 @@ def get_resources():
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
             ),
         }
-    elif deployment == Environment.PRODUCTION:
+    elif deployment == Environment.PRODUCTION_DOCKER:
+        # TODO: make other run variants!
         # Slurm session: shared allocation, operator fusion
-        slurm_base = SlurmResource.from_env()
+        pre_deployed_env_path = os.environ["DAGSTER_PROD_ENV_PATH"]
+        logger.info(
+            f"Production mode configured with pre-deployed env: {pre_deployed_env_path}"
+        )
+
         # Override for prod
         ssh_connection = SSHConnectionResource(
             host=os.environ["SLURM_EDGE_NODE"],
             port=int(os.environ["SLURM_EDGE_NODE_PORT"]),
             user=os.environ["SLURM_EDGE_NODE_USER"],
             password=os.environ["SLURM_EDGE_NODE_PASSWORD"],
+        )
+        slurm_base = SlurmResource(
+            ssh=ssh_connection,
+            queue=SlurmQueueConfig(
+                # partition="interactive",
+                num_nodes=2,
+                time_limit="00:30:00",
+                cpus=2,
+                gpus_per_node=0,
+                mem="4096M",
+                mem_per_cpu="",
+                # partition="gpu",  # Alternative: GPU partition
+                # num_nodes=4,  # For multi-node jobs
+                # time_limit="12:00:00",  # Longer jobs
+                # cpus=16,  # More CPUs per task
+                # gpus_per_node=2,  # Request GPUs
+                # mem="64G",  # More memory
+                # mem_per_cpu="4G",  # Alternative: memory per CPU instead of total mem
+            ),
+            # remote_base="/home/submitter/dagster",
         )
         slurm = slurm_base.model_copy(
             update={
@@ -145,7 +161,7 @@ def get_resources():
                         # "partition": "batch",
                         "time_limit": "4:00:00",
                         "cpus": 8,
-                        "mem": "64G",
+                        "mem": "8G",
                         "num_nodes": 2,
                         "gpus_per_node": 0,
                         # mem_per_cpu="",  # default (use mem instead)
@@ -154,20 +170,21 @@ def get_resources():
             }
         )
 
-        session = SlurmSessionResource(
-            slurm=slurm,
-            num_nodes=4,
-            time_limit="04:00:00",
-            enable_session=True,
-            # partition=None,  # default (uses queue.partition)
-            # max_concurrent_jobs=10,  # default
-            # enable_health_checks=True,  # default
-        )
+        # session = SlurmSessionResource(
+        #     slurm=slurm,
+        #     num_nodes=4,
+        #     time_limit="04:00:00",
+        #     enable_session=True,
+        #     # partition=None,  # default (uses queue.partition)
+        #     # max_concurrent_jobs=10,  # default
+        #     # enable_health_checks=True,  # default
+        # )
         return {
             "compute": ComputeResource(
-                mode=ExecutionMode.SLURM_SESSION,
+                mode=ExecutionMode.SLURM,
+                # mode=ExecutionMode.SLURM_SESSION,
                 slurm=slurm,
-                session=session,
+                # session=session,
                 default_launcher=BashLauncher(),
                 # enable_cluster_reuse=True,
                 # cluster_reuse_tolerance=0.2,
@@ -175,11 +192,13 @@ def get_resources():
                 # ONLY ENABLE this for local docker runs!
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
                 # pack_platform="linux-aarch64",  # Or explicitly override for testing
+                pre_deployed_env_path=pre_deployed_env_path,
             ),
             "compute_ray": ComputeResource(
-                mode=ExecutionMode.SLURM_SESSION,
+                mode=ExecutionMode.SLURM,
+                # mode=ExecutionMode.SLURM_SESSION,
                 slurm=slurm,
-                session=session,
+                # session=session,
                 default_launcher=RayLauncher(
                     # num_gpus_per_node=2,
                     dashboard_port=8265,
@@ -189,11 +208,13 @@ def get_resources():
                 # cluster_reuse_tolerance=0.2,
                 debug_mode=True,  # NEVER cleanup files
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
+                pre_deployed_env_path=pre_deployed_env_path,
             ),
             "compute_spark": ComputeResource(
-                mode=ExecutionMode.SLURM_SESSION,
+                mode=ExecutionMode.SLURM,
+                # mode=ExecutionMode.SLURM_SESSION,
                 slurm=slurm,
-                session=session,
+                # session=session,
                 default_launcher=SparkLauncher(
                     driver_memory="16g",
                     executor_memory="32g",
@@ -202,7 +223,9 @@ def get_resources():
                 # cluster_reuse_tolerance=0.2,
                 debug_mode=True,  # NEVER cleanup files
                 auto_detect_platform=True,  # Auto-detect ARM vs x86
+                pre_deployed_env_path=pre_deployed_env_path,
             ),
         }
+    # TODO: Add other environments (session, cluster reuse, hetjob; and real supercomputer)
     else:
         raise ValueError(f"Unknown DAGSTER_DEPLOYMENT: {deployment}")

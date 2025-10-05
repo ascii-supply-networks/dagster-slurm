@@ -116,17 +116,40 @@ create-dagster = "~=1.11.7"
 [tool.pixi.tasks.start]
 cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
-env = { DAGSTER_IS_DEV_CLI = "True" }
+env = { DAGSTER_IS_DEV_CLI = "True", DAGSTER_DEPLOYMENT = "development" }
 description = "Start dagster webserver in dev mode"
 
 [tool.pixi.tasks.start-staging]
 cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
-env = { DAGSTER_DEPLOYMENT = "staging" }
+env = { DAGSTER_DEPLOYMENT = "staging_docker" }
 description = "Start dagster webserver in staging mode"
 
+[tool.pixi.tasks.deploy-prod-docker]
+cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "production_docker" }
+description = "Package and deploy environment for HPC environment"
+
+[tool.pixi.tasks.deploy-prod-docker-aarch]
+cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --platform linux-aarch64"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "production_docker" }
+description = "Package and deploy ARM64 environment for HPC environment"
+
+
+[tasks.deploy-prod-aarch]
+description = "Packs and deploys the ARM64 production environment to the HPC cluster."
+cmd = "python scripts/deploy_environment.py --platform linux-aarch64"
+
 # TODO: for PROD mode we have to package and deploy OUT OF BAND! and need to create a task for this
-# TODO: Add PROD mode
+[tool.pixi.tasks.start-prod-docker]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "production_docker" }
+description = "Start dagster webserver in production mode"
+
+# TODO: add more launcher modes for the other variants
 
 # pixi run -e opstooling --frozen build-shared-library
 [tool.pixi.tasks.build-shared-library]

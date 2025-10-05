@@ -95,6 +95,10 @@ class ComputeResource(ConfigurableResource):
         default=None,
         description="Override platform for pack command: 'linux-64', 'linux-aarch64', 'osx-arm64'",
     )
+    pre_deployed_env_path: Optional[str] = Field(
+        default=None,
+        description="If set, uses a pre-deployed environment at this path instead of live packaging.",
+    )
 
     # Cluster reuse settings (session mode only)
     enable_cluster_reuse: bool = Field(
@@ -211,6 +215,7 @@ class ComputeResource(ConfigurableResource):
                 debug_mode=self.debug_mode,
                 auto_detect_platform=self.auto_detect_platform,
                 pack_platform=self.pack_platform,
+                pre_deployed_env_path=self.pre_deployed_env_path,
             )
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
@@ -227,6 +232,7 @@ class ComputeResource(ConfigurableResource):
                 debug_mode=self.debug_mode,
                 auto_detect_platform=self.auto_detect_platform,
                 pack_platform=self.pack_platform,
+                pre_deployed_env_path=self.pre_deployed_env_path,
             )
 
         else:  # ExecutionMode.SLURM_HETJOB
@@ -239,6 +245,7 @@ class ComputeResource(ConfigurableResource):
                 debug_mode=self.debug_mode,
                 auto_detect_platform=self.auto_detect_platform,
                 pack_platform=self.pack_platform,
+                pre_deployed_env_path=self.pre_deployed_env_path,
             )
 
     def run(
