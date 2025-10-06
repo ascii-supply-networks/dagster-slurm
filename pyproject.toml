@@ -64,8 +64,6 @@ sphinx-autodoc-typehints = "~=3.2.0"
 myst-parser = "~=4.0.1"
 sphinx-markdown-builder = ">=0.6.8,<1"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
-dagster-slurm-ray = { path = "./projects/dagster-slurm-ray", editable = true }
-dagster-slurm-spark = { path = "./projects/dagster-slurm-spark", editable = true }
 
 [tool.pixi.feature.build.tasks]
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
@@ -173,8 +171,6 @@ tag_format = "v$version"
 version_toml = [
   "pyproject.toml:project.version",
   "projects/dagster-slurm/pyproject.toml:project.version",
-  "projects/dagster-slurm-ray/pyproject.toml:project.version",
-  "projects/dagster-slurm-spark/pyproject.toml:project.version",
 ]
 build_command = "pixi update dagster-slurm && uv sync --all-packages && pixi run -e build --frozen build-lib && git add pixi.lock uv.lock"
 
