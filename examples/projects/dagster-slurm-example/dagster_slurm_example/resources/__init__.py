@@ -1,4 +1,6 @@
+import copy
 import os
+from typing import Any, Dict
 
 import dagster as dg
 from dagster_slurm import (
@@ -7,12 +9,136 @@ from dagster_slurm import (
     RayLauncher,
     SlurmQueueConfig,
     SlurmResource,
-    # SlurmSessionResource,
+    SlurmSessionResource,
     SparkLauncher,
     SSHConnectionResource,
 )
 from dagster_slurm.config.environment import Environment, ExecutionMode
-from loguru import logger
+
+LOCAL_RESOURCES_CONFIG: Dict[str, Any] = {
+    "mode": ExecutionMode.LOCAL,
+    "launchers": {
+        "bash": {},
+        "ray": {"num_gpus_per_node": 0, "dashboard_port": 8265},
+        "spark": {"driver_memory": "2g", "executor_memory": "4g"},
+    },
+}
+
+# --- Docker-based Slurm (Staging/Test) ---
+DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
+    "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
+    "ssh_config": {
+        "host": "localhost",
+        "port": 2223,
+        "user": dg.EnvVar("SLURM_EDGE_NODE_USER"),
+        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
+    },
+    "slurm_queue_config": {
+        "num_nodes": 2,
+        "time_limit": "00:30:00",
+        "cpus": 2,
+        "gpus_per_node": 0,
+        "mem": "4096M",
+    },
+    "slurm_session_config": {
+        "num_nodes": 2,
+        "time_limit": "01:00:00",
+    },
+    "compute_config": {
+        "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
+        "debug_mode": False,
+    },
+    "launchers": {
+        "bash": {},
+        "ray": {
+            "num_gpus_per_node": 0,
+            "dashboard_port": 8265,
+            "head_startup_timeout": 60,
+        },
+        "spark": {"driver_memory": "8g", "executor_memory": "16g"},
+    },
+}
+
+# --- Supercomputer Slurm (Production) ---
+SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
+    "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
+    "ssh_config": {
+        "host": dg.EnvVar("SLURM_EDGE_NODE"),
+        "port": dg.EnvVar("SLURM_EDGE_NODE_PORT"),
+        "user": dg.EnvVar("SLURM_EDGE_NODE_USER"),
+        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
+    },
+    "slurm_queue_config": {
+        "partition": "batch",
+        "num_nodes": 2,
+        "time_limit": "04:00:00",
+        "cpus": 4,
+        "gpus_per_node": 0,  # Default to no GPUs, can be overridden in assets
+        "mem": "4G",
+    },
+    "slurm_session_config": {
+        "num_nodes": 2,
+        "time_limit": "08:00:00",
+        "partition": "batch",
+    },
+    "compute_config": {
+        "auto_detect_platform": False,
+        "pack_platform": "linux-64",
+        "debug_mode": False,
+    },
+    "launchers": {
+        "bash": {},
+        "ray": {
+            "num_gpus_per_node": 0,
+            "dashboard_port": 8265,
+            "head_startup_timeout": 120,
+        },
+        "spark": {"driver_memory": "8g", "executor_memory": "16g"},
+    },
+}
+
+
+def build_slurm_resources(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds Slurm-related Dagster resources from a configuration dictionary."""
+    ssh = SSHConnectionResource(**config["ssh_config"])
+    queue = SlurmQueueConfig(**config["slurm_queue_config"])
+    slurm = SlurmResource(ssh=ssh, queue=queue, remote_base="$HOME/dagster_runs")
+
+    session = None
+    if "session" in config["mode"].value:
+        session = SlurmSessionResource(slurm=slurm, **config["slurm_session_config"])
+
+    return {"slurm": slurm, "session": session}
+
+
+def build_compute_resources(
+    config: Dict[str, Any], slurm_resources: Dict[str, Any]
+) -> Dict[str, ComputeResource]:
+    """Builds the final dictionary of ComputeResources."""
+    resources = {}
+    launcher_map = {
+        "bash": BashLauncher,
+        "ray": RayLauncher,
+        "spark": SparkLauncher,
+    }
+
+    compute_resource_keys = {
+        "bash": "compute",
+        "ray": "compute_ray",
+        "spark": "compute_spark",
+    }
+
+    for key, LauncherClass in launcher_map.items():
+        resource_key = compute_resource_keys[key]
+        launcher_config = config["launchers"].get(key, {})
+
+        resources[resource_key] = ComputeResource(
+            mode=config["mode"],
+            default_launcher=LauncherClass(**launcher_config),
+            **slurm_resources,
+            **config.get("compute_config", {}),
+        )
+    return resources
 
 
 def get_dagster_deployment_environment(
@@ -32,200 +158,73 @@ def get_dagster_deployment_environment(
         ) from e
 
 
-def get_resources():
-    """Build resource dict based on DAGSTER_DEPLOYMENT."""
+def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
+    """
+    Builds the Dagster resource dictionary based on the DAGSTER_DEPLOYMENT environment variable.
+    This function selects a base configuration and applies modifiers based on the environment name,
+    making it highly reusable and easy to extend.
+    """
     deployment = get_dagster_deployment_environment()
+    deployment_name = deployment.value
 
+    # --- Case 1: Local Development ---
     if deployment == Environment.DEVELOPMENT:
-        # Local mode: no SSH, no Slurm
+        # For local, we don't need the full builder logic.
         return {
             "compute": ComputeResource(
                 mode=ExecutionMode.LOCAL,
-                default_launcher=BashLauncher(),
+                default_launcher=BashLauncher(
+                    **LOCAL_RESOURCES_CONFIG["launchers"]["bash"]
+                ),
             ),
             "compute_ray": ComputeResource(
                 mode=ExecutionMode.LOCAL,
                 default_launcher=RayLauncher(
-                    num_gpus_per_node=0,
-                    dashboard_port=8265,
+                    **LOCAL_RESOURCES_CONFIG["launchers"]["ray"]
                 ),
             ),
             "compute_spark": ComputeResource(
                 mode=ExecutionMode.LOCAL,
                 default_launcher=SparkLauncher(
-                    driver_memory="2g",
-                    executor_memory="4g",
+                    **LOCAL_RESOURCES_CONFIG["launchers"]["spark"]
                 ),
             ),
         }
-    elif deployment == Environment.STAGING_DOCKER:
-        # Slurm per-asset: each asset = separate sbatch
-        ssh_connection = SSHConnectionResource(
-            host="localhost",
-            port=2223,
-            user=dg.EnvVar("SLURM_EDGE_NODE_USER"),
-            password=dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
-        )
-        slurm = SlurmResource(
-            ssh=ssh_connection,
-            queue=SlurmQueueConfig(
-                # partition="interactive",
-                num_nodes=2,
-                time_limit="00:30:00",
-                cpus=2,
-                gpus_per_node=0,
-                mem="4096M",
-                mem_per_cpu="",
-                # partition="gpu",  # Alternative: GPU partition
-                # num_nodes=4,  # For multi-node jobs
-                # time_limit="12:00:00",  # Longer jobs
-                # cpus=16,  # More CPUs per task
-                # gpus_per_node=2,  # Request GPUs
-                # mem="64G",  # More memory
-                # mem_per_cpu="4G",  # Alternative: memory per CPU instead of total mem
-            ),
-            # remote_base="/home/submitter/dagster",
-        )
 
-        return {
-            "compute": ComputeResource(
-                mode=ExecutionMode.SLURM,
-                slurm=slurm,
-                default_launcher=BashLauncher(),
-                # debug_mode=True,  # NEVER cleanup files
-                auto_detect_platform=True,  # Auto-detect ARM vs x86
-                # pack_platform="linux-aarch64",  # Or explicitly override for testing
-            ),
-            "compute_ray": ComputeResource(
-                mode=ExecutionMode.SLURM,
-                slurm=slurm,
-                default_launcher=RayLauncher(
-                    num_gpus_per_node=0,
-                    dashboard_port=8265,
-                    head_startup_timeout=60,
-                ),
-                # debug_mode=True,  # NEVER cleanup files
-                auto_detect_platform=True,  # Auto-detect ARM vs x86
-            ),
-            "compute_spark": ComputeResource(
-                mode=ExecutionMode.SLURM,
-                slurm=slurm,
-                default_launcher=SparkLauncher(
-                    driver_memory="8g",
-                    executor_memory="16g",
-                ),
-                # debug_mode=True,  # NEVER cleanup files
-                auto_detect_platform=True,  # Auto-detect ARM vs x86
-            ),
-        }
-    elif deployment == Environment.PRODUCTION_DOCKER:
-        # TODO: make other run variants!
-        # Slurm session: shared allocation, operator fusion
-        pre_deployed_env_path = os.environ["DAGSTER_PROD_ENV_PATH"]
-        logger.info(
-            f"Production mode configured with pre-deployed env: {pre_deployed_env_path}"
-        )
+    # --- Case 2: All Slurm-based environments ---
 
-        # Override for prod
-        ssh_connection = SSHConnectionResource(
-            host=os.environ["SLURM_EDGE_NODE"],
-            port=int(os.environ["SLURM_EDGE_NODE_PORT"]),
-            user=os.environ["SLURM_EDGE_NODE_USER"],
-            password=os.environ["SLURM_EDGE_NODE_PASSWORD"],
-        )
-        slurm_base = SlurmResource(
-            ssh=ssh_connection,
-            queue=SlurmQueueConfig(
-                # partition="interactive",
-                num_nodes=2,
-                time_limit="00:30:00",
-                cpus=2,
-                gpus_per_node=0,
-                mem="4096M",
-                mem_per_cpu="",
-                # partition="gpu",  # Alternative: GPU partition
-                # num_nodes=4,  # For multi-node jobs
-                # time_limit="12:00:00",  # Longer jobs
-                # cpus=16,  # More CPUs per task
-                # gpus_per_node=2,  # Request GPUs
-                # mem="64G",  # More memory
-                # mem_per_cpu="4G",  # Alternative: memory per CPU instead of total mem
-            ),
-            # remote_base="/home/submitter/dagster",
-        )
-        slurm = slurm_base.model_copy(
-            update={
-                "ssh": ssh_connection,
-                "queue": slurm_base.queue.model_copy(
-                    update={
-                        # "partition": "batch",
-                        "time_limit": "4:00:00",
-                        "cpus": 8,
-                        "mem": "8G",
-                        "num_nodes": 2,
-                        "gpus_per_node": 0,
-                        # mem_per_cpu="",  # default (use mem instead)
-                    }
-                ),
-            }
-        )
+    # Step 2.1: Select the appropriate base configuration.
+    if "supercomputer" in deployment_name:
+        config = copy.deepcopy(SUPERCOMPUTER_SLURM_BASE_CONFIG)
+    else:  # All "docker" variants use the docker base
+        config = copy.deepcopy(DOCKER_SLURM_BASE_CONFIG)
+        # As per the original request, 'production_docker' implies a session.
+        # 'staging_docker' uses the default per-asset SLURM mode.
+        if deployment == Environment.PRODUCTION_DOCKER:
+            config["mode"] = ExecutionMode.SLURM_SESSION
 
-        # session = SlurmSessionResource(
-        #     slurm=slurm,
-        #     num_nodes=4,
-        #     time_limit="04:00:00",
-        #     enable_session=True,
-        #     # partition=None,  # default (uses queue.partition)
-        #     # max_concurrent_jobs=10,  # default
-        #     # enable_health_checks=True,  # default
-        # )
-        return {
-            "compute": ComputeResource(
-                mode=ExecutionMode.SLURM,
-                # mode=ExecutionMode.SLURM_SESSION,
-                slurm=slurm,
-                # session=session,
-                default_launcher=BashLauncher(),
-                # enable_cluster_reuse=True,
-                # cluster_reuse_tolerance=0.2,
-                # debug_mode=True,  # NEVER cleanup files
-                # ONLY ENABLE this for local docker runs!
-                auto_detect_platform=True,  # Auto-detect ARM vs x86
-                # pack_platform="linux-aarch64",  # Or explicitly override for testing
-                pre_deployed_env_path=pre_deployed_env_path,
-            ),
-            "compute_ray": ComputeResource(
-                mode=ExecutionMode.SLURM,
-                # mode=ExecutionMode.SLURM_SESSION,
-                slurm=slurm,
-                # session=session,
-                default_launcher=RayLauncher(
-                    # num_gpus_per_node=2,
-                    dashboard_port=8265,
-                    head_startup_timeout=60,
-                ),
-                # enable_cluster_reuse=True,  # Reuse Ray clusters!
-                # cluster_reuse_tolerance=0.2,
-                debug_mode=True,  # NEVER cleanup files
-                auto_detect_platform=True,  # Auto-detect ARM vs x86
-                pre_deployed_env_path=pre_deployed_env_path,
-            ),
-            "compute_spark": ComputeResource(
-                mode=ExecutionMode.SLURM,
-                # mode=ExecutionMode.SLURM_SESSION,
-                slurm=slurm,
-                # session=session,
-                default_launcher=SparkLauncher(
-                    driver_memory="16g",
-                    executor_memory="32g",
-                ),
-                # enable_cluster_reuse=True,  # Reuse Spark clusters!
-                # cluster_reuse_tolerance=0.2,
-                debug_mode=True,  # NEVER cleanup files
-                auto_detect_platform=True,  # Auto-detect ARM vs x86
-                pre_deployed_env_path=pre_deployed_env_path,
-            ),
-        }
-    # TODO: Add other environments (session, cluster reuse, hetjob; and real supercomputer)
-    else:
-        raise ValueError(f"Unknown DAGSTER_DEPLOYMENT: {deployment}")
+    # Step 2.2: Apply modifiers based on the environment name.
+    # The elif chain ensures only the most specific modifier is applied.
+    if "hetjob" in deployment_name:
+        config["mode"] = ExecutionMode.SLURM_HETJOB
+        # Cluster reuse is not compatible with HETJOB mode
+        if "enable_cluster_reuse" in config.get("compute_config", {}):
+            del config["compute_config"]["enable_cluster_reuse"]
+
+    elif "cluster_reuse" in deployment_name:
+        config["mode"] = ExecutionMode.SLURM_SESSION  # Cluster reuse implies session
+        config.setdefault("compute_config", {})
+        config["compute_config"]["enable_cluster_reuse"] = True
+        config["compute_config"]["cluster_reuse_tolerance"] = 0.2
+
+    elif "session" in deployment_name:
+        config["mode"] = ExecutionMode.SLURM_SESSION
+
+    # For debugging, you can force debug_mode for a specific environment
+    # if "debug" in deployment_name:
+    #     config["compute_config"]["debug_mode"] = True
+
+    # Step 2.3: Build the resources from the final config spec.
+    slurm_resources = build_slurm_resources(config)
+
+    return build_compute_resources(config, slurm_resources)
