@@ -107,7 +107,7 @@ Heterogeneous job mode (optimal resource allocation):
 
 #### debug_mode *: `bool`*
 
-#### default_launcher *: `Optional`[`ComputeLauncher`]*
+#### default_launcher *: `Annotated`[`Union`[`ComputeLauncher`, `PartialResource`]]*
 
 #### enable_cluster_reuse *: `bool`*
 
@@ -123,11 +123,21 @@ Get appropriate Pipes client for this mode.
 
 #### mode *: `ExecutionMode`*
 
-#### model_post_init(\_ComputeResource_\_context)
+#### model_post_init(context,)
 
-Post-init setup - runs after Pydantic init.
+This function is meant to behave like a BaseModel method to initialise private attributes.
+
+It takes context as an argument since that’s what pydantic-core passes when calling it.
+
+* **Parameters:**
+  * **self** (`BaseModel`) – The BaseModel instance.
+  * **context** (`Any`) – The context.
+* **Return type:**
+  `None`
 
 #### pack_platform *: `Optional`[`str`]*
+
+#### pre_deployed_env_path *: `Optional`[`str`]*
 
 #### register_cluster(cluster_address, framework, cpus, gpus, memory_gb)
 
@@ -234,9 +244,9 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#id62)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id42)]*
 
-#### slurm *: `Optional`[[`SlurmResource`](#id30)]*
+#### slurm *: `Optional`[[`SlurmResource`](#id19)]*
 
 #### teardown(context)
 
@@ -341,10 +351,13 @@ Bases: `ConfigurableResource`
 
 SSH connection settings.
 
+This resource configures a connection to a remote host via SSH. It supports
+key-based or password-based authentication, pseudo-terminal allocation (-t),
+and connections through a proxy jump host.
+
 Supports two authentication methods:
 1. SSH key (recommended for automation)
 2. Password (for interactive use or when keys unavailable)
-
 Either key_path OR password must be provided (not both).
 
 ### Examples
@@ -356,91 +369,75 @@ ssh = SSHConnectionResource(
     user="username",
     key_path="~/.ssh/id_rsa",
 )
-```
 
-```python
-# Password-based auth
-ssh = SSHConnectionResource(
-    host="cluster.example.com",
-    user="username",
-    password="secret123",
+# With a proxy jump host
+jump_box = SSHConnectionResource(
+    host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
+)
+ssh_via_jump = SSHConnectionResource(
+    host="private-cluster",
+    user="user_on_cluster",
+    key_path="~/.ssh/cluster_key",
+    jump_host=jump_box
+)
+
+# With a post-login command (e.g., for VSC)
+vsc_ssh = SSHConnectionResource(
+    host="vmos.vsc.ac.at",
+    user="dagster01",
+    key_path="~/.ssh/vsc_key",
+    force_tty=True,
+    post_login_command="vsc5"
 )
 ```
 
 ```python
-```
-
 # From environment variables
 ssh = SSHConnectionResource.from_env()
+```
 
 * **Parameters:**
   **data** (`Any`)
 
 #### extra_opts *: `List`[`str`]*
 
-#### *classmethod* from_env(prefix='SLURM_SSH')
+#### force_tty *: `bool`*
+
+#### *classmethod* from_env(prefix='SLURM_SSH', \_is_jump=False)
 
 Create from environment variables.
 
-Environment variables:
-: ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_HOST - SSH hostname (required)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_PORT - SSH port (optional, default: 22)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_USER - SSH username (required)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_KEY - Path to SSH key (optional)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_PASSWORD - SSH password (optional)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_OPTS_EXTRA - Additional SSH options (optional)
+This method reads connection details from environment variables. The variable
+names are constructed using the provided `prefix`.
 
-Either KEY or PASSWORD must be set (not both).
+With the default prefix, the following variables are used:
+
+- `SLURM_SSH_HOST` - SSH hostname (required)
+- `SLURM_SSH_PORT` - SSH port (optional, default: 22)
+- `SLURM_SSH_USER` - SSH username (required)
+- `SLURM_SSH_KEY` - Path to SSH key (optional)
+- `SLURM_SSH_PASSWORD` - SSH password (optional)
+- `SLURM_SSH_FORCE_TTY` - Set to ‘true’ or ‘1’ to enable tty allocation (optional)
+- `SLURM_SSH_POST_LOGIN_COMMAND` - Post-login command string (optional)
+- `SLURM_SSH_OPTS_EXTRA` - Additional SSH options (optional)
+
+For proxy jumps, use the `_JUMP` suffix for jump host variables (e.g.,
+`SLURM_SSH_JUMP_HOST`, `SLURM_SSH_JUMP_USER`, etc.).
 
 * **Parameters:**
-  **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
+  * **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
+  * **\_is_jump** (`bool`)
 * **Return type:**
-  [`SSHConnectionResource`](#id36)
+  [`SSHConnectionResource`](#id25)
 * **Returns:**
   SSHConnectionResource instance
-* **Raises:**
-  **ValueError** – If required variables missing or both auth methods specified
 
-Example:
+#### get_proxy_command_opts()
 
-```bash
-export SLURM_SSH_HOST=cluster.example.com
-export SLURM_SSH_USER=username
-export SLURM_SSH_KEY=~/.ssh/id_rsa
-# OR
-export SLURM_SSH_PASSWORD=secret123
-```
+Builds SSH options for ProxyCommand if a jump_host is configured.
 
-…
+* **Return type:**
+  `List`[`str`]
 
 #### get_remote_target()
 
@@ -448,60 +445,32 @@ Get the remote target string for SCP commands.
 
 * **Return type:**
   `str`
-* **Returns:**
-  String in format [‘user@host](mailto:'user@host)’
-
-### Example
-
-[‘username@cluster.example.com](mailto:'username@cluster.example.com)’
 
 #### get_scp_base_command()
 
-Build base SCP command for file transfers.
+Build base SCP command, including proxy and auth options.
 
 * **Return type:**
   `List`[`str`]
-* **Returns:**
-  List of command arguments (without source/dest)
-
-#### NOTE
-For password authentication, password handling is done via pexpect.
-
-### Example
-
-[‘scp’, ‘-P’, ‘22’, ‘-i’, ‘/path/to/key’]
-# OR (password auth)
-[‘scp’, ‘-P’, ‘22’]
 
 #### get_ssh_base_command()
 
-Build base SSH command for subprocess.
+Build base SSH command, including proxy and auth options.
 
 * **Return type:**
   `List`[`str`]
-* **Returns:**
-  List of command arguments for subprocess.run()
-
-#### NOTE
-For password authentication, this returns the base command.
-Password handling is done separately via pexpect in SSHConnectionPool.
-
-This method is used by SSHMessageReader which uses ControlMaster,
-so password auth is already handled by the ControlMaster connection.
-
-### Example
-
-[‘ssh’, ‘-p’, ‘22’, ‘-i’, ‘/path/to/key’, [‘user@host](mailto:'user@host)’]
-# OR (password auth via ControlMaster)
-[‘ssh’, ‘-p’, ‘22’, ‘-o’, ‘ControlPath=/tmp/…’, [‘user@host](mailto:'user@host)’]
 
 #### host *: `str`*
+
+#### jump_host *: `Optional`[SSHConnectionResource]*
 
 #### key_path *: `Optional`[`str`]*
 
 #### password *: `Optional`[`str`]*
 
 #### port *: `int`*
+
+#### post_login_command *: `Optional`[`str`]*
 
 #### user *: `str`*
 
@@ -513,10 +482,6 @@ Returns True if using key-based authentication.
 
 Returns True if using password-based authentication.
 
-#### validate_auth_method()
-
-Ensure exactly one authentication method is provided.
-
 ### *class* dagster_slurm.SlurmAllocation(slurm_job_id, nodes, working_dir, config)
 
 Bases: `object`
@@ -527,7 +492,7 @@ Represents a running Slurm allocation.
   * **slurm_job_id** (`int`)
   * **nodes** (`List`[`str`])
   * **working_dir** (`str`)
-  * **config** ([`SlurmSessionResource`](#id62))
+  * **config** ([`SlurmSessionResource`](#id42))
 
 #### cancel(ssh_pool)
 
@@ -563,7 +528,7 @@ Check if allocation and nodes are healthy.
 * **Return type:**
   `bool`
 
-### *class* dagster_slurm.SlurmPipesClient(slurm_resource, launcher, session_resource=None, cleanup_on_failure=True, debug_mode=False, auto_detect_platform=True, pack_platform=None)
+### *class* dagster_slurm.SlurmPipesClient(slurm_resource, launcher, session_resource=None, cleanup_on_failure=True, debug_mode=False, auto_detect_platform=True, pack_platform=None, pre_deployed_env_path=None)
 
 Bases: `PipesClient`
 
@@ -581,13 +546,14 @@ Works in two modes:
 2. Session: Multiple assets share a Slurm allocation (operator fusion)
 
 * **Parameters:**
-  * **slurm_resource** ([`SlurmResource`](#id30))
+  * **slurm_resource** ([`SlurmResource`](#id19))
   * **launcher** (`ComputeLauncher`)
-  * **session_resource** (`Optional`[[`SlurmSessionResource`](#id62)])
+  * **session_resource** (`Optional`[[`SlurmSessionResource`](#id42)])
   * **cleanup_on_failure** (`bool`)
   * **debug_mode** (`bool`)
   * **auto_detect_platform** (`bool`)
   * **pack_platform** (`Optional`[`str`])
+  * **pre_deployed_env_path** (`Optional`[`str`])
 
 #### run(context, , payload_path, extra_env=None, extras=None, use_session=False, extra_slurm_opts=None, \*\*kwargs)
 
@@ -646,7 +612,7 @@ Combines SSH connection, queue defaults, and cluster-specific paths.
 Create from environment variables.
 
 * **Return type:**
-  [`SlurmResource`](#id30)
+  [`SlurmResource`](#id19)
 
 #### *classmethod* from_env_slurm(ssh)
 
@@ -654,15 +620,15 @@ Create a SlurmResource by populating most fields from environment variables,
 but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
 * **Parameters:**
-  **ssh** ([`SSHConnectionResource`](#id36)) – A fully configured SSHConnectionResource instance.
+  **ssh** ([`SSHConnectionResource`](#id25)) – A fully configured SSHConnectionResource instance.
 * **Return type:**
-  [`SlurmResource`](#id30)
+  [`SlurmResource`](#id19)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id74), `PartialResource`]]*
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id54), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
-#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id36), `PartialResource`]]*
+#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id25), `PartialResource`]]*
 
 ### *class* dagster_slurm.SlurmSessionResource(\*\*data)
 
@@ -725,7 +691,7 @@ This is the proper Dagster resource lifecycle hook.
 * **Parameters:**
   **context** (`InitResourceContext`)
 * **Return type:**
-  [`SlurmSessionResource`](#id62)
+  [`SlurmSessionResource`](#id42)
 
 #### slurm *: SlurmResource*
 
@@ -842,7 +808,7 @@ Heterogeneous job mode (optimal resource allocation):
 
 #### debug_mode *: `bool`*
 
-#### default_launcher *: `Optional`[`ComputeLauncher`]*
+#### default_launcher *: `Annotated`[`Union`[`ComputeLauncher`, `PartialResource`]]*
 
 #### enable_cluster_reuse *: `bool`*
 
@@ -858,11 +824,21 @@ Get appropriate Pipes client for this mode.
 
 #### mode *: `ExecutionMode`*
 
-#### model_post_init(\_ComputeResource_\_context)
+#### model_post_init(context,)
 
-Post-init setup - runs after Pydantic init.
+This function is meant to behave like a BaseModel method to initialise private attributes.
+
+It takes context as an argument since that’s what pydantic-core passes when calling it.
+
+* **Parameters:**
+  * **self** (`BaseModel`) – The BaseModel instance.
+  * **context** (`Any`) – The context.
+* **Return type:**
+  `None`
 
 #### pack_platform *: `Optional`[`str`]*
+
+#### pre_deployed_env_path *: `Optional`[`str`]*
 
 #### register_cluster(cluster_address, framework, cpus, gpus, memory_gb)
 
@@ -969,9 +945,9 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#id62)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id42)]*
 
-#### slurm *: `Optional`[[`SlurmResource`](#id30)]*
+#### slurm *: `Optional`[[`SlurmResource`](#id19)]*
 
 #### teardown(context)
 
@@ -1003,7 +979,7 @@ Combines SSH connection, queue defaults, and cluster-specific paths.
 Create from environment variables.
 
 * **Return type:**
-  [`SlurmResource`](#id30)
+  [`SlurmResource`](#id19)
 
 #### *classmethod* from_env_slurm(ssh)
 
@@ -1011,15 +987,15 @@ Create a SlurmResource by populating most fields from environment variables,
 but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
 * **Parameters:**
-  **ssh** ([`SSHConnectionResource`](#id36)) – A fully configured SSHConnectionResource instance.
+  **ssh** ([`SSHConnectionResource`](#id25)) – A fully configured SSHConnectionResource instance.
 * **Return type:**
-  [`SlurmResource`](#id30)
+  [`SlurmResource`](#id19)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id74), `PartialResource`]]*
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id54), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
-#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id36), `PartialResource`]]*
+#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id25), `PartialResource`]]*
 
 ### *class* dagster_slurm.SSHConnectionResource(\*\*data)
 
@@ -1027,10 +1003,13 @@ Bases: `ConfigurableResource`
 
 SSH connection settings.
 
+This resource configures a connection to a remote host via SSH. It supports
+key-based or password-based authentication, pseudo-terminal allocation (-t),
+and connections through a proxy jump host.
+
 Supports two authentication methods:
 1. SSH key (recommended for automation)
 2. Password (for interactive use or when keys unavailable)
-
 Either key_path OR password must be provided (not both).
 
 ### Examples
@@ -1042,91 +1021,75 @@ ssh = SSHConnectionResource(
     user="username",
     key_path="~/.ssh/id_rsa",
 )
-```
 
-```python
-# Password-based auth
-ssh = SSHConnectionResource(
-    host="cluster.example.com",
-    user="username",
-    password="secret123",
+# With a proxy jump host
+jump_box = SSHConnectionResource(
+    host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
+)
+ssh_via_jump = SSHConnectionResource(
+    host="private-cluster",
+    user="user_on_cluster",
+    key_path="~/.ssh/cluster_key",
+    jump_host=jump_box
+)
+
+# With a post-login command (e.g., for VSC)
+vsc_ssh = SSHConnectionResource(
+    host="vmos.vsc.ac.at",
+    user="dagster01",
+    key_path="~/.ssh/vsc_key",
+    force_tty=True,
+    post_login_command="vsc5"
 )
 ```
 
 ```python
-```
-
 # From environment variables
 ssh = SSHConnectionResource.from_env()
+```
 
 * **Parameters:**
   **data** (`Any`)
 
 #### extra_opts *: `List`[`str`]*
 
-#### *classmethod* from_env(prefix='SLURM_SSH')
+#### force_tty *: `bool`*
+
+#### *classmethod* from_env(prefix='SLURM_SSH', \_is_jump=False)
 
 Create from environment variables.
 
-Environment variables:
-: ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_HOST - SSH hostname (required)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_PORT - SSH port (optional, default: 22)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_USER - SSH username (required)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_KEY - Path to SSH key (optional)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_PASSWORD - SSH password (optional)
-  <br/>
-  ```
-  ``
-  ```
-  <br/>
-  {prefix}\`\`_OPTS_EXTRA - Additional SSH options (optional)
+This method reads connection details from environment variables. The variable
+names are constructed using the provided `prefix`.
 
-Either KEY or PASSWORD must be set (not both).
+With the default prefix, the following variables are used:
+
+- `SLURM_SSH_HOST` - SSH hostname (required)
+- `SLURM_SSH_PORT` - SSH port (optional, default: 22)
+- `SLURM_SSH_USER` - SSH username (required)
+- `SLURM_SSH_KEY` - Path to SSH key (optional)
+- `SLURM_SSH_PASSWORD` - SSH password (optional)
+- `SLURM_SSH_FORCE_TTY` - Set to ‘true’ or ‘1’ to enable tty allocation (optional)
+- `SLURM_SSH_POST_LOGIN_COMMAND` - Post-login command string (optional)
+- `SLURM_SSH_OPTS_EXTRA` - Additional SSH options (optional)
+
+For proxy jumps, use the `_JUMP` suffix for jump host variables (e.g.,
+`SLURM_SSH_JUMP_HOST`, `SLURM_SSH_JUMP_USER`, etc.).
 
 * **Parameters:**
-  **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
+  * **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
+  * **\_is_jump** (`bool`)
 * **Return type:**
-  [`SSHConnectionResource`](#id36)
+  [`SSHConnectionResource`](#id25)
 * **Returns:**
   SSHConnectionResource instance
-* **Raises:**
-  **ValueError** – If required variables missing or both auth methods specified
 
-Example:
+#### get_proxy_command_opts()
 
-```bash
-export SLURM_SSH_HOST=cluster.example.com
-export SLURM_SSH_USER=username
-export SLURM_SSH_KEY=~/.ssh/id_rsa
-# OR
-export SLURM_SSH_PASSWORD=secret123
-```
+Builds SSH options for ProxyCommand if a jump_host is configured.
 
-…
+* **Return type:**
+  `List`[`str`]
 
 #### get_remote_target()
 
@@ -1134,60 +1097,32 @@ Get the remote target string for SCP commands.
 
 * **Return type:**
   `str`
-* **Returns:**
-  String in format [‘user@host](mailto:'user@host)’
-
-### Example
-
-[‘username@cluster.example.com](mailto:'username@cluster.example.com)’
 
 #### get_scp_base_command()
 
-Build base SCP command for file transfers.
+Build base SCP command, including proxy and auth options.
 
 * **Return type:**
   `List`[`str`]
-* **Returns:**
-  List of command arguments (without source/dest)
-
-#### NOTE
-For password authentication, password handling is done via pexpect.
-
-### Example
-
-[‘scp’, ‘-P’, ‘22’, ‘-i’, ‘/path/to/key’]
-# OR (password auth)
-[‘scp’, ‘-P’, ‘22’]
 
 #### get_ssh_base_command()
 
-Build base SSH command for subprocess.
+Build base SSH command, including proxy and auth options.
 
 * **Return type:**
   `List`[`str`]
-* **Returns:**
-  List of command arguments for subprocess.run()
-
-#### NOTE
-For password authentication, this returns the base command.
-Password handling is done separately via pexpect in SSHConnectionPool.
-
-This method is used by SSHMessageReader which uses ControlMaster,
-so password auth is already handled by the ControlMaster connection.
-
-### Example
-
-[‘ssh’, ‘-p’, ‘22’, ‘-i’, ‘/path/to/key’, [‘user@host](mailto:'user@host)’]
-# OR (password auth via ControlMaster)
-[‘ssh’, ‘-p’, ‘22’, ‘-o’, ‘ControlPath=/tmp/…’, [‘user@host](mailto:'user@host)’]
 
 #### host *: `str`*
+
+#### jump_host *: `Optional`[SSHConnectionResource]*
 
 #### key_path *: `Optional`[`str`]*
 
 #### password *: `Optional`[`str`]*
 
 #### port *: `int`*
+
+#### post_login_command *: `Optional`[`str`]*
 
 #### user *: `str`*
 
@@ -1198,10 +1133,6 @@ Returns True if using key-based authentication.
 #### *property* uses_password_auth *: bool*
 
 Returns True if using password-based authentication.
-
-#### validate_auth_method()
-
-Ensure exactly one authentication method is provided.
 
 ### *class* dagster_slurm.SlurmSessionResource(\*\*data)
 
@@ -1264,7 +1195,7 @@ This is the proper Dagster resource lifecycle hook.
 * **Parameters:**
   **context** (`InitResourceContext`)
 * **Return type:**
-  [`SlurmSessionResource`](#id62)
+  [`SlurmSessionResource`](#id42)
 
 #### slurm *: SlurmResource*
 

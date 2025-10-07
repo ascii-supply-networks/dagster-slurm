@@ -145,18 +145,22 @@ class SSHConnectionResource(ConfigurableResource):
     ) -> "SSHConnectionResource":
         """Create from environment variables.
 
-        Environment variables:
-            ``{prefix}``_HOST - SSH hostname (required)
-            ``{prefix}``_PORT - SSH port (optional, default: 22)
-            ``{prefix}``_USER - SSH username (required)
-            ``{prefix}``_KEY - Path to SSH key (optional)
-            ``{prefix}``_PASSWORD - SSH password (optional)
-            ``{prefix}``_FORCE_TTY - Set to 'true' or '1' to enable tty allocation (optional)
-            ``{prefix}``_POST_LOGIN_COMMAND - Post-login command string (optional)
-            ``{prefix}``_OPTS_EXTRA - Additional SSH options (optional)
+        This method reads connection details from environment variables. The variable
+        names are constructed using the provided ``prefix``.
 
-        For proxy jumps, use the ``_JUMP`` suffix for jump host variables:
-            ``{prefix}``_JUMP_HOST, ``{prefix}``_JUMP_USER, etc.
+        With the default prefix, the following variables are used:
+
+        - ``SLURM_SSH_HOST`` - SSH hostname (required)
+        - ``SLURM_SSH_PORT`` - SSH port (optional, default: 22)
+        - ``SLURM_SSH_USER`` - SSH username (required)
+        - ``SLURM_SSH_KEY`` - Path to SSH key (optional)
+        - ``SLURM_SSH_PASSWORD`` - SSH password (optional)
+        - ``SLURM_SSH_FORCE_TTY`` - Set to 'true' or '1' to enable tty allocation (optional)
+        - ``SLURM_SSH_POST_LOGIN_COMMAND`` - Post-login command string (optional)
+        - ``SLURM_SSH_OPTS_EXTRA`` - Additional SSH options (optional)
+
+        For proxy jumps, use the ``_JUMP`` suffix for jump host variables (e.g.,
+        ``SLURM_SSH_JUMP_HOST``, ``SLURM_SSH_JUMP_USER``, etc.).
 
         Args:
             prefix: Environment variable prefix (default: "SLURM_SSH")
