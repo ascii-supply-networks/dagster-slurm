@@ -72,8 +72,9 @@ class ComputeResource(ConfigurableResource):
     )
 
     # Launcher configuration
-    default_launcher: Optional[ComputeLauncher] = Field(
-        default=None, description="Default launcher (auto-created if None)"
+    default_launcher: ComputeLauncher = Field(
+        default_factory=BashLauncher,
+        description="Default launcher (BashLauncher if not provided)",
     )
 
     # Debug and platform settings
@@ -137,12 +138,6 @@ class ComputeResource(ConfigurableResource):
             raise ValueError("enable_cluster_reuse only works in slurm-session mode")
 
         return self
-
-    def model_post_init(self, __context):
-        """Post-init setup - runs after Pydantic init."""
-        # Create default launcher if not provided
-        if not self.default_launcher:
-            self.default_launcher = BashLauncher()  # type: ignore
 
     def _log_configuration_once(self):
         """Log configuration info exactly once per instance."""

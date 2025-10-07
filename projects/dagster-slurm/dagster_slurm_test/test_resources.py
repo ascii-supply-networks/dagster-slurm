@@ -6,47 +6,73 @@ from dagster_slurm import (
     SlurmQueueConfig,
     SlurmResource,
     SSHConnectionResource,
+    BashLauncher,
 )
+import os
+from pathlib import Path
 from dagster_slurm.config.environment import ExecutionMode
 
 
-def test_ssh_resource_creation():
+@pytest.fixture
+def mock_ssh_key_path(tmp_path: Path) -> Path:
+    key_path = tmp_path / "id_rsa"
+    key_path.touch()
+    return key_path
+
+
+def test_ssh_resource_creation(mock_ssh_key_path: Path):
     """Test SSH resource creation."""
     ssh = SSHConnectionResource(
         host="example.com",
         port=22,
         user="testuser",
-        key_path="/path/to/key",
+        key_path=str(mock_ssh_key_path),
     )
 
     assert ssh.host == "example.com"
     assert ssh.port == 22
     assert ssh.user == "testuser"
-    assert ssh.key_path == "/path/to/key"
+    assert ssh.key_path == str(mock_ssh_key_path)
 
 
-def test_ssh_resource_from_env(monkeypatch):
+def test_ssh_resource_creation_password():
+    """Test SSH resource creation."""
+    ssh = SSHConnectionResource(
+        host="example.com",
+        port=22,
+        user="testuser",
+        password="testpassword",
+    )
+
+    assert ssh.host == "example.com"
+    assert ssh.port == 22
+    assert ssh.user == "testuser"
+    assert ssh.password == "testpassword"
+
+
+def test_ssh_resource_from_env(monkeypatch, mock_ssh_key_path: Path):
     """Test SSH resource creation from environment."""
     monkeypatch.setenv("SLURM_SSH_HOST", "cluster.example.com")
     monkeypatch.setenv("SLURM_SSH_PORT", "2222")
     monkeypatch.setenv("SLURM_SSH_USER", "admin")
-    monkeypatch.setenv("SLURM_SSH_KEY", "/custom/key")
+    # FIX: Point to an actual file
+    monkeypatch.setenv("SLURM_SSH_KEY", str(mock_ssh_key_path))
 
     ssh = SSHConnectionResource.from_env()
 
     assert ssh.host == "cluster.example.com"
     assert ssh.port == 2222
     assert ssh.user == "admin"
-    assert ssh.key_path == "/custom/key"
+    assert ssh.key_path == str(mock_ssh_key_path)
 
 
-def test_slurm_resource_creation():
+def test_slurm_resource_creation(mock_ssh_key_path: Path):
     """Test Slurm resource creation."""
     ssh = SSHConnectionResource(
-        host="cluster.example.com",
-        port=22,
-        user="testuser",
-        key_path="/path/to/key",
+        host="localhost",
+        port=2223,
+        user="submitter",
+        password="submitter",
     )
 
     queue = SlurmQueueConfig(
@@ -60,7 +86,6 @@ def test_slurm_resource_creation():
         ssh=ssh,
         queue=queue,
         remote_base="/home/testuser/dagster",
-        remote_python="python3",
     )
 
     assert slurm.ssh.host == "cluster.example.com"
@@ -74,16 +99,16 @@ def test_compute_resource_local_mode():
 
     assert compute.mode == "local"
     assert compute.slurm is None
-    assert compute.default_launcher is not None
+    assert isinstance(compute.default_launcher, BashLauncher)
 
 
 def test_compute_resource_slurm_mode():
     """Test compute resource in Slurm mode."""
     ssh = SSHConnectionResource(
-        host="cluster.example.com",
-        port=22,
-        user="testuser",
-        key_path="/path/to/key",
+        host="localhost",
+        port=2223,
+        user="submitter",
+        password="submitter",
     )
 
     slurm = SlurmResource(

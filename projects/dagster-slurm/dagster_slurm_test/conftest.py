@@ -39,11 +39,10 @@ def mock_slurm_resource(mock_ssh_resource):
         queue=SlurmQueueConfig(
             partition="test",
             time_limit="00:10:00",
-            cpus="2",
+            cpus=2,
             mem="1G",
         ),
         remote_base="/tmp/dagster_test",
-        remote_python="python3",
     )
 
 

@@ -60,6 +60,7 @@ def test_ray_launcher_local_mode():
         payload_path="/path/to/script.py",
         python_executable="python3",
         working_dir="/tmp/test",
+        activation_script="env/activate.sh",
         pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
     )
 
@@ -85,6 +86,7 @@ def test_ray_launcher_cluster_mode():
         python_executable="python3",
         working_dir="/tmp/test",
         pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
+        activation_script="env/activate.sh",
         allocation_context=allocation_context,
     )
 

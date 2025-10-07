@@ -3,9 +3,10 @@
 import os
 import shlex
 from typing import List, Optional
+from pathlib import Path
 
 from dagster import ConfigurableResource
-from pydantic import Field, model_validator
+from pydantic import Field, model_validator, field_validator
 
 
 class SSHConnectionResource(ConfigurableResource):
@@ -88,6 +89,17 @@ class SSHConnectionResource(ConfigurableResource):
         default_factory=list,
         description="Additional raw SSH options (e.g., ['-o', 'Compression=yes'])",
     )
+
+    @field_validator("key_path")
+    @classmethod
+    def _expand_and_validate_key_path(cls, v: Optional[str]) -> Optional[str]:
+        """Expands user directory and checks for existence."""
+        if v is None:
+            return None
+        expanded_path = Path(os.path.expanduser(v))
+        if not expanded_path.exists():
+            raise ValueError(f"SSH key not found at path: {expanded_path}")
+        return str(expanded_path)
 
     @model_validator(mode="after")
     def _validate_config(self):
