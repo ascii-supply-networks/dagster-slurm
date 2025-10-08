@@ -85,7 +85,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/91/0cb0e416a8b7cfdc7f15e39d700dc06a9689073206fee4c7bf8f1fd68331/uv-0.8.24-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/6f/92/7d491ede63c70e237168d7c6a53aa6353420414fa29e5ee06e0c130cfa35/uv-0.9.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b5/e8/dbf020b4d98251a9860752a094d09a65e1b436ad181faf929983f697048f/watchdog-6.0.0-py3-none-manylinux2014_x86_64.whl
       - pypi: ./projects/dagster-slurm
       linux-aarch64:
@@ -166,7 +166,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/01/ea/547fffd3c779fae3e5dfccf64e893eac33126f20454b883b51148e9b8493/uv-0.8.24-py3-none-manylinux_2_28_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/4a/52/25a5dcfccb7a905f9fde93acd0a6c6bb6d1a14333d2f696e64d33ec108df/uv-0.9.0-py3-none-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/c7/ca4bf3e518cb57a686b2feb4f55a1892fd9a3dd13f470fca14e00f80ea36/watchdog-6.0.0-py3-none-manylinux2014_aarch64.whl
       - pypi: ./projects/dagster-slurm
       osx-64:
@@ -239,7 +239,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/17/d6/26702561b06650efe7eb36008e7a93e877cd51a9bb54141cc159113b37b1/uv-0.8.24-py3-none-macosx_10_12_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/c2/1e/efb46c17b7220fab41b470e6f269f4e7997d274fb5fb46512e1579ff3b07/uv-0.9.0-py3-none-macosx_10_12_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/12/87/48361531f70b1f87928b045df868a9fd4e253d9ae087fa4cf3f7113be363/watchdog-6.0.0-cp312-cp312-macosx_10_13_x86_64.whl
       - pypi: ./projects/dagster-slurm
       osx-arm64:
@@ -312,7 +312,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/ea/00/08f4e93989129bb3378f20315dddcac6f8cf26a12bdd90443a340e7ecdb4/uv-0.8.24-py3-none-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/8e/06/f5e38314e318bfaa20ccce966f6d0a69b093854648d31085b2d8b2097aab/uv-0.9.0-py3-none-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/5b/7e/8f322f5e600812e6f9a31b75d242631068ca8f4ef0582dd3ae6e72daecc8/watchdog-6.0.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: ./projects/dagster-slurm
       win-64:
@@ -391,7 +391,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/aa/d1/12d251ecd36aea66ddfa1431b61c4782b2905ecbf188bbffd5aee8f5ceef/uv-0.8.24-py3-none-win_amd64.whl
+      - pypi: https://files.pythonhosted.org/packages/60/cd/98242bb85c92a06156ebfead3c3c9126e8dbb7872808b11a76428b9aaf4a/uv-0.9.0-py3-none-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/db/d9/c495884c6e548fce18a8f40568ff120bc3a4b7b99813081c8ac0c936fa64/watchdog-6.0.0-py3-none-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl
       - pypi: ./projects/dagster-slurm
@@ -1154,7 +1154,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/91/0cb0e416a8b7cfdc7f15e39d700dc06a9689073206fee4c7bf8f1fd68331/uv-0.8.24-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/6f/92/7d491ede63c70e237168d7c6a53aa6353420414fa29e5ee06e0c130cfa35/uv-0.9.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b5/e8/dbf020b4d98251a9860752a094d09a65e1b436ad181faf929983f697048f/watchdog-6.0.0-py3-none-manylinux2014_x86_64.whl
       - pypi: ./projects/dagster-slurm
       linux-aarch64:
@@ -1276,7 +1276,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/01/ea/547fffd3c779fae3e5dfccf64e893eac33126f20454b883b51148e9b8493/uv-0.8.24-py3-none-manylinux_2_28_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/4a/52/25a5dcfccb7a905f9fde93acd0a6c6bb6d1a14333d2f696e64d33ec108df/uv-0.9.0-py3-none-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/c7/ca4bf3e518cb57a686b2feb4f55a1892fd9a3dd13f470fca14e00f80ea36/watchdog-6.0.0-py3-none-manylinux2014_aarch64.whl
       - pypi: ./projects/dagster-slurm
       osx-64:
@@ -1389,7 +1389,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/17/d6/26702561b06650efe7eb36008e7a93e877cd51a9bb54141cc159113b37b1/uv-0.8.24-py3-none-macosx_10_12_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/c2/1e/efb46c17b7220fab41b470e6f269f4e7997d274fb5fb46512e1579ff3b07/uv-0.9.0-py3-none-macosx_10_12_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/12/87/48361531f70b1f87928b045df868a9fd4e253d9ae087fa4cf3f7113be363/watchdog-6.0.0-cp312-cp312-macosx_10_13_x86_64.whl
       - pypi: ./projects/dagster-slurm
       osx-arm64:
@@ -1502,7 +1502,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/ea/00/08f4e93989129bb3378f20315dddcac6f8cf26a12bdd90443a340e7ecdb4/uv-0.8.24-py3-none-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/8e/06/f5e38314e318bfaa20ccce966f6d0a69b093854648d31085b2d8b2097aab/uv-0.9.0-py3-none-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/5b/7e/8f322f5e600812e6f9a31b75d242631068ca8f4ef0582dd3ae6e72daecc8/watchdog-6.0.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: ./projects/dagster-slurm
       win-64:
@@ -1615,7 +1615,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/5c/23/c7abc0ca0a1526a0774eca151daeb8de62ec457e77262b66b359c3c7679e/tzdata-2025.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/79/bc/3d995b13a6cf4e060db085b405b4c16b91e57ca35877083a7f51b74e34d4/universal_pathlib-0.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/c2/fe1e52489ae3122415c51f387e221dd0773709bad6c6cdaa599e8a2c5185/urllib3-2.5.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/aa/d1/12d251ecd36aea66ddfa1431b61c4782b2905ecbf188bbffd5aee8f5ceef/uv-0.8.24-py3-none-win_amd64.whl
+      - pypi: https://files.pythonhosted.org/packages/60/cd/98242bb85c92a06156ebfead3c3c9126e8dbb7872808b11a76428b9aaf4a/uv-0.9.0-py3-none-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/db/d9/c495884c6e548fce18a8f40568ff120bc3a4b7b99813081c8ac0c936fa64/watchdog-6.0.0-py3-none-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl
       - pypi: ./projects/dagster-slurm
@@ -3268,6 +3268,7 @@ packages:
   - libgomp 15.2.0 h767d61c_6
   - libgcc-ng ==15.2.0=*_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 823770
   timestamp: 1759796589812
@@ -3280,6 +3281,7 @@ packages:
   - libgomp 15.2.0 he277a41_6
   - libgcc-ng ==15.2.0=*_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 510253
   timestamp: 1759796121542
@@ -3289,6 +3291,7 @@ packages:
   depends:
   - libgcc 15.2.0 h767d61c_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 29249
   timestamp: 1759796603487
@@ -3298,6 +3301,7 @@ packages:
   depends:
   - libgcc 15.2.0 he277a41_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 29272
   timestamp: 1759796125202
@@ -3307,6 +3311,7 @@ packages:
   depends:
   - __glibc >=2.17,<3.0.a0
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 448095
   timestamp: 1759796487876
@@ -3314,6 +3319,7 @@ packages:
   sha256: 812cb5e45f2186dfb308fe1f44ae7657ce240d3d27a9fc29df9e5817684b0b7c
   md5: da96dd212ab97216f525b01d81cc5a96
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 450815
   timestamp: 1759796059723
@@ -3503,6 +3509,7 @@ packages:
   - __glibc >=2.17,<3.0.a0
   - libgcc 15.2.0 h767d61c_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 3903545
   timestamp: 1759796640725
@@ -3512,6 +3519,7 @@ packages:
   depends:
   - libgcc 15.2.0 he277a41_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 3825728
   timestamp: 1759796142848
@@ -3521,6 +3529,7 @@ packages:
   depends:
   - libstdcxx 15.2.0 h8f9b012_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 29290
   timestamp: 1759796693929
@@ -3530,6 +3539,7 @@ packages:
   depends:
   - libstdcxx 15.2.0 h3f4de04_6
   license: GPL-3.0-only WITH GCC-exception-3.1
+  license_family: GPL
   purls: []
   size: 29280
   timestamp: 1759796170617
@@ -5695,30 +5705,30 @@ packages:
   - pkg:pypi/urllib3?source=hash-mapping
   size: 101735
   timestamp: 1750271478254
-- pypi: https://files.pythonhosted.org/packages/01/ea/547fffd3c779fae3e5dfccf64e893eac33126f20454b883b51148e9b8493/uv-0.8.24-py3-none-manylinux_2_28_aarch64.whl
+- pypi: https://files.pythonhosted.org/packages/4a/52/25a5dcfccb7a905f9fde93acd0a6c6bb6d1a14333d2f696e64d33ec108df/uv-0.9.0-py3-none-manylinux_2_28_aarch64.whl
   name: uv
-  version: 0.8.24
-  sha256: 1143a8c6e59f4600dfc1b96b335c7fa47428246be37ac19b6f6dd1535c385ccd
+  version: 0.9.0
+  sha256: 5ff5954dc403b408d30470d499a40286bc549e2f9623dc05c93d5bb05af80340
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/15/91/0cb0e416a8b7cfdc7f15e39d700dc06a9689073206fee4c7bf8f1fd68331/uv-0.8.24-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/60/cd/98242bb85c92a06156ebfead3c3c9126e8dbb7872808b11a76428b9aaf4a/uv-0.9.0-py3-none-win_amd64.whl
   name: uv
-  version: 0.8.24
-  sha256: 0a75005a146e81ed1bbb0b6e55db18c8ad1e7d714392cdb94a63fa7a3259ad4f
+  version: 0.9.0
+  sha256: ee5969cef61e8eef251ee14e573fa22b42bbe90a2d194b6de6d794baee176a9b
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/17/d6/26702561b06650efe7eb36008e7a93e877cd51a9bb54141cc159113b37b1/uv-0.8.24-py3-none-macosx_10_12_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/6f/92/7d491ede63c70e237168d7c6a53aa6353420414fa29e5ee06e0c130cfa35/uv-0.9.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
   name: uv
-  version: 0.8.24
-  sha256: 1cd064933beb3c7392a8dc88d903be809b70612c563e2d659a96d505cac1daf5
+  version: 0.9.0
+  sha256: 8fcd2f0d52ab16faa055ca2969d1d94ae1b1397ba5a0962332c500dd81b0f893
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/aa/d1/12d251ecd36aea66ddfa1431b61c4782b2905ecbf188bbffd5aee8f5ceef/uv-0.8.24-py3-none-win_amd64.whl
+- pypi: https://files.pythonhosted.org/packages/8e/06/f5e38314e318bfaa20ccce966f6d0a69b093854648d31085b2d8b2097aab/uv-0.9.0-py3-none-macosx_11_0_arm64.whl
   name: uv
-  version: 0.8.24
-  sha256: 59d2527b9afdd89361d057b0c8077fca3212e7335df46532bf9057c6fc5eb9ff
+  version: 0.9.0
+  sha256: b900e84d992a657e16371426dbb030ab031c0322a604b632dada34401ebe7145
   requires_python: '>=3.8'
-- pypi: https://files.pythonhosted.org/packages/ea/00/08f4e93989129bb3378f20315dddcac6f8cf26a12bdd90443a340e7ecdb4/uv-0.8.24-py3-none-macosx_11_0_arm64.whl
+- pypi: https://files.pythonhosted.org/packages/c2/1e/efb46c17b7220fab41b470e6f269f4e7997d274fb5fb46512e1579ff3b07/uv-0.9.0-py3-none-macosx_10_12_x86_64.whl
   name: uv
-  version: 0.8.24
-  sha256: a2bd708a545c1c21d7be8575f4cff00d0cff26be13fc81e3f7e54b8751fb90c0
+  version: 0.9.0
+  sha256: ecc841797888d5983dcbac0918d0392f8078265083c2bc676a76e36a1a84b3ad
   requires_python: '>=3.8'
 - conda: https://conda.anaconda.org/conda-forge/win-64/vc-14.3-h41ae7f8_31.conda
   sha256: cb357591d069a1e6cb74199a8a43a7e3611f72a6caed9faa49dbb3d7a0a98e0b
