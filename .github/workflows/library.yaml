@@ -76,7 +76,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.1
         with:
-            pixi-version: v0.55.0
+            pixi-version: v0.56.0
             cache: true
             frozen: true
       - run: pixi run -e build --frozen lint
@@ -115,7 +115,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.1
         with:
-            pixi-version: v0.55.0
+            pixi-version: v0.56.0
             cache: true
             frozen: true
 
@@ -220,7 +220,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.1
         with:
-            pixi-version: v0.55.0
+            pixi-version: v0.56.0
             cache: true
             frozen: true
 
