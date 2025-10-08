@@ -9,15 +9,15 @@ warnings.filterwarnings("ignore", category=dagster_warnings.PreviewWarning)
 
 from pathlib import Path
 
-from dagster_slurm_example import defs as example_defs
-from dagster_slurm_example.defs import ray as ray_defs
-from dagster_slurm_example.defs import shell as shell_defs
-from dagster_slurm_example.resources import get_resources_for_deployment
+from . import defs as example_defs
+from .defs import ray as ray_defs
+from .defs import shell as shell_defs
+from .resources import get_resources
 
 
 @dg.definitions
 def defs():
-    resource_defs = get_resources_for_deployment()
+    resource_defs = get_resources()
 
     all_assets = dg.with_source_code_references(
         [

@@ -15,13 +15,35 @@ This section covers the main components of the library.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: model_config
+   
 
-Calculator Example
-==================
-
-A simple module to demonstrate functionality.
-
-.. automodule:: dagster_slurm.calculator
+.. autoclass:: dagster_slurm.ComputeResource
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: model_config
+
+.. autoclass:: dagster_slurm.SlurmResource
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: model_config
+
+.. autoclass:: dagster_slurm.SSHConnectionResource
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: model_config
+
+.. autoclass:: dagster_slurm.SlurmSessionResource
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: model_config
+
+.. autoclass:: dagster_slurm.SlurmQueueConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: model_config

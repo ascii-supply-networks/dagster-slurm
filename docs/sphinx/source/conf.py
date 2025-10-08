@@ -20,7 +20,22 @@ extensions = [
     'sphinx.ext.napoleon',     # Support for Google and NumPy style docstrings
     'myst_parser',             # To parse .md files
     'sphinx_markdown_builder', # The crucial extension to build markdown files
+    'sphinx_autodoc_typehints',
 ]
+
+autosummary_generate = True
+autodoc_typehints = 'description'
+autodoc_typehints_format = 'short'
+
+# Configure the extension
+typehints_fully_qualified = False
+always_document_param_types = True
+typehints_document_rtype = True
+typehints_use_rtype = True
+
+# Put type hints in signature but format them safely
+autodoc_typehints = 'signature'
+autodoc_typehints_format = 'short'
 
 templates_path = ['_templates']
 exclude_patterns = []
@@ -32,3 +47,14 @@ exclude_patterns = []
 
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
+
+
+# Custom processing to escape problematic characters
+def process_signature(app, what, name, obj, options, signature, return_annotation):
+    if signature:
+        # Replace <factory> with a safe representation
+        signature = signature.replace('<factory>', '\\<factory\\>')
+    return signature, return_annotation
+
+def setup(app):
+    app.connect('autodoc-process-signature', process_signature)

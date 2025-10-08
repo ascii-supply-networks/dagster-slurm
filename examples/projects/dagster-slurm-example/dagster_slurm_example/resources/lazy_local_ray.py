@@ -6,8 +6,7 @@ from ray.job_submission import JobSubmissionClient
 
 
 class PipesRayJobClientLazyLocalResource(dg.ConfigurableResource):
-    """
-    A resource that provides a PipesRayJobClient.
+    """A resource that provides a PipesRayJobClient.
     It depends on a Ray cluster resource being available.
     """
 
@@ -15,8 +14,7 @@ class PipesRayJobClientLazyLocalResource(dg.ConfigurableResource):
 
     @cached_property
     def pipes_client(self) -> PipesRayJobClient:
-        """
-        Lazily initializes and returns a PipesRayJobClient connected to the
+        """Lazily initializes and returns a PipesRayJobClient connected to the
         provided Ray cluster.
         """
         try:
