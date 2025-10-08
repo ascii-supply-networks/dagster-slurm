@@ -11,6 +11,7 @@ from dagster_slurm import (
     SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
+from dagster_slurm import ComputeResource, BashLauncher
 
 
 @pytest.fixture
@@ -46,7 +47,13 @@ def mock_slurm_resource(mock_ssh_resource):
     )
 
 
-@pytest.fixture
-def local_compute_resource():
-    """Local compute resource for testing."""
-    return ComputeResource(mode=ExecutionMode.LOCAL)
+@pytest.fixture(scope="module")
+def local_compute_resource() -> ComputeResource:
+    """
+    Provides a correctly configured ComputeResource for local execution tests.
+    This fixture encapsulates the required explicit constructor arguments.
+    """
+    return ComputeResource(
+        mode=ExecutionMode.LOCAL,
+        default_launcher=BashLauncher(),
+    )

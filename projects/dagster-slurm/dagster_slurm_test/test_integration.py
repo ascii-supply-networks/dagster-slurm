@@ -2,10 +2,9 @@
 
 from dagster import AssetExecutionContext, asset, materialize
 from dagster_slurm import ComputeResource
-from dagster_slurm.config.environment import ExecutionMode
 
 
-def test_local_asset_execution(temp_dir):
+def test_local_asset_execution(temp_dir, local_compute_resource):
     """Test complete local asset execution."""
     # Create test payload
     payload = temp_dir / "test_payload.py"
@@ -30,13 +29,13 @@ with open_dagster_pipes() as context:
     # Materialize
     result = materialize(
         [test_asset],
-        resources={"compute": ComputeResource(mode=ExecutionMode.LOCAL)},
+        resources={"compute": local_compute_resource},
     )
 
     assert result.success
 
 
-def test_bash_launcher_integration(temp_dir):
+def test_bash_launcher_integration(temp_dir, local_compute_resource):
     """Test bash launcher integration."""
     payload = temp_dir / "bash_payload.py"
     payload.write_text("""
@@ -61,7 +60,7 @@ with open_dagster_pipes() as context:
 
     result = materialize(
         [bash_asset],
-        resources={"compute": ComputeResource(mode=ExecutionMode.LOCAL)},
+        resources={"compute": local_compute_resource},
     )
 
     assert result.success
