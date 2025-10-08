@@ -16,17 +16,13 @@ with open_dagster_pipes() as context:
     context.report_asset_materialization(metadata={"test": "value"})
 """)
 
-    # Create asset
     @asset
     def test_asset(context: AssetExecutionContext, compute: ComputeResource):
-        return list(
-            compute.run(
-                context=context,
-                payload_path=str(payload),
-            )
+        compute.run(
+            context=context,
+            payload_path=str(payload),
         )
 
-    # Materialize
     result = materialize(
         [test_asset],
         resources={"compute": local_compute_resource},
@@ -50,12 +46,10 @@ with open_dagster_pipes() as context:
 
     @asset
     def bash_asset(context: AssetExecutionContext, compute: ComputeResource):
-        return list(
-            compute.run(
-                context=context,
-                payload_path=str(payload),
-                extra_env={"TEST_VAR": "test_value"},
-            )
+        compute.run(
+            context=context,
+            payload_path=str(payload),
+            extra_env={"TEST_VAR": "test_value"},
         )
 
     result = materialize(
