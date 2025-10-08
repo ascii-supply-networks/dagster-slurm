@@ -73,7 +73,7 @@ class ComputeResource(ConfigurableResource):
 
     # Launcher configuration
     default_launcher: ComputeLauncher = Field(
-        default_factory=BashLauncher,
+        default_factory=BashLauncher(),
         description="Default launcher (BashLauncher if not provided)",
     )
 

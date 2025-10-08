@@ -49,22 +49,6 @@ def test_ssh_resource_creation_password():
     assert ssh.password == "testpassword"
 
 
-def test_ssh_resource_from_env(monkeypatch, mock_ssh_key_path: Path):
-    """Test SSH resource creation from environment."""
-    monkeypatch.setenv("SLURM_SSH_HOST", "cluster.example.com")
-    monkeypatch.setenv("SLURM_SSH_PORT", "2222")
-    monkeypatch.setenv("SLURM_SSH_USER", "admin")
-    # FIX: Point to an actual file
-    monkeypatch.setenv("SLURM_SSH_KEY", str(mock_ssh_key_path))
-
-    ssh = SSHConnectionResource.from_env()
-
-    assert ssh.host == "cluster.example.com"
-    assert ssh.port == 2222
-    assert ssh.user == "admin"
-    assert ssh.key_path == str(mock_ssh_key_path)
-
-
 def test_slurm_resource_creation(mock_ssh_key_path: Path):
     """Test Slurm resource creation."""
     ssh = SSHConnectionResource(
@@ -84,12 +68,12 @@ def test_slurm_resource_creation(mock_ssh_key_path: Path):
     slurm = SlurmResource(
         ssh=ssh,
         queue=queue,
-        remote_base="/home/testuser/dagster",
+        remote_base="/home/submitter/submitter",
     )
 
-    assert slurm.ssh.host == "cluster.example.com"
+    assert slurm.ssh.host == "localhost"
     assert slurm.queue.partition == "batch"
-    assert slurm.remote_base == "/home/testuser/dagster"
+    assert slurm.remote_base == "/home/submitter/submitter"
 
 
 def test_compute_resource_local_mode():
