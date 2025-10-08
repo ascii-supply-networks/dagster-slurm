@@ -57,22 +57,6 @@ jobs:
       contents: read
       pull-requests: read
       packages: read
-    # TODO: Eventually specify a slurm cluster here for CI/CD via a (single) docker container so we can validate in CI/CD
-    # services:
-    #   postgres:
-    #     image: postgres:17.5-alpine3.22
-    #     env:
-    #       POSTGRES_USER: ${{ env.BACKEND_APPLICATION__DATABASE__USERNAME }}
-    #       POSTGRES_PASSWORD: ${{ env.BACKEND_APPLICATION__DATABASE__PASSWORD }}
-    #       POSTGRES_DB: ${{ env.BACKEND_APPLICATION__DATABASE__DATABASE_NAME }}
-    #     ports:
-    #       - 7432:5432
-    #     # Add health check to ensure postgres is ready  
-    #     options: >-
-    #       --health-cmd "pg_isready -U test_user -d test_db"
-    #       --health-interval 10s
-    #       --health-timeout 5s
-    #       --health-retries 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -96,7 +80,7 @@ jobs:
 
       # - name: Start SLURM Cluster using pre-built image
       #   env:
-      #     IMAGE_TAG: latest # Use the 'latest' tag built by the image-builder workflow
+      #     IMAGE_TAG: ${{ env.SLURM_VERSION }}
       #   run: docker compose up -d
       #   # REMOVED: --build. This is now much faster.
       #   # docker-compose will pull the 'latest' image from ghcr.io.
