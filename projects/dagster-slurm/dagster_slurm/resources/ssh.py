@@ -115,13 +115,6 @@ class SSHConnectionResource(ConfigurableResource):
                 "Cannot specify both 'key_path' and 'password'. Choose one authentication method."
             )
 
-        # Expand key path if provided
-        if has_key:
-            self.key_path = os.path.expanduser(self.key_path)  # type: ignore
-            if not os.path.exists(self.key_path):  # type: ignore
-                raise ValueError(f"SSH key not found: {self.key_path}")
-
-        # Validate jump host configuration
         if self.jump_host:
             if not self.jump_host.uses_key_auth:
                 raise ValueError("Proxy jump host must use key-based authentication.")
@@ -209,6 +202,10 @@ class SSHConnectionResource(ConfigurableResource):
         if not self.jump_host:
             return []
 
+        # Validator ensures jump host uses key auth, so key_path is not None.
+        # We assert this for the type checker.
+        assert self.jump_host.key_path is not None
+
         # Build the inner ssh command for the proxy. Jump host must use key auth.
         proxy_ssh_cmd = [
             "ssh",
@@ -216,7 +213,7 @@ class SSHConnectionResource(ConfigurableResource):
             str(self.jump_host.port),
             "-i",
             self.jump_host.key_path,
-        ]  # type: ignore
+        ]
 
         # Add standard options for a non-interactive proxy connection
         proxy_ssh_cmd.extend(
@@ -258,9 +255,11 @@ class SSHConnectionResource(ConfigurableResource):
         ]
 
         if self.uses_key_auth:
+            # Assert for type checker, guaranteed by uses_key_auth property
+            assert self.key_path is not None
             auth_opts = [
                 "-i",
-                self.key_path,  # type: ignore
+                self.key_path,
                 "-o",
                 "IdentitiesOnly=yes",
                 "-o",
@@ -304,9 +303,11 @@ class SSHConnectionResource(ConfigurableResource):
         ]
 
         if self.uses_key_auth:
+            # Assert for type checker, guaranteed by uses_key_auth property
+            assert self.key_path is not None
             auth_opts = [
                 "-i",
-                self.key_path,  # type: ignore
+                self.key_path,
                 "-o",
                 "IdentitiesOnly=yes",
                 "-o",

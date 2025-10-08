@@ -31,6 +31,72 @@ class LocalMessageReader(PipesMessageReader):
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
+    # This method is moved out of read_messages and becomes a proper class method
+    def _tail_file(self, handler):
+        """Background thread that tails file."""
+        logger = get_dagster_logger()
+        pos = 0
+        deadline = time.time() + self.creation_timeout
+
+        # Wait for file creation
+        while not os.path.exists(self.messages_path):
+            if time.time() > deadline:
+                logger.warning(f"Messages file not created: {self.messages_path}")
+                return
+            if self._stop.is_set():
+                return
+            time.sleep(0.5)
+
+        # Wait for file to be readable
+        while True:
+            try:
+                with open(self.messages_path, "r") as f:
+                    break
+            except IOError:
+                if time.time() > deadline:
+                    logger.warning(f"Messages file not readable: {self.messages_path}")
+                    return
+                time.sleep(0.5)
+
+        # Tail file
+        while not self._stop.is_set():
+            try:
+                with open(self.messages_path, "r", encoding="utf-8") as f:
+                    # Handle file truncation
+                    try:
+                        size = os.path.getsize(self.messages_path)
+                        if pos > size:
+                            pos = 0  # File was truncated
+                    except Exception:
+                        pass
+
+                    if pos > 0:
+                        f.seek(pos)
+
+                    for line in f:
+                        if self._stop.is_set():
+                            break
+
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        try:
+                            msg = json.loads(line)
+                            handler.handle_message(msg)
+                        except json.JSONDecodeError:
+                            # Ignore non-JSON lines
+                            pass
+                        except Exception as e:
+                            logger.warning(f"Error handling message: {e}")
+
+                    pos = f.tell()
+
+            except Exception as e:
+                logger.warning(f"Error reading messages: {e}")
+
+            self._stop.wait(self.poll_interval)
+
     @contextmanager
     def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
         """Context manager that tails messages file."""
@@ -39,77 +105,14 @@ class LocalMessageReader(PipesMessageReader):
             PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: self.include_stdio,
         }
 
-        def tail_file():
-            """Background thread that tails file."""
-            logger = get_dagster_logger()
-            pos = 0
-            deadline = time.time() + self.creation_timeout
-
-            # Wait for file creation
-            while not os.path.exists(self.messages_path):
-                if time.time() > deadline:
-                    logger.warning(f"Messages file not created: {self.messages_path}")
-                    return
-                if self._stop.is_set():
-                    return
-                time.sleep(0.5)
-
-            # Wait for file to be readable
-            while True:
-                try:
-                    with open(self.messages_path, "r") as f:
-                        break
-                except IOError:
-                    if time.time() > deadline:
-                        logger.warning(
-                            f"Messages file not readable: {self.messages_path}"
-                        )
-                        return
-                    time.sleep(0.5)
-
-            # Tail file
-            while not self._stop.is_set():
-                try:
-                    with open(self.messages_path, "r", encoding="utf-8") as f:
-                        # Handle file truncation
-                        try:
-                            size = os.path.getsize(self.messages_path)
-                            if pos > size:
-                                pos = 0  # File was truncated
-                        except Exception:
-                            pass
-
-                        if pos > 0:
-                            f.seek(pos)
-
-                        for line in f:
-                            if self._stop.is_set():
-                                break
-
-                            line = line.strip()
-                            if not line:
-                                continue
-
-                            try:
-                                msg = json.loads(line)
-                                handler.handle_message(msg)
-                            except json.JSONDecodeError:
-                                # Ignore non-JSON lines
-                                pass
-                            except Exception as e:
-                                logger.warning(f"Error handling message: {e}")
-
-                        pos = f.tell()
-
-                except Exception as e:
-                    logger.warning(f"Error reading messages: {e}")
-
-                self._stop.wait(self.poll_interval)
-
         # Start background thread
         self._stop.clear()
         self._thread = threading.Thread(
-            target=tail_file, daemon=True, name="local-pipes-reader"
+            # Target the new method and pass handler as an argument
+            target=self._tail_file,
+            args=(handler,),
+            daemon=True,
+            name="local-pipes-reader",
         )
         self._thread.start()
 

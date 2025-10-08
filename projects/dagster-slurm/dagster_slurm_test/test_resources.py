@@ -8,7 +8,6 @@ from dagster_slurm import (
     SSHConnectionResource,
     BashLauncher,
 )
-import os
 from pathlib import Path
 from dagster_slurm.config.environment import ExecutionMode
 
