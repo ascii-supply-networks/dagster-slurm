@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: System :: Distributed Computing",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = ["dagster~=1.11.7", "dagster-pipes~=1.11.7", "loguru>=0.7,<1"]
+dependencies = ["dagster>=1.11.7", "dagster-pipes>=1.11.7", "loguru>=0.7", "pexpect~=4.9.0"]
 
 [project.urls]
 Homepage = "https://ascii-supply-networks.github.io/dagster-slurm/"
