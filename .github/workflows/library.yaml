@@ -16,6 +16,11 @@ concurrency:
   group: library-main-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
+  SLURM_VERSION: 25-05-3-1
+
 jobs:
   validate-pr:
     name: Validate PR Title
@@ -51,6 +56,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      packages: read
     # TODO: Eventually specify a slurm cluster here for CI/CD via a (single) docker container so we can validate in CI/CD
     # services:
     #   postgres:
@@ -81,7 +87,50 @@ jobs:
             frozen: true
       - run: pixi run -e build --frozen lint
 
-      - run: pixi run -e build --frozen testpixi
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # - name: Start SLURM Cluster using pre-built image
+      #   env:
+      #     IMAGE_TAG: latest # Use the 'latest' tag built by the image-builder workflow
+      #   run: docker compose up -d
+      #   # REMOVED: --build. This is now much faster.
+      #   # docker-compose will pull the 'latest' image from ghcr.io.
+
+      # - name: Wait for SLURM Cluster to be Ready
+      #   run: |
+      #     echo "Waiting for SLURM nodes to become idle..."
+      #     for i in {1..24}; do
+      #       if docker exec slurmctld sinfo | grep -q "idle"; then
+      #         echo "✅ SLURM nodes are ready!"
+      #         docker exec slurmctld sinfo
+      #         exit 0
+      #       fi
+      #       echo "Still waiting... ($i/24)"
+      #       sleep 5
+      #     done
+      #     echo "❌ SLURM cluster did not become ready in time."
+      #     docker compose logs
+      #     exit 1
+
+      - name: Run tests against SLURM cluster
+        env:
+          SLURM_EDGE_NODE: localhost
+          SLURM_EDGE_NODE_PORT: 2223
+          SLURM_EDGE_NODE_USER: submitter
+          SLURM_EDGE_NODE_PASSWORD: submitter
+        run: pixi run -e build --frozen testpixi
+
+      # - name: Stop SLURM Cluster and Clean Up
+      #   if: always()
+      #   run: |
+      #     echo "Tearing down SLURM cluster..."
+      #     docker compose logs
+      #     docker compose down -v
 
       - run: pixi run -e build --frozen build-lib
 

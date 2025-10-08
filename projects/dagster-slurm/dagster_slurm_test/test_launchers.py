@@ -27,7 +27,6 @@ def test_bash_launcher_basic():
     assert any("python3" in line for line in plan.payload)
 
 
-# TODO: Implement non session mode with cluster launcher
 # TODO: Implement session mode, HET job
 # def test_bash_launcher_with_allocation():
 #     """Test bash launcher with allocation context."""
@@ -71,7 +70,45 @@ def test_ray_launcher_local_mode():
     assert "dashboard-port=8265" in script
 
 
-# TODO: Implement non session mode with cluster launcher
+def test_ray_launcher_cluster_standalone_mode():
+    """
+    Tests the RayLauncher's ability to generate a script for a standalone,
+    multi-node sbatch job (i.e., NON-session mode).
+    """
+    launcher = RayLauncher(num_gpus_per_node=2)
+
+    plan = launcher.prepare_execution(
+        payload_path="/path/to/script.py",
+        python_executable="python3",
+        working_dir="/tmp/test",
+        pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
+        activation_script="env/activate.sh",
+    )
+
+    main_script = "\n".join(plan.payload)
+    assert (
+        'if [[ -n "${SLURM_JOB_ID:-}" && "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ]]; then'
+        in main_script
+    )
+    assert "Detected multi-node Slurm allocation" in main_script
+    assert 'srun --nodes=1 --ntasks=1 -w "$head_node"' in main_script
+    assert "else" in main_script
+    assert "Single-node mode detected" in main_script
+
+    assert "ray_driver.sh" in plan.auxiliary_scripts
+    assert "ray_worker.sh" in plan.auxiliary_scripts
+
+    driver_script = plan.auxiliary_scripts["ray_driver.sh"]
+    worker_script = plan.auxiliary_scripts["ray_worker.sh"]
+
+    assert "ray start --head" in driver_script
+    assert "srun --export=ALL --nodes=1 --ntasks=1" in driver_script
+    assert "python3 /path/to/script.py" in driver_script
+
+    assert "--address=" in worker_script
+    assert "--num-gpus=2" in worker_script
+
+
 # TODO: Implement session mode, HET job
 # def test_ray_launcher_cluster_mode():
 #     """Test Ray launcher in cluster mode."""
@@ -122,7 +159,32 @@ def test_spark_launcher_local_mode():
     assert "--executor-cores 2" in script
 
 
-# TODO: Implement non session mode with cluster launcher
+# TODO: Implement once spark cluster mode launcher is completed
+# def test_spark_launcher_cluster_standalone_mode():
+#     """Tests the SparkLauncher's script for a standalone, multi-node sbatch job."""
+#     launcher = SparkLauncher(spark_home="/opt/spark", executor_memory="8g")
+
+#     plan = launcher.prepare_execution(
+#         payload_path="/path/to/script.py",
+#         python_executable="python3",
+#         working_dir="/tmp/test",
+#         pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
+#         activation_script="env/activate.sh",
+#     )
+
+#     main_script = "\n".join(plan.payload)
+
+#     assert 'if [[ -n "${SLURM_JOB_ID:-}" && "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ]]; then' in main_script
+#     assert "else" in main_script
+
+#     assert "start-master.sh" in main_script
+#     assert "start-worker.sh" in main_script
+
+#     assert "spark-submit --master spark://$HEAD_NODE_IP:7077" in main_script
+#     assert "--executor-memory 8g" in main_script
+
+#     assert '--master "local[*]"' in main_script
+
 # TODO: Implement session mode, HET job
 # def test_spark_launcher_cluster_mode():
 #     """Test Spark launcher in cluster mode."""
