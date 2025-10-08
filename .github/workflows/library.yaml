@@ -81,7 +81,11 @@ jobs:
       - name: Start SLURM Cluster using pre-built image
         env:
           IMAGE_TAG: ${{ env.SLURM_VERSION }}
-        run: docker compose up -d
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.ci.yml \
+            up -d
         # REMOVED: --build. This is now much faster.
         # docker-compose will pull the 'latest' image from ghcr.io.
 
