@@ -2,7 +2,6 @@
 
 import pytest
 from dagster_slurm import (
-    ComputeResource,
     SlurmQueueConfig,
     SlurmResource,
     SSHConnectionResource,

@@ -9,9 +9,9 @@ from dagster_slurm import (
     SlurmQueueConfig,
     SlurmResource,
     SSHConnectionResource,
+    BashLauncher,
 )
 from dagster_slurm.config.environment import ExecutionMode
-from dagster_slurm import ComputeResource, BashLauncher
 
 
 @pytest.fixture

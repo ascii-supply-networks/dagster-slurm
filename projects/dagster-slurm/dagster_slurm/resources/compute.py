@@ -8,7 +8,6 @@ from pydantic import Field, PrivateAttr, model_validator
 from ..config.environment import ExecutionMode
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
-from ..launchers.script import BashLauncher
 from ..managers.hetjob import HeterogeneousJobManager, HetJobComponent
 from ..pipes_clients.local_pipes_client import LocalPipesClient
 from ..pipes_clients.slurm_pipes_client import SlurmPipesClient
