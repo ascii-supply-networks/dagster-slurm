@@ -73,6 +73,8 @@ fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/
 lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects --python-interpreter $PIXI_PROJECT_ROOT/.pixi/envs/build/bin/python3.12", description = "Lint" }
 test = { cmd = "uv run -- pytest -m 'not needs_slurm_docker' projects", description = "Run all unit tests" }
 testpixi = { cmd = "pytest -m 'not needs_slurm_docker' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
+
+
 test-integration = { cmd = "uv run -- pytest -m 'needs_slurm_docker' projects", description = "Run all integration tests" }
 testpixi-integration = { cmd = "pytest -m 'needs_slurm_docker' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
 
