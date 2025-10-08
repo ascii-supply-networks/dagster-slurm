@@ -2,6 +2,8 @@
 
 import tempfile
 from pathlib import Path
+from typing import Type
+
 
 import pytest
 from dagster_slurm import (
@@ -10,6 +12,9 @@ from dagster_slurm import (
     SlurmResource,
     SSHConnectionResource,
     BashLauncher,
+    ComputeLauncher,
+    RayLauncher,
+    SparkLauncher,
 )
 from dagster_slurm.config.environment import ExecutionMode
 
@@ -82,3 +87,62 @@ def slurm_compute_resource() -> ComputeResource:
         default_launcher=BashLauncher(),
         slurm=slurm,
     )
+
+
+# This fixture provides the base SlurmResource. It's marked as "session" scope
+# so it only runs once for the entire test session, which is efficient.
+@pytest.fixture(scope="session")
+def slurm_resource_for_testing() -> SlurmResource:
+    """
+    Provides a base SlurmResource configured for the Docker test cluster.
+    Skips tests if connection details are not available in environment variables.
+    """
+    ssh = SSHConnectionResource(
+        host="localhost",
+        port=2223,
+        user="submitter",
+        password="submitter",
+    )
+
+    return SlurmResource(
+        ssh=ssh,
+        queue=SlurmQueueConfig(partition="batch"),
+        remote_base="/home/submitter/dagster_ci_runs",
+    )
+
+
+def _compute_resource_factory(
+    slurm_resource: SlurmResource, launcher_class: Type[ComputeLauncher]
+) -> ComputeResource:
+    """A factory to create a ComputeResource with a specific launcher."""
+    return ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=launcher_class(),
+        # For CI, it's useful to see logs even on failure; enable if desired
+        cleanup_on_failure=True,
+    )
+
+
+@pytest.fixture(scope="module")
+def slurm_bash_compute_resource(
+    slurm_resource_for_testing: SlurmResource,
+) -> ComputeResource:
+    """Provides a ComputeResource for SLURM mode with a BashLauncher."""
+    return _compute_resource_factory(slurm_resource_for_testing, BashLauncher)
+
+
+@pytest.fixture(scope="module")
+def slurm_ray_compute_resource(
+    slurm_resource_for_testing: SlurmResource,
+) -> ComputeResource:
+    """Provides a ComputeResource for SLURM mode with a RayLauncher."""
+    return _compute_resource_factory(slurm_resource_for_testing, RayLauncher)
+
+
+@pytest.fixture(scope="module")
+def slurm_spark_compute_resource(
+    slurm_resource_for_testing: SlurmResource,
+) -> ComputeResource:
+    """Provides a ComputeResource for SLURM mode with a SparkLauncher."""
+    return _compute_resource_factory(slurm_resource_for_testing, SparkLauncher)
