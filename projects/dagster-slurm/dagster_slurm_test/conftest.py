@@ -57,3 +57,28 @@ def local_compute_resource() -> ComputeResource:
         mode=ExecutionMode.LOCAL,
         default_launcher=BashLauncher(),
     )
+
+
+@pytest.fixture(scope="module")
+def slurm_compute_resource() -> ComputeResource:
+    """
+    Provides a correctly configured ComputeResource for slurm docker execution tests.
+    This fixture encapsulates the required explicit constructor arguments.
+    """
+    ssh = SSHConnectionResource(
+        host="localhost",
+        port=2223,
+        user="submitter",
+        password="submitter",
+    )
+
+    slurm = SlurmResource(
+        ssh=ssh,
+        queue=SlurmQueueConfig(),
+        remote_base="/home/testuser/dagster",
+    )
+    return ComputeResource(
+        mode=ExecutionMode.SLURM,
+        default_launcher=BashLauncher(),
+        slurm=slurm,
+    )

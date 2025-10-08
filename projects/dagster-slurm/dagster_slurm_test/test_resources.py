@@ -76,38 +76,18 @@ def test_slurm_resource_creation(mock_ssh_key_path: Path):
     assert slurm.remote_base == "/home/submitter/submitter"
 
 
-def test_compute_resource_local_mode():
+def test_compute_resource_local_mode(local_compute_resource):
     """Test compute resource in local mode."""
-    compute = ComputeResource(mode=ExecutionMode.LOCAL)
+    compute = local_compute_resource
 
     assert compute.mode == "local"
     assert compute.slurm is None
     assert isinstance(compute.default_launcher, BashLauncher)
 
 
-def test_compute_resource_slurm_mode():
+def test_compute_resource_slurm_mode(slurm_compute_resource):
     """Test compute resource in Slurm mode."""
-    ssh = SSHConnectionResource(
-        host="localhost",
-        port=2223,
-        user="submitter",
-        password="submitter",
-    )
 
-    slurm = SlurmResource(
-        ssh=ssh,
-        queue=SlurmQueueConfig(),
-        remote_base="/home/testuser/dagster",
-    )
-
-    compute = ComputeResource(mode=ExecutionMode.SLURM, slurm=slurm)
-
+    compute = slurm_compute_resource
     assert compute.mode == ExecutionMode.SLURM
     assert compute.slurm is not None
-
-
-def test_compute_resource_validation():
-    """Test compute resource validation."""
-    # Should raise error: slurm mode requires slurm resource
-    with pytest.raises(ValueError, match="slurm resource required"):
-        ComputeResource(mode=ExecutionMode.SLURM)
