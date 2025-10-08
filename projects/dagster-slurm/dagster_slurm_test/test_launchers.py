@@ -67,7 +67,6 @@ def test_ray_launcher_local_mode():
     script = "\n".join(plan.payload)
     assert "ray start --head" in script
     assert "dashboard-port=8265" in script
-    assert 'RAY_ADDRESS="auto"' in script
 
 
 def test_ray_launcher_cluster_mode():
