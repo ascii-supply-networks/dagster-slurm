@@ -78,28 +78,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # - name: Start SLURM Cluster using pre-built image
-      #   env:
-      #     IMAGE_TAG: ${{ env.SLURM_VERSION }}
-      #   run: docker compose up -d
-      #   # REMOVED: --build. This is now much faster.
-      #   # docker-compose will pull the 'latest' image from ghcr.io.
+      - name: Start SLURM Cluster using pre-built image
+        env:
+          IMAGE_TAG: ${{ env.SLURM_VERSION }}
+        run: docker compose up -d
+        # REMOVED: --build. This is now much faster.
+        # docker-compose will pull the 'latest' image from ghcr.io.
 
-      # - name: Wait for SLURM Cluster to be Ready
-      #   run: |
-      #     echo "Waiting for SLURM nodes to become idle..."
-      #     for i in {1..24}; do
-      #       if docker exec slurmctld sinfo | grep -q "idle"; then
-      #         echo "✅ SLURM nodes are ready!"
-      #         docker exec slurmctld sinfo
-      #         exit 0
-      #       fi
-      #       echo "Still waiting... ($i/24)"
-      #       sleep 5
-      #     done
-      #     echo "❌ SLURM cluster did not become ready in time."
-      #     docker compose logs
-      #     exit 1
+      - name: Wait for SLURM Cluster to be Ready
+        run: |
+          echo "Waiting for SLURM nodes to become idle..."
+          for i in {1..24}; do
+            if docker exec slurmctld sinfo | grep -q "idle"; then
+              echo "✅ SLURM nodes are ready!"
+              docker exec slurmctld sinfo
+              exit 0
+            fi
+            echo "Still waiting... ($i/24)"
+            sleep 5
+          done
+          echo "❌ SLURM cluster did not become ready in time."
+          docker compose logs
+          exit 1
 
       - name: Run tests against SLURM cluster
         env:
