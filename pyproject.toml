@@ -203,4 +203,5 @@ filterwarnings = [
 ]
 markers = [
   "needs_slurm_docker: integration tests which need a real slurm cluster",
+  "slow: particularly slow tests",
 ]
