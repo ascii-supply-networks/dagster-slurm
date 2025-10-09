@@ -146,3 +146,12 @@ def slurm_spark_compute_resource(
 ) -> ComputeResource:
     """Provides a ComputeResource for SLURM mode with a SparkLauncher."""
     return _compute_resource_factory(slurm_resource_for_testing, SparkLauncher)
+
+
+@pytest.fixture(scope="session")
+def example_project_dir() -> Path:
+    """Returns the path to the example project directory."""
+    path = Path(__file__).parent.parent.parent.parent / "examples"
+    if not path.is_dir():
+        pytest.fail(f"Example project directory not found at: {path}")
+    return path
