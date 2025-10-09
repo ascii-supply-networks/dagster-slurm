@@ -75,8 +75,11 @@ test = { cmd = "uv run -- pytest -m 'not needs_slurm_docker' projects", descript
 testpixi = { cmd = "pytest -m 'not needs_slurm_docker' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
 
 
-test-integration = { cmd = "uv run -- pytest -m 'needs_slurm_docker' projects", description = "Run all integration tests" }
-testpixi-integration = { cmd = "pytest -m 'needs_slurm_docker' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+test-integration = { cmd = "uv run -- pytest -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
+testpixi-integration = { cmd = "pytest -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+
+test-integration-slow = { cmd = "uv run -- pytest -m 'slow' projects", description = "Run all integration tests" }
+testpixi-integration-slow = { cmd = "pytest -m 'slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
 
 
 [tool.pixi.feature.build.tasks.sync]
