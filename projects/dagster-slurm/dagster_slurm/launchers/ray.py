@@ -40,7 +40,7 @@ class RayLauncher(ComputeLauncher):
     )
     ray_port: int = Field(default=6379, description="Ray head port")
     grace_period: int = Field(
-        default=10, description="Seconds to wait for graceful shutdown"
+        default=5, description="Seconds to wait for graceful shutdown"
     )
     head_startup_timeout: int = Field(
         default=60, description="Seconds to wait for head to be ready"
