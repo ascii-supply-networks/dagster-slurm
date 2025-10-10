@@ -2,6 +2,59 @@
 
 <!-- version list -->
 
+## v1.4.0 (2025-10-08)
+
+
+## v1.3.1-rc.1 (2025-10-08)
+
+### Bug Fixes
+
+- Small fixes from review ([#24](https://github.com/ascii-supply-networks/dagster-slurm/pull/24),
+  [`6c64099`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6c64099c1c14c88072bbfb977b462b0419fbb27a))
+
+### Chores
+
+- Dependency upgrades ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+- Fix typo ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+- Improve image ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+- Make license more clear ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+- Refine slide ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+- Update deps ([#24](https://github.com/ascii-supply-networks/dagster-slurm/pull/24),
+  [`6c64099`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6c64099c1c14c88072bbfb977b462b0419fbb27a))
+
+- Use dark ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+### Features
+
+- Apply injection ([#24](https://github.com/ascii-supply-networks/dagster-slurm/pull/24),
+  [`6c64099`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6c64099c1c14c88072bbfb977b462b0419fbb27a))
+
+- Build SLURM integration for dagster
+  ([#19](https://github.com/ascii-supply-networks/dagster-slurm/pull/19),
+  [`b77c30a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b77c30ad26976aab34f3689ff1ac1e8e5e9d24c6))
+
+- Dedicated external workload package, more clarity of where what is executed
+  ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+- Inject hpc workload ([#24](https://github.com/ascii-supply-networks/dagster-slurm/pull/24),
+  [`6c64099`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6c64099c1c14c88072bbfb977b462b0419fbb27a))
+
+- Restructure ([#23](https://github.com/ascii-supply-networks/dagster-slurm/pull/23),
+  [`09a70d2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/09a70d2622897c22fa5b11a2e735b04ae6724923))
+
+
 ## v1.3.1 (2025-08-25)
 
 
