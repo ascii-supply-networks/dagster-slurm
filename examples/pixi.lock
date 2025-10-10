@@ -2193,8 +2193,8 @@ packages:
   timestamp: 1759433152796
 - pypi: ../projects/dagster-slurm
   name: dagster-slurm
-  version: 1.3.1
-  sha256: 8bb221639389ceb7f2c8dd6cdd194ca253750a71795d9e2e51ec42d81070ed12
+  version: 1.4.0
+  sha256: 79624e0fb513b8a5d54a3dd4dd3404a261414ade95fa53328d2b7336144a4be5
   requires_dist:
   - dagster>=1.11.7
   - dagster-pipes>=1.11.7
