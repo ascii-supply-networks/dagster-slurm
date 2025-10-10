@@ -2296,7 +2296,7 @@ packages:
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
   version: 1.4.0
-  sha256: 523ffda2bd27db51bab3f21dc781dac8435c3cc354a19a19bac0eefb1830d1cd
+  sha256: 79624e0fb513b8a5d54a3dd4dd3404a261414ade95fa53328d2b7336144a4be5
   requires_dist:
   - dagster>=1.11.7
   - dagster-pipes>=1.11.7
