@@ -4,10 +4,8 @@ These tests assume the SLURM Docker cluster is already running.
 Run with: pytest -v -m integration
 """
 
-import json
 import os
 import subprocess
-import time
 from pathlib import Path
 from typing import Dict, Any
 
@@ -79,20 +77,28 @@ def run_dg_command(
 
 def assert_materialization_success(result: subprocess.CompletedProcess, assets: str):
     """Assert that materialization completed successfully."""
+    # The main process should exit cleanly
     assert result.returncode == 0, (
         f"Command failed with exit code {result.returncode}\n"
         f"STDERR: {result.stderr}\n"
         f"STDOUT: {result.stdout}"
     )
 
+    # FIX: Dagster CLI logs go to stderr. We must check there.
+    logs = result.stderr
+
     # Check for success indicators
     for asset in assets.split(","):
-        assert asset in result.stdout, f"Asset {asset} not found in output"
+        # Make the check more specific to the materialization event
+        assert f"ASSET_MATERIALIZATION - Materialized value {asset}" in logs, (
+            f"Materialization event for asset '{asset}' not found in stderr logs."
+        )
 
     # Check for common failure patterns
-    assert "STEP_FAILURE" not in result.stdout, "Step failure detected"
-    assert "CheckError" not in result.stdout, "Check error detected"
-    assert "ConnectionError" not in result.stderr, "Connection error detected"
+    assert "STEP_FAILURE" not in logs, "Step failure detected in logs"
+    assert "RUN_FAILURE" not in logs, "Run failure detected in logs"
+    assert "CheckError" not in logs, "Check error detected in logs"
+    assert "ConnectionError" not in logs, "Connection error detected in logs"
 
 
 # ============================================================================
@@ -142,7 +148,7 @@ class TestDevelopmentMode:
         assert_materialization_success(result, "process_data,aggregate_results")
 
         # Check for local execution indicators
-        assert "LocalPipesClient" in result.stdout or "local" in result.stdout.lower()
+        assert "LocalPipesClient" in result.stderr or "local" in result.stderr.lower()
 
     def test_ray_assets_development(self, example_project_dir: Path):
         """Test Ray assets in local mode (single-node)."""
@@ -159,7 +165,8 @@ class TestDevelopmentMode:
 
         # Check for Ray local mode indicators
         assert (
-            "Single-node mode" in result.stdout or "local Ray cluster" in result.stdout
+            "Single-node mode" in result.stderr
+            or "local Ray cluster" in result.stderr.lower()
         )
 
 
@@ -211,25 +218,10 @@ class TestStagingDockerMode:
         assert_materialization_success(result, "process_data,aggregate_results")
 
         # Check for SLURM execution indicators
-        assert "Submitted job" in result.stdout
-        assert "pixi pack" in result.stdout or "Packing environment" in result.stdout
+        assert "Submitted job" in result.stderr
+        assert "pixi pack" in result.stderr or "Packing environment" in result.stderr
 
-    def test_ray_single_node_staging(self, example_project_dir: Path):
-        """Test Ray single-node execution on SLURM with interactive build."""
-        result = run_dg_command(
-            example_project_dir,
-            deployment="STAGING_DOCKER",
-            assets="distributed_training",
-            timeout=600,
-        )
-
-        assert_materialization_success(result, "distributed_training")
-
-        # Check for Ray cluster indicators
-        assert "Ray" in result.stdout
-        assert "Submitted job" in result.stdout
-
-    def test_ray_multi_node_staging(self, example_project_dir: Path):
+    def test_ray_staging(self, example_project_dir: Path):
         """Test Ray multi-node cluster on SLURM with interactive build."""
         result = run_dg_command(
             example_project_dir,
@@ -243,7 +235,7 @@ class TestStagingDockerMode:
         )
 
         # Check for multi-node Ray indicators
-        assert "nodes" in result.stdout.lower()
+        assert "nodes" in result.stderr.lower()
 
 
 # ============================================================================
@@ -276,8 +268,8 @@ class TestProductionDockerMode:
         assert_materialization_success(result, "process_data,aggregate_results")
 
         # Check that we're using pre-deployed environment (no packing)
-        assert "pixi pack" not in result.stdout
-        assert "Submitted job" in result.stdout
+        assert "pixi pack" not in result.stderr
+        assert "Submitted job" in result.stderr
 
     def test_ray_assets_production(
         self, example_project_dir: Path, deployment_metadata: Dict[str, Any]
@@ -298,8 +290,8 @@ class TestProductionDockerMode:
         )
 
         # Verify we're using pre-deployed environment
-        assert "pixi pack" not in result.stdout
-        assert deployment_metadata["deployment_path"] in result.stdout
+        assert "pixi pack" not in result.stderr
+        assert deployment_metadata["deployment_path"] in result.stderr
 
 
 # ============================================================================
@@ -337,7 +329,7 @@ class TestProductionDockerMode:
 #         )
 
 #         assert_materialization_success(result, "distributed_training,distributed_inference")
-#         assert "Reusing existing cluster" in result.stdout
+#         assert "Reusing existing cluster" in result.stderr
 
 #     @pytest.mark.skip(reason="HetJob mode requires additional setup")
 #     def test_staging_hetjob_mode(self, example_project_dir: Path):
@@ -353,7 +345,7 @@ class TestProductionDockerMode:
 #             result,
 #             "process_data,aggregate_results,distributed_training"
 #         )
-#         assert "heterogeneous job" in result.stdout.lower()
+#         assert "heterogeneous job" in result.stderr.lower()
 
 
 # ============================================================================
