@@ -75,8 +75,8 @@ test = { cmd = "uv run -- pytest -m 'not (needs_slurm_docker or slow)' projects"
 testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
 
 
-test-integration = { cmd = "uv run -- pytest --capture=no -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
-testpixi-integration = { cmd = "pytest --capture=no -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+test-integration = { cmd = "uv run -- pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
+testpixi-integration = { cmd = "pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
 
 test-integration-slow = { cmd = "uv run -- pytest -m 'slow' projects", description = "Run all integration tests" }
 testpixi-integration-slow = { cmd = "pytest -m 'slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
