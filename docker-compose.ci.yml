@@ -7,7 +7,6 @@ services:
 
   slurmctld:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
-    network_mode: "host"
 
   c1:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
