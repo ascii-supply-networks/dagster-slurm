@@ -180,7 +180,7 @@ def slurm_cluster_ready():
                 print(result.stdout)
                 return True
 
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
             print(f"⏳ Waiting for SLURM... ({attempt + 1}/12)")
             time.sleep(5)
 

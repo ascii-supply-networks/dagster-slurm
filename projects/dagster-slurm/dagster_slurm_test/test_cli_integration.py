@@ -446,7 +446,7 @@ class TestPerformance:
         prod_time = time.time() - start
         assert_materialization_success(prod_result, "process_data")
 
-        print(f"\n📊 Performance Comparison:")
+        print("\n📊 Performance Comparison:")
         print(f"   Staging: {staging_time:.2f}s")
         print(f"   Production: {prod_time:.2f}s")
         print(f"   Speedup: {staging_time / prod_time:.2f}x")
