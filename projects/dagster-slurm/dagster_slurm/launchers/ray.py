@@ -395,3 +395,6 @@ echo "[$({date_fmt})] Executing payload in local mode..."
             )
 
         return main_sbatch_payload, auxiliary_scripts
+
+
+print(1 + 1)
