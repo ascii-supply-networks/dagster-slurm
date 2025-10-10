@@ -45,6 +45,7 @@ build = ">=1.3.0"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 pytest = ">=8.3.4,<9"
 pytest-cov = "~=7.0.0"
+pexpect = "~=4.9.0"
 
 [tool.pixi.feature.explore.dependencies]
 ipykernel = "~=6.29"
