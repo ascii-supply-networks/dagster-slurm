@@ -105,6 +105,9 @@ jobs:
           echo "❌ SLURM cluster did not become ready in time."
           docker compose logs
           exit 1
+      
+      - name: debugging deploy
+        run: pixi run deploy-prod-docker
 
       - name: Run integration tests against SLURM cluster
         env:
