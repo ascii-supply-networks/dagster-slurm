@@ -36,6 +36,8 @@ RUN set -ex \
        http-parser-devel \
        json-c-devel \
        openssh-server \
+       nc \
+       sshpass \
        sudo \
     && yum clean all \
     && rm -rf /var/cache/yum

@@ -4,6 +4,9 @@ from enum import StrEnum
 class Environment(StrEnum):
     DEVELOPMENT = "development"
     STAGING_DOCKER = "staging_docker"
+    STAGING_DOCKER_SESSION = "staging_docker_session"
+    STAGING_DOCKER_SESSION_CLUSTER_REUSE = "staging_docker_session_cluster_reuse"
+    STAGING_DOCKER_HETJOB = "staging_docker_hetjob"
     PRODUCTION_DOCKER = "production_docker"
     PRODUCTION_DOCKER_SESSION = "production_docker_session"
     PRODUCTION_DOCKER_SESSION_CLUSTER_REUSE = "production_docker_session_cluster_reuse"

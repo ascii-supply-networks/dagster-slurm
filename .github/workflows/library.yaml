@@ -71,6 +71,9 @@ jobs:
             frozen: true
       - run: pixi run -e build --frozen lint
 
+      - name: Run unit tests without real SLURM
+        run: pixi run -e build --frozen testpixi
+
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3
         with:
@@ -78,43 +81,56 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # - name: Start SLURM Cluster using pre-built image
-      #   env:
-      #     IMAGE_TAG: ${{ env.SLURM_VERSION }}
-      #   run: docker compose up -d
-      #   # REMOVED: --build. This is now much faster.
-      #   # docker-compose will pull the 'latest' image from ghcr.io.
-
-      # - name: Wait for SLURM Cluster to be Ready
-      #   run: |
-      #     echo "Waiting for SLURM nodes to become idle..."
-      #     for i in {1..24}; do
-      #       if docker exec slurmctld sinfo | grep -q "idle"; then
-      #         echo "✅ SLURM nodes are ready!"
-      #         docker exec slurmctld sinfo
-      #         exit 0
-      #       fi
-      #       echo "Still waiting... ($i/24)"
-      #       sleep 5
-      #     done
-      #     echo "❌ SLURM cluster did not become ready in time."
-      #     docker compose logs
-      #     exit 1
-
-      - name: Run tests against SLURM cluster
+      - name: Start SLURM Cluster using pre-built image
         env:
-          SLURM_EDGE_NODE: localhost
+          IMAGE_TAG: ${{ env.SLURM_VERSION }}
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.ci.yml \
+            up -d --wait-timeout 120 || true
+
+            echo "### Verifying container health status..."
+          echo "The 'STATUS' column should show '(healthy)' for all relevant containers."
+          docker compose ps
+          
+          echo
+          echo "### Application-level check (Optional but recommended)..."
+          docker exec slurmctld sinfo
+
+          echo "--- SLURMCTLD LOGS (where healthcheck output is) ---"
+          docker logs slurmctld
+          
+          # Now, add a real check to fail the job if the container isn't healthy
+          if ! docker ps | grep slurmctld | grep -q '(healthy)'; then
+            echo "❌ slurmctld did not become healthy."
+            exit 1
+          fi
+
+      # - name: debugging deploy
+      #   env:
+      #     SLURM_EDGE_NODE_HOST: localhost
+      #     SLURM_EDGE_NODE_PORT: 2223
+      #     SLURM_EDGE_NODE_USER: submitter
+      #     SLURM_EDGE_NODE_PASSWORD: submitter
+      #     SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
+      #   run: cd examples && pixi run deploy-prod-docker
+
+      - name: Run integration tests against SLURM cluster
+        env:
+          SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
-        run: pixi run -e build --frozen testpixi
+          SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
+        run: pixi run -e build --frozen testpixi-integration
 
-      # - name: Stop SLURM Cluster and Clean Up
-      #   if: always()
-      #   run: |
-      #     echo "Tearing down SLURM cluster..."
-      #     docker compose logs
-      #     docker compose down -v
+      - name: Stop SLURM Cluster and Clean Up
+        if: always()
+        run: |
+          echo "Tearing down SLURM cluster..."
+          docker compose logs
+          docker compose down -v
 
       - run: pixi run -e build --frozen build-lib
 

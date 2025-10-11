@@ -38,18 +38,13 @@ channels = ["conda-forge"]
 build = { features = ["build"], solve-group = "build" }
 
 docs = { features = ["docs"], solve-group = "docs" }
-explore = { features = ["build", "explore"], solve-group = "explore" }
 [tool.pixi.feature.build.pypi-dependencies]
 uv = ">=0.8.6"
 build = ">=1.3.0"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 pytest = ">=8.3.4,<9"
 pytest-cov = "~=7.0.0"
-
-[tool.pixi.feature.explore.dependencies]
-ipykernel = "~=6.29"
-
-[tool.pixi.feature.explore.pypi-dependencies]
+pexpect = "~=4.9.0"
 
 [tool.pixi.feature.docs]
 channels = ["conda-forge", "https://prefix.dev/brads-forge"]
@@ -71,8 +66,16 @@ release = { cmd = "uv run semantic-release publish", description = "Make new rel
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
 lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects --python-interpreter $PIXI_PROJECT_ROOT/.pixi/envs/build/bin/python3.12", description = "Lint" }
-test = { cmd = "uv run -- pytest projects", description = "Run all unit tests" }
-testpixi = { cmd = "pytest --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
+test = { cmd = "uv run -- pytest -m 'not (needs_slurm_docker or slow)' projects", description = "Run all unit tests" }
+testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
+
+
+test-integration = { cmd = "uv run -- pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
+testpixi-integration = { cmd = "pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+
+test-integration-slow = { cmd = "uv run -- pytest -m 'slow' projects", description = "Run all integration tests" }
+testpixi-integration-slow = { cmd = "pytest -m 'slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+
 
 [tool.pixi.feature.build.tasks.sync]
 cmd = "uv sync --all-packages"
@@ -187,3 +190,13 @@ name = "testpypi"
 url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 explicit = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore::dagster._utils.warnings.BetaWarning",
+  "ignore::dagster._utils.warnings.PreviewWarning",
+]
+markers = [
+  "needs_slurm_docker: integration tests which need a real slurm cluster",
+  "slow: particularly slow tests",
+]

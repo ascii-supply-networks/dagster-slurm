@@ -14,7 +14,7 @@ services:
       - slurm-network
 
   slurmdbd:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     build:
       context: services/slurm
       args:
@@ -35,7 +35,7 @@ services:
       - slurm-network
 
   slurmctld:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmctld"]
     container_name: slurmctld
     hostname: slurmctld
@@ -56,9 +56,17 @@ services:
       - slurm-network
     ports:
       - 2223:22
+    healthcheck:
+      # This command checks that SLURM is idle AND the SSH port is listening
+      # test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -p 22 submitter@localhost 'echo ssh_ok'"]
+      test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   c1:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c1
     container_name: c1
@@ -76,15 +84,18 @@ services:
       - "6379"      # Ray GCS port
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
+    #depends_on:
+    #  - "slurmctld"
     depends_on:
-      - "slurmctld"
+      slurmctld:
+        condition: service_started
     networks:
       - slurm-network
 
     
 
   c2:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c2
     container_name: c2

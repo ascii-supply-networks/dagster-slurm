@@ -14,6 +14,7 @@ from .launchers.ray import RayLauncher
 # Launchers
 from .launchers.script import BashLauncher
 from .launchers.spark import SparkLauncher
+from dagster_slurm.launchers.base import ComputeLauncher
 
 # Clients (for advanced usage)
 from .pipes_clients.local_pipes_client import LocalPipesClient
@@ -35,6 +36,7 @@ __all__ = [
     # Launchers
     "BashLauncher",
     "RayLauncher",
+    "ComputeLauncher",
     "SparkLauncher",
     # Advanced: Direct client access
     "LocalPipesClient",

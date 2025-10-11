@@ -64,8 +64,6 @@ class SlurmResource(ConfigurableResource):
                 gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
-            remote_python=os.getenv("SLURM_PYTHON", "python3"),
-            activate_sh=os.getenv("SLURM_ACTIVATE_SH"),
         )
 
     @classmethod

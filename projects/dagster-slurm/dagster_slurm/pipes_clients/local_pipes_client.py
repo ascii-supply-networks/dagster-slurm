@@ -17,6 +17,9 @@ from dagster import (
 from ..helpers.message_readers import LocalMessageReader
 from ..launchers.base import ComputeLauncher
 from ..runners.local_runner import LocalRunner
+import tempfile
+import shutil
+import atexit
 
 
 class LocalPipesClient(PipesClient):
@@ -27,7 +30,7 @@ class LocalPipesClient(PipesClient):
     def __init__(
         self,
         launcher: ComputeLauncher,
-        base_dir: str = "/tmp/dagster_local_runs",
+        base_dir: Optional[str] = None,
         require_pixi: bool = True,
     ):
         """Args:
@@ -38,7 +41,16 @@ class LocalPipesClient(PipesClient):
         """
         super().__init__()
         self.launcher = launcher
-        self.base_dir = base_dir
+        if base_dir is None:
+            self.base_dir = tempfile.mkdtemp(prefix="dagster_local_runs-")
+            self._temp_dir_created = True
+            # Register cleanup on exit
+            atexit.register(self._cleanup_temp_dir)
+        else:
+            self.base_dir = base_dir
+            self._temp_dir_created = False
+            # Ensure base_dir exists if provided
+            Path(self.base_dir).mkdir(parents=True, exist_ok=True)
         self.require_pixi = require_pixi
         self.runner = LocalRunner()
         self.logger = get_dagster_logger()
@@ -47,6 +59,28 @@ class LocalPipesClient(PipesClient):
             raise RuntimeError(
                 "Local mode requires active pixi environment. Run: pixi shell -e dev"
             )
+
+    def _cleanup_temp_dir(self):
+        """Clean up temporary directory if we created it."""
+        if self._temp_dir_created and Path(self.base_dir).exists():
+            try:
+                shutil.rmtree(self.base_dir)
+                self.logger.debug(f"Cleaned up temporary directory: {self.base_dir}")
+            except Exception as e:
+                self.logger.warning(f"Failed to clean up temp dir {self.base_dir}: {e}")
+
+    def cleanup(self):
+        """Explicitly clean up resources."""
+        self._cleanup_temp_dir()
+
+    def __enter__(self):
+        """Context manager support."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Clean up on context exit."""
+        self.cleanup()
+        return False
 
     def _check_pixi_active(self) -> bool:
         """Verify running in pixi environment."""

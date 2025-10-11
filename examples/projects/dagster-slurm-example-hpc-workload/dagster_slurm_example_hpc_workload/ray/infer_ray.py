@@ -1,7 +1,6 @@
 """Example Ray inference script."""
 
 import os
-import sys
 import time
 
 import ray
@@ -14,7 +13,7 @@ def run_inference_batch(batch_id: int):
     return f"Processed batch {batch_id}"
 
 
-def main():
+def main():  # noqa: C901
     context = PipesContext.get()
     context.log.info("Starting Ray inference...")
     model_path = os.environ.get("MODEL_PATH")
@@ -23,18 +22,41 @@ def main():
     if not ray.is_initialized():  # type: ignore
         context.log.info("Connecting to Ray cluster...")
 
-        # Initialize with normal logging (you'll see the logs)
-        ray.init(  # type: ignore
-            address=os.environ.get("RAY_ADDRESS", "auto"),  # type: ignore
-            logging_level="INFO",  # Keep normal logging  # type: ignore
-        )
+        # Get connection parameters from environment
+        ray_address = os.environ.get("RAY_ADDRESS", "auto")
+        node_ip = os.environ.get("RAY_NODE_IP_ADDRESS")
 
-        # CRITICAL: Wait for Ray's async connection logs to finish
-        time.sleep(1.0)  # Give Ray time to print connection messages
-        sys.stdout.flush()
-        sys.stderr.flush()
+        # Build init kwargs
+        init_kwargs = {
+            "address": ray_address,
+            "logging_level": "INFO",
+        }
 
-        context.log.info(f"Connected to Ray at {ray.get_runtime_context().gcs_address}")  # type: ignore
+        if node_ip:
+            init_kwargs["_node_ip_address"] = node_ip
+            context.log.debug(f"Using node IP: {node_ip}")
+
+        context.log.info(f"Try Connecting to Ray at: {ray_address}")
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                ray.init(**init_kwargs)
+                context.log.info("Connected to Ray cluster.")
+                break
+            except Exception as e:
+                if attempt < max_attempts:
+                    context.log.warning(
+                        f"Connection attempt {attempt} failed: {e}. "
+                        f"Retrying in 10 seconds..."
+                    )
+                    time.sleep(10)
+                else:
+                    context.log.error(
+                        f"Failed to connect after {max_attempts} attempts"
+                    )
+                    raise
+
     # Distributed inference
     num_batches = 20
     futures = [run_inference_batch.remote(i) for i in range(num_batches)]
