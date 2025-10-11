@@ -165,7 +165,6 @@ class RayLauncher(ComputeLauncher):
             bytes_value = self.object_store_memory_gb * 1_000_000_000
             obj_store = f"--object-store-memory={bytes_value}"
 
-        # **THE FIX IS HERE**: Only add the activation block if the script is provided.
         activation_block = ""
         if activation_script:
             activation_block = f"""
@@ -223,7 +222,6 @@ class RayLauncher(ComputeLauncher):
         redis_pw = self.redis_password or "$(uuidgen)"
         temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
 
-        # --- Build Argument Lists Robustly (from previous fix) ---
         common_args = [f"--temp-dir={temp_dir_path}"]
         if self.object_store_memory_gb is not None:
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
@@ -270,7 +268,6 @@ class RayLauncher(ComputeLauncher):
     ray start {worker_cmd_str} --block
     """
 
-        # --- Driver Script (with all features and THE FIX) ---
         ray_driver_script = f"""#!/bin/bash
     set -e
     activation_script="$1"
@@ -345,7 +342,7 @@ class RayLauncher(ComputeLauncher):
         sleep {self.worker_startup_delay}
     done
 
-    # ===== 4. Wait for All Workers to Register (THE FIX IS HERE) =====
+    # ===== 4. Wait for All Workers to Register =====
     echo "Waiting briefly for worker processes to launch..."
     sleep 5 # Give workers a few seconds to start or fail
     for pid in "${{WORKER_PIDS[@]}}"; do
