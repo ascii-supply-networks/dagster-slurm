@@ -1,70 +1,22 @@
 #!/bin/bash
 set -e
 
+echo "---> Ensuring correct permissions for Slurm directories..."
 mkdir -p /var/spool/slurmd /var/run/slurmd /var/lib/slurmd /var/log/slurm
 chown -R slurm:slurm /var/spool/slurmd /var/run/slurmd /var/lib/slurmd /var/log/slurm /etc/slurm
 
-if [ "$1" = "slurmdbd" ]
-then
-    echo "---> Starting the MUNGE Authentication service (munged) ..."
-    gosu munge /usr/sbin/munged
+echo "---> Starting MUNGE service..."
+gosu munge /usr/sbin/munged
 
-    echo "---> Starting the Slurm Database Daemon (slurmdbd) ..."
-
-    {
-        . /etc/slurm/slurmdbd.conf
-        until echo "SELECT 1" | mysql -h $StorageHost -u$StorageUser -p$StoragePass 2>&1 > /dev/null
-        do
-            echo "-- Waiting for database to become active ..."
-            sleep 2
-        done
-    }
-    echo "-- Database is now active ..."
-
-    exec gosu slurm /usr/sbin/slurmdbd -Dvvv
+# If the command is a SLURM daemon, also start SSHD.
+if [[ "$1" == "slurmctld" || "$1" == "slurmd" ]]; then
+    echo "---> Starting SSH service..."
+    /usr/sbin/sshd
 fi
 
-if [ "$1" = "slurmctld" ]
-then
-    # This block is ONLY executed for the slurmctld container.
-
-    echo "---> Starting the MUNGE Authentication service (munged) ..."
-    gosu munge /usr/sbin/munged
-
-    echo "---> Starting the SSH daemon (sshd) ..."
-    /usr/sbin/sshd -D & # This will only run for slurmctld
-
-    echo "---> Waiting for slurmdbd to become active before starting slurmctld ..."
-    until 2>/dev/null >/dev/tcp/slurmdbd/6819
-    do
-        echo "-- slurmdbd is not available.  Sleeping ..."
-        sleep 2
-    done
-    echo "-- slurmdbd is now active ..."
-
-    echo "---> Starting the Slurm Controller Daemon (slurmctld) ..."
-    # The -D flag keeps the process in the foreground, which is correct.
-    exec gosu slurm /usr/sbin/slurmctld -Dvvv
+echo "---> Executing primary command: $@"
+if [[ "$1" == "slurmdbd" || "$1" == "slurmctld" || "$1" == "slurmd" ]]; then
+    exec gosu slurm "/usr/sbin/$1" -Dvvv
+else
+    exec "$@"
 fi
-
-if [ "$1" = "slurmd" ]
-then
-    # This block is for compute nodes (c1, c2).
-    # Notice there is NO sshd command here.
-
-    echo "---> Starting the MUNGE Authentication service (munged) ..."
-    gosu munge /usr/sbin/munged
-
-    echo "---> Waiting for slurmctld to become active before starting slurmd..."
-    until 2>/dev/null >/dev/tcp/slurmctld/6817
-    do
-        echo "-- slurmctld is not available.  Sleeping ..."
-        sleep 2
-    done
-    echo "-- slurmctld is now active ..."
-
-    echo "---> Starting the Slurm Node Daemon (slurmd) ..."
-    exec gosu slurm /usr/sbin/slurmd -Dvvv
-fi
-
-exec "$@"
