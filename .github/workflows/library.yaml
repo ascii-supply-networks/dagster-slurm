@@ -108,7 +108,7 @@ jobs:
 
       - name: debugging deploy
         env:
-          SLURM_EDGE_NODE: localhost
+          SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
@@ -117,7 +117,7 @@ jobs:
 
       - name: Run integration tests against SLURM cluster
         env:
-          SLURM_EDGE_NODE: localhost
+          SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
