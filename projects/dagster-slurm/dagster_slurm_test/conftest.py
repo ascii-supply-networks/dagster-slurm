@@ -21,6 +21,8 @@ import subprocess
 import time
 import json
 from typing import Any, Dict
+import platform
+from loguru import logger
 
 
 @pytest.fixture
@@ -199,16 +201,23 @@ def deployment_metadata(example_project_dir: Path) -> Dict[str, Any]:
     metadata_file = example_project_dir / "deployment_metadata.json"
 
     if not metadata_file.exists():
-        # Try to create it by running deploy script
-        try:
-            subprocess.run(
-                ["pixi", "run", "deploy-prod-docker-aarch"],
-                cwd=example_project_dir,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            pytest.skip("Could not create deployment metadata")
+        system = platform.system().lower()
+        machine = platform.machine().lower()
+
+        logger.info(f"Auto-detected platform: {system}/{machine}")
+
+        if system == "darwin" and "arm" in machine:
+            prep_cmd = ["pixi", "run", "deploy-prod-docker-aarch"]
+        elif system == "linux" and ("aarch64" in machine or "arm" in machine):
+            prep_cmd = ["pixi", "run", "deploy-prod-docker"]
+        else:
+            raise ValueError(f"Unsupported platform: {system}/{machine}")
+        subprocess.run(
+            prep_cmd,
+            cwd=example_project_dir,
+            check=True,
+            capture_output=True,
+        )
 
     with open(metadata_file) as f:
         return json.load(f)
