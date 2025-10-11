@@ -8,7 +8,6 @@ from typing import Optional
 
 from dagster import get_dagster_logger
 from typing import TYPE_CHECKING
-import tempfile
 
 if TYPE_CHECKING:
     from ..resources.ssh import SSHConnectionResource
@@ -22,21 +21,9 @@ class SSHConnectionPool:
 
     def __init__(self, ssh_config: "SSHConnectionResource"):
         self.config = ssh_config
-        self.temp_dir = tempfile.mkdtemp(prefix="dagster-ssh-")
-        self.control_path = str(Path(self.temp_dir) / f"control-{uuid.uuid4().hex}")
+        self.control_path = f"/tmp/dagster-ssh-{uuid.uuid4().hex}"
         self._master_started = False
         self.logger = get_dagster_logger()
-
-    def cleanup(self):
-        """Clean up temporary files and directory."""
-        import shutil
-
-        if hasattr(self, "temp_dir") and Path(self.temp_dir).exists():
-            shutil.rmtree(self.temp_dir)
-
-    def __del__(self):
-        """Ensure cleanup on object destruction."""
-        self.cleanup()
 
     def __enter__(self):
         """Start SSH ControlMaster."""
