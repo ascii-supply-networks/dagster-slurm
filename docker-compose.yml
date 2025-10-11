@@ -88,7 +88,7 @@ services:
     #  - "slurmctld"
     depends_on:
       slurmctld:
-        condition: service_healthy
+        condition: service_started
     networks:
       - slurm-network
 
