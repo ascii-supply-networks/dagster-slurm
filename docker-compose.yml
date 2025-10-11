@@ -56,6 +56,13 @@ services:
       - slurm-network
     ports:
       - 2223:22
+    healthcheck:
+      # This command checks that SLURM is idle AND the SSH port is listening
+      test: ["CMD-SHELL", "sinfo | grep -q idle && nc -z localhost 22"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   c1:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
