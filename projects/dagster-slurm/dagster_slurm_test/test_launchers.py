@@ -85,6 +85,7 @@ def test_ray_launcher_cluster_standalone_mode():
         activation_script="env/activate.sh",
     )
 
+    # --- Main Script Assertions ---
     main_script = "\n".join(plan.payload)
     assert (
         'if [[ -n "${SLURM_JOB_ID:-}" && "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ]]; then'
@@ -95,18 +96,23 @@ def test_ray_launcher_cluster_standalone_mode():
     assert "else" in main_script
     assert "Single-node mode detected" in main_script
 
+    # --- Auxiliary Script Assertions ---
     assert "ray_driver.sh" in plan.auxiliary_scripts
     assert "ray_worker.sh" in plan.auxiliary_scripts
 
     driver_script = plan.auxiliary_scripts["ray_driver.sh"]
     worker_script = plan.auxiliary_scripts["ray_worker.sh"]
 
+    # 1. Assertions for the Driver Script
+    assert "head_node_name=$(hostname)" in driver_script
     assert "ray start --head" in driver_script
-    assert "srun --export=ALL --nodes=1 --ntasks=1" in driver_script
+    assert "--node-ip-address=$head_node_name" in driver_script
+    assert 'srun --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
     assert "python3 /path/to/script.py" in driver_script
 
-    assert "--address=" in worker_script
+    assert "--address=$ip_head" in worker_script
     assert "--num-gpus=2" in worker_script
+    assert "--node-ip-address" not in worker_script
 
 
 # TODO: Implement session mode, HET job
