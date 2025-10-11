@@ -65,12 +65,12 @@ class RayLauncher(ComputeLauncher):
 
         # Build header for the main script
         script = f"""#!/bin/bash
-set -euo pipefail
-echo "[$({date_fmt})] ========================================="
-echo "[$({date_fmt})] Ray Workload Launcher"
-echo "[$({date_fmt})] Working dir: {working_dir}"
-echo "[$({date_fmt})] ========================================="
-"""
+    set -euo pipefail
+    echo "[$({date_fmt})] ========================================="
+    echo "[$({date_fmt})] Ray Workload Launcher"
+    echo "[$({date_fmt})] Working dir: {working_dir}"
+    echo "[$({date_fmt})] ========================================="
+    """
         # Export all environment variables
         script += "# Exporting environment variables...\n"
         for key, value in {**pipes_context, **(extra_env or {})}.items():
@@ -81,21 +81,21 @@ echo "[$({date_fmt})] ========================================="
 
         # Ray setup based on mode
         if self.ray_address:
-            # Mode: Connect to existing cluster.
+            # Mode: Connect to existing cluster
             script += f"""# Connect to existing Ray cluster
-export RAY_ADDRESS={shlex.quote(self.ray_address)}
-echo "[$({date_fmt})] Connecting to Ray cluster: {self.ray_address}"
-echo "[$({date_fmt})] Executing payload..."
-"""
+    export RAY_ADDRESS={shlex.quote(self.ray_address)}
+    echo "[$({date_fmt})] Connecting to Ray cluster: {self.ray_address}"
+    echo "[$({date_fmt})] Executing payload..."
+    """
             if activation_script:
                 script += f"source {shlex.quote(activation_script)}\n"
             script += f"{python_command}\n"
 
         elif allocation_context:
-            # Mode: Start cluster in a pre-existing Slurm allocation (session mode)
+            # Mode: Start cluster in pre-existing allocation (session mode)
             if not activation_script:
                 raise ValueError(
-                    "An 'activation_script' is required for multi-node Ray execution in session mode."
+                    "activation_script required for multi-node Ray in session mode"
                 )
 
             cluster_payload, aux_scripts = self._generate_cluster_template(
@@ -110,16 +110,13 @@ echo "[$({date_fmt})] Executing payload..."
             auxiliary_scripts.update(aux_scripts)
 
         else:
-            # Mode: Standalone job. Could be multi-node (on Slurm) or single-node (local or Slurm).
+            # Mode: Standalone job (single-node or multi-node Slurm)
             script += f"""# Detect Ray mode
-if [[ -n "${{SLURM_JOB_ID:-}}" && "${{SLURM_JOB_NUM_NODES:-1}}" -gt 1 ]]; then
-    echo "[$({date_fmt})] Detected multi-node Slurm allocation ($SLURM_JOB_NUM_NODES nodes)"
-"""
-            # ** THE MINIMAL FIX IS HERE **
-            # We now use the ROBUST template generator for the multi-node Slurm case.
-            # It requires an activation script, so we add a check.
+    if [[ -n "${{SLURM_JOB_ID:-}}" && "${{SLURM_JOB_NUM_NODES:-1}}" -gt 1 ]]; then
+        echo "[$({date_fmt})] Detected multi-node Slurm allocation ($SLURM_JOB_NUM_NODES nodes)"
+    """
             if not activation_script:
-                script += '    echo "ERROR: An activation_script is required for multi-node Ray execution but was not provided." >&2; exit 1\n'
+                script += '    echo "ERROR: activation_script required for multi-node Ray" >&2; exit 1\n'
             else:
                 cluster_payload, aux_scripts = self._generate_cluster_template(
                     python_executable=python_executable,
@@ -133,18 +130,16 @@ if [[ -n "${{SLURM_JOB_ID:-}}" && "${{SLURM_JOB_NUM_NODES:-1}}" -gt 1 ]]; then
                 auxiliary_scripts.update(aux_scripts)
 
             script += f"""
-else
-    echo "[$({date_fmt})] Single-node mode detected. Starting local Ray cluster..."
-"""
-            # This 'local' block is used for both true local dev and single-node Slurm jobs.
-            # It works for both because it correctly handles an optional activation_script.
+    else
+        echo "[$({date_fmt})] Single-node mode detected. Starting local Ray cluster..."
+    """
             local_lines = self._generate_local_template(date_fmt, activation_script)
             script += local_lines
 
             script += f"""
-echo "[$({date_fmt})] Executing payload in local mode..."
-{python_command}
-"""
+    echo "[$({date_fmt})] Executing payload in local mode..."
+    {python_command}
+    """
             script += "fi\n\n"
 
         return ExecutionPlan(
@@ -219,16 +214,10 @@ echo "[$({date_fmt})] Executing payload in local mode..."
         payload_path: str,
         working_dir: str,
         date_fmt: str,
-        activation_script: str,  # Now a required argument
+        activation_script: str,
         allocation_context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, dict]:
-        """Generates a robust Ray cluster startup script using a head-node-driven architecture.
-        The main sbatch script simply launches a driver script on the head node.
-
-        Returns:
-            Tuple of (main_script_payload, auxiliary_scripts_dict)
-
-        """
+        """Generates a robust Ray cluster startup script with proper shutdown."""
         redis_pw = self.redis_password or "$(uuidgen)"
 
         # Build object store argument
@@ -241,61 +230,108 @@ echo "[$({date_fmt})] Executing payload in local mode..."
         temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
         temp_dir_arg = f"--temp-dir={temp_dir_path}"
 
-        # --- Script for the Worker Nodes ---
+        # --- Worker Script: Simple blocking with proper cleanup ---
         ray_worker_script = f"""#!/bin/bash
-  set -e
-  # This script is launched by the driver on the head node.
-  # Arguments: $1=activation_script, $2=ip_head, $3=redis_password
-  activation_script="$1"
-  ip_head="$2"
-  redis_password="$3"
+    set -e
+    activation_script="$1"
+    ip_head="$2"
+    redis_password="$3"
 
-  echo "Worker on $(hostname) activating environment: $activation_script"
-  source "$activation_script"
+    echo "Worker on $(hostname) activating environment: $activation_script"
+    source "$activation_script"
 
-  cleanup_node() {{ echo "Worker on $(hostname) stopping Ray..."; ray stop -v; rm -rf {temp_dir_path}; exit 0; }}
-  trap cleanup_node TERM INT
+    cleanup_node() {{
+    echo "Worker on $(hostname) shutting down..."
+    # Use --force to skip the grace period - just kill it
+    ray stop --force 2>/dev/null || true
+    rm -rf {temp_dir_path} 2>/dev/null || true
+    exit 0
+    }}
 
-  echo "Worker on $(hostname) starting and connecting to $ip_head..."
-  ray start -v \\
+    trap cleanup_node TERM INT EXIT
+
+        echo "Worker on $(hostname) starting and connecting to $ip_head..."
+
+    # Set Ray 2.50 timeout environment variables
+    export RAY_raylet_start_wait_time_s=120
+    export RAY_health_check_initial_delay_ms=10000
+    export RAY_health_check_period_ms=5000
+
+    ray start -v \\
     --address="$ip_head" \\
     --redis-password="$redis_password" \\
     --num-gpus={self.num_gpus_per_node} \\
     {obj_store_arg} \\
     {temp_dir_arg} \\
     --block
-  """
+    """
 
-        # --- The Main Driver Script (runs on the head node) ---
+        # --- Driver Script: Force kill approach ---
         ray_driver_script = f"""#!/bin/bash
-  set -e
-  # Arguments: $1=activation_script
-  activation_script="$1"
+    set -e
+    activation_script="$1"
 
-  echo "======================================="
-  echo "Ray Cluster Driver Script Started on $(hostname)"
-  echo "Activating environment: $activation_script"
-  echo "======================================="
-  source "$activation_script"
+    echo "======================================="
+    echo "Ray Cluster Driver Script Started on $(hostname)"
+    echo "Activating environment: $activation_script"
+    echo "======================================="
+    source "$activation_script"
 
+    # Track worker PIDs
+    WORKER_PIDS=()
 
-  cleanup() {{
-    echo "Driver script received signal. Stopping Ray cluster..."
-    ray stop -v
-    wait || true
-    rm -rf {temp_dir_path}
-    echo "Driver cleanup complete."
-  }}
-  trap cleanup EXIT SIGINT SIGTERM
+    cleanup() {{
+    echo "======================================="
+    echo "Initiating cluster shutdown..."
+    echo "======================================="
+    
+    # Step 1: Kill worker processes immediately (they'll cleanup via trap)
+    if [ ${{#WORKER_PIDS[@]}} -gt 0 ]; then
+        echo "Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
+        for pid in "${{WORKER_PIDS[@]}}"; do
+        if kill -0 $pid 2>/dev/null; then
+            kill -TERM $pid 2>/dev/null || true
+        fi
+        done
+        
+        # Wait briefly for workers to cleanup
+        sleep 2
+        
+        # Force kill any stragglers
+        for pid in "${{WORKER_PIDS[@]}}"; do
+        if kill -0 $pid 2>/dev/null; then
+            kill -9 $pid 2>/dev/null || true
+        fi
+        done
+    fi
+    
+    # Step 2: Force stop Ray on head node
+    echo "Force stopping Ray head node..."
+    ray stop --force 2>/dev/null || true
+    
+    # Step 3: Cleanup temp directory
+    echo "Cleaning up temporary files..."
+    rm -rf {temp_dir_path} 2>/dev/null || true
+    
+    echo "Shutdown complete"
+    echo "======================================="
+    }}
 
-  # ===== 1. Start Head Node =====
-  ip=$(hostname --ip-address | awk '{{print $1}}')
-  port={self.ray_port}
-  ip_head="$ip:$port"
-  redis_password="{redis_pw}"
+    trap cleanup EXIT SIGINT SIGTERM
 
-  echo "Starting Ray head on this node ($(hostname)) at $ip_head..."
-  ray start --head -v \\
+    # ===== 1. Start Head Node =====
+    ip=$(hostname --ip-address | awk '{{print $1}}')
+    port={self.ray_port}
+    ip_head="$ip:$port"
+    redis_password="{redis_pw}"
+
+        echo "Starting Ray head on this node ($(hostname)) at $ip_head..."
+    # Set Ray 2.50 timeout environment variables
+    export RAY_raylet_start_wait_time_s=120
+    export RAY_health_check_initial_delay_ms=10000
+    export RAY_health_check_period_ms=5000
+
+    ray start --head -v \\
     --node-ip-address="$ip" \\
     --port="$port" \\
     --dashboard-host=0.0.0.0 \\
@@ -305,62 +341,76 @@ echo "[$({date_fmt})] Executing payload in local mode..."
     {temp_dir_arg} \\
     --redis-password="$redis_password"
 
-  # ===== 2. Wait for Head to be Ready =====
-  echo "Waiting for local Ray head to be ready..."
-  for i in {{1..60}}; do
-    if ray status &>/dev/null; then
-      echo "Ray head is ready."
-      break
+    export RAY_ADDRESS="$ip_head"
+    echo "Exported RAY_ADDRESS=$RAY_ADDRESS"
+
+    # ===== 2. Wait for Head to be Ready =====
+    echo "Waiting for Ray head to be ready at $RAY_ADDRESS..."
+    for i in {{1..{self.head_startup_timeout}}}; do
+    if ray status --address="$RAY_ADDRESS" &>/dev/null; then
+        echo "✓ Ray head is ready"
+        break
     fi
-    if [[ $i -eq 60 ]]; then
-      echo "ERROR: Local Ray head failed to start in 60 seconds." >&2
-      exit 1
+    if [[ $i -eq {self.head_startup_timeout} ]]; then
+        echo "ERROR: Ray head failed to become ready in {self.head_startup_timeout}s" >&2
+        exit 1
     fi
     sleep 1
-  done
+    done
 
-  # ===== 3. Start Worker Nodes =====
-  all_nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
-  head_node_name=$(hostname)
-  worker_nodes=()
-  for node in "${{all_nodes[@]}}"; do
-      if [[ "$node" != "$head_node_name" ]]; then
-          worker_nodes+=("$node")
-      fi
-  done
+    # ===== 3. Start Worker Nodes =====
+    all_nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
+    head_node_name=$(hostname)
+    worker_nodes=()
+    for node in "${{all_nodes[@]}}"; do
+        if [[ "$node" != "$head_node_name" ]]; then
+            worker_nodes+=("$node")
+        fi
+    done
 
-  echo "Head node is: $head_node_name"
-  echo "Worker nodes are: ${{worker_nodes[@]}}"
+    echo "Head node: $head_node_name"
+    echo "Worker nodes: ${{worker_nodes[@]}}"
 
-  for node_i in "${{worker_nodes[@]}}"; do
+    for node_i in "${{worker_nodes[@]}}"; do
     echo "Launching worker on $node_i..."
-    # Pass the activation script path to the worker script
     srun --export=ALL --nodes=1 --ntasks=1 -w "$node_i" \\
-      {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
-    sleep 1
-  done
+        {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
+    WORKER_PIDS+=($!)
+    sleep {self.worker_startup_delay}
+    done
 
-  echo "All worker launch commands issued. Waiting for registration..."
-  sleep 5
+    echo "✓ All ${{#WORKER_PIDS[@]}} worker(s) launched"
+    sleep 5
 
-  # ===== 4. Verify Cluster and Run Payload =====
-  echo "Final cluster status:"
-  ray status
+    # ===== 4. Wait for GCS Stabilization =====
+    echo "Waiting for GCS to stabilize and workers to register (Ray 2.50)..."
+    # Increased from 10 to 20 seconds to allow worker registration
+    sleep 20
 
-  echo "======================================="
-  echo "Executing user payload..."
-  echo "======================================="
+    # ===== 5. Verify Cluster =====
+    echo "======================================="
+    echo "Cluster Status:"
+    ray status --address="$RAY_ADDRESS"
+    echo "======================================="
 
-  # The placeholder for the user's python command
-  COMMAND_PLACEHOLDER
+    # ===== 6. Run Payload =====
+    echo "Executing user payload..."
 
-  exit_code=$?
-  echo "======================================="
-  echo "User payload finished with exit code $exit_code."
-  echo "======================================="
-  exit $exit_code
-  """
-        # **FIX #1**: Replace the plain placeholder string.
+    # Export connection parameters
+    export RAY_ADDRESS="$ip_head"
+    export RAY_NODE_IP_ADDRESS="$ip"
+    export RAY_REDIS_PASSWORD="$redis_password"
+
+    COMMAND_PLACEHOLDER
+
+    exit_code=$?
+    echo "======================================="
+    echo "Payload finished with exit code $exit_code"
+    echo "======================================="
+    exit $exit_code
+    """
+
+        # Replace placeholder
         python_command_placeholder = (
             f"{shlex.quote(python_executable)} {shlex.quote(payload_path)}"
         )
@@ -368,30 +418,25 @@ echo "[$({date_fmt})] Executing payload in local mode..."
             "COMMAND_PLACEHOLDER", python_command_placeholder
         )
 
-        # --- The Main sbatch Script Payload ---
-        # This now just launches the driver on the head node, passing the activation script.
+        # --- Main sbatch payload ---
         main_sbatch_payload = f"""
-  # Find the first node in the allocation to act as the head node.
-  nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
-  nodes_array=($nodes)
-  head_node="${{nodes_array[0]}}"
+    # Find head node
+    nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+    nodes_array=($nodes)
+    head_node="${{nodes_array[0]}}"
 
-  echo "Designated head node is: $head_node"
-  echo "Launching cluster driver script on head node..."
+    echo "Designated head node: $head_node"
+    echo "Launching cluster driver on head node..."
 
-  # **FIX #2**: Pass the activation script path to the driver.
-  srun --nodes=1 --ntasks=1 -w "$head_node" {working_dir}/ray_driver.sh "{activation_script}"
-  """
+    srun --nodes=1 --ntasks=1 -w "$head_node" {working_dir}/ray_driver.sh "{activation_script}"
+    """
 
         auxiliary_scripts = {
             "ray_driver.sh": ray_driver_script,
             "ray_worker.sh": ray_worker_script,
         }
 
-        # This architecture is primarily for standalone mode. Session mode would require adaption.
         if allocation_context:
-            raise NotImplementedError(
-                "This robust driver architecture is designed for standalone sbatch jobs."
-            )
+            raise NotImplementedError("This architecture is for standalone sbatch jobs")
 
         return main_sbatch_payload, auxiliary_scripts
