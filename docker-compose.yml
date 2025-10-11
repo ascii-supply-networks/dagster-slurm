@@ -12,6 +12,13 @@ services:
       - var_lib_mysql:/var/lib/mysql
     networks:
       - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3306'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
 
   slurmdbd:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
@@ -30,9 +37,16 @@ services:
     expose:
       - "6819"
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     networks:
       - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1' | mysql -hmysql -uslurm -ppassword >/dev/null 2>&1 && ss -ltn | grep -q ':6819'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
 
   slurmctld:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
@@ -51,16 +65,18 @@ services:
     expose:
       - "6817"
     depends_on:
-      - "slurmdbd"
+      slurmdbd:
+        condition: service_healthy
     networks:
       - slurm-network
     ports:
       - 2223:22
     healthcheck:
-      # This command checks that SLURM is idle AND the SSH port is listening
-      # test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -p 22 submitter@localhost 'echo ssh_ok'"]
-      # test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok'"]
-      test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o BatchMode=yes -o StrictHostKeyChecking=no -p 22 submitter@localhost 'echo ssh_ok'"]
+      test:
+        [
+        "CMD-SHELL",
+        "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1"
+      ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -85,11 +101,9 @@ services:
       - "6379"      # Ray GCS port
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
-    #depends_on:
-    #  - "slurmctld"
     depends_on:
       slurmctld:
-        condition: service_started
+        condition: service_healthy
     networks:
       - slurm-network
 
@@ -115,7 +129,8 @@ services:
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
     depends_on:
-      - "slurmctld"
+      slurmctld:
+        condition: service_healthy
     networks:
       - slurm-network
 
