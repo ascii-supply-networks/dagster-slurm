@@ -217,220 +217,186 @@ class RayLauncher(ComputeLauncher):
         activation_script: str,
         allocation_context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, dict]:
-        """Generates a robust Ray cluster startup script with proper shutdown."""
+        """
+        Generates a robust Ray cluster startup script with proper shutdown.
+        """
         redis_pw = self.redis_password or "$(uuidgen)"
+        temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
 
-        # Build object store argument
-        obj_store_arg = ""
+        # --- Build Argument Lists Robustly (from previous fix) ---
+        common_args = [f"--temp-dir={temp_dir_path}"]
         if self.object_store_memory_gb is not None:
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
-            obj_store_arg = f"--object-store-memory={bytes_value}"
+            common_args.append(f"--object-store-memory={bytes_value}")
 
-        # Determine temp dir path
-        temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
-        temp_dir_arg = f"--temp-dir={temp_dir_path}"
+        head_args = [
+            "--head",
+            "-v",
+            "--node-ip-address=$head_node_name",
+            f"--port={self.ray_port}",
+            "--dashboard-host=0.0.0.0",
+            f"--dashboard-port={self.dashboard_port}",
+            f"--num-gpus={self.num_gpus_per_node}",
+            "--redis-password=$redis_password",
+        ] + common_args
 
-        # --- Worker Script: Simple blocking with proper cleanup ---
+        worker_args = [
+            "-v",
+            "--address=$ip_head",
+            "--redis-password=$redis_password",
+            f"--num-gpus={self.num_gpus_per_node}",
+        ] + common_args
+
+        head_cmd_str = " \\\n    ".join(head_args)
+        worker_cmd_str = " \\\n    ".join(worker_args)
+
+        # --- Worker Script ---
         ray_worker_script = f"""#!/bin/bash
     set -e
     activation_script="$1"
     ip_head="$2"
     redis_password="$3"
-
     echo "Worker on $(hostname) activating environment: $activation_script"
     source "$activation_script"
-
     cleanup_node() {{
-    echo "Worker on $(hostname) shutting down..."
-    # Use --force to skip the grace period - just kill it
-    ray stop --force 2>/dev/null || true
-    rm -rf {temp_dir_path} 2>/dev/null || true
-    exit 0
+        echo "Worker on $(hostname) shutting down..."
+        ray stop --force 2>/dev/null || true
+        rm -rf {temp_dir_path} 2>/dev/null || true
+        exit 0
     }}
-
     trap cleanup_node TERM INT EXIT
+    echo "Worker on $(hostname) starting and connecting to $ip_head..."
 
-        echo "Worker on $(hostname) starting and connecting to $ip_head..."
-
-    # Set Ray 2.50 timeout environment variables
-    export RAY_raylet_start_wait_time_s=120
-    export RAY_health_check_initial_delay_ms=10000
-    export RAY_health_check_period_ms=5000
-
-    ray start -v \\
-    --address="$ip_head" \\
-    --redis-password="$redis_password" \\
-    --num-gpus={self.num_gpus_per_node} \\
-    {obj_store_arg} \\
-    {temp_dir_arg} \\
-    --block
+    ray start {worker_cmd_str} --block
     """
 
-        # --- Driver Script: Force kill approach ---
+        # --- Driver Script (with all features and THE FIX) ---
         ray_driver_script = f"""#!/bin/bash
     set -e
     activation_script="$1"
-
     echo "======================================="
     echo "Ray Cluster Driver Script Started on $(hostname)"
     echo "Activating environment: $activation_script"
     echo "======================================="
     source "$activation_script"
 
-    # Track worker PIDs
+    # Define all variables first
+    head_node_name=$(hostname)
+    port={self.ray_port}
+    ip_head="$head_node_name:$port" # This is now 'c1:6379'
+    redis_password="{redis_pw}"
     WORKER_PIDS=()
+    worker_nodes=()
 
     cleanup() {{
-    echo "======================================="
-    echo "Initiating cluster shutdown..."
-    echo "======================================="
-    
-    # Step 1: Kill worker processes immediately (they'll cleanup via trap)
-    if [ ${{#WORKER_PIDS[@]}} -gt 0 ]; then
-        echo "Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
-        for pid in "${{WORKER_PIDS[@]}}"; do
-        if kill -0 $pid 2>/dev/null; then
-            kill -TERM $pid 2>/dev/null || true
+        exit_code=$?
+        echo "======================================="
+        echo "Initiating cluster shutdown (payload exit code: $exit_code)..."
+        echo "======================================="
+        if [[ "$exit_code" -ne 0 ]]; then
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+            echo "PAYLOAD FAILED OR SCRIPT EXITED UNEXPECTEDLY! Capturing logs..." >&2
+            for node in "${{worker_nodes[@]}}"; do
+                echo "--- WORKER NODE ($node) RAYLET LOG ---" >&2
+                srun --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
+            done
+            echo "--- HEAD NODE ($(hostname)) RAYLET LOG ---" >&2
+            tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
         fi
-        done
-        
-        # Wait briefly for workers to cleanup
-        sleep 2
-        
-        # Force kill any stragglers
-        for pid in "${{WORKER_PIDS[@]}}"; do
-        if kill -0 $pid 2>/dev/null; then
-            kill -9 $pid 2>/dev/null || true
+        if [ ${{#WORKER_PIDS[@]}} -gt 0 ]; then
+            echo "Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
+            kill -TERM "${{WORKER_PIDS[@]}}" 2>/dev/null || true
+            sleep 2
+            kill -9 "${{WORKER_PIDS[@]}}" 2>/dev/null || true
         fi
-        done
-    fi
-    
-    # Step 2: Force stop Ray on head node
-    echo "Force stopping Ray head node..."
-    ray stop --force 2>/dev/null || true
-    
-    # Step 3: Cleanup temp directory
-    echo "Cleaning up temporary files..."
-    rm -rf {temp_dir_path} 2>/dev/null || true
-    
-    echo "Shutdown complete"
-    echo "======================================="
+        echo "Force stopping Ray head node..."
+        ray stop --force 2>/dev/null || true
+        echo "Cleaning up temporary files..."
+        rm -rf {temp_dir_path} 2>/dev/null || true
+        echo "Shutdown complete"
     }}
-
     trap cleanup EXIT SIGINT SIGTERM
 
     # ===== 1. Start Head Node =====
-    ip=$(hostname --ip-address | awk '{{print $1}}')
-    port={self.ray_port}
-    ip_head="$ip:$port"
-    redis_password="{redis_pw}"
-
-        echo "Starting Ray head on this node ($(hostname)) at $ip_head..."
-    # Set Ray 2.50 timeout environment variables
-    export RAY_raylet_start_wait_time_s=120
-    export RAY_health_check_initial_delay_ms=10000
-    export RAY_health_check_period_ms=5000
-
-    ray start --head -v \\
-    --node-ip-address="$ip" \\
-    --port="$port" \\
-    --dashboard-host=0.0.0.0 \\
-    --dashboard-port={self.dashboard_port} \\
-    --num-gpus={self.num_gpus_per_node} \\
-    {obj_store_arg} \\
-    {temp_dir_arg} \\
-    --redis-password="$redis_password"
-
+    echo "Starting Ray head on this node ($(hostname)) at $ip_head..."
+    ray start {head_cmd_str}
     export RAY_ADDRESS="$ip_head"
-    echo "Exported RAY_ADDRESS=$RAY_ADDRESS"
 
     # ===== 2. Wait for Head to be Ready =====
-    echo "Waiting for Ray head to be ready at $RAY_ADDRESS..."
+    echo "Waiting for Ray head to be ready..."
     for i in {{1..{self.head_startup_timeout}}}; do
-    if ray status --address="$RAY_ADDRESS" &>/dev/null; then
-        echo "✓ Ray head is ready"
-        break
-    fi
-    if [[ $i -eq {self.head_startup_timeout} ]]; then
-        echo "ERROR: Ray head failed to become ready in {self.head_startup_timeout}s" >&2
-        exit 1
-    fi
-    sleep 1
+        if ray status &>/dev/null; then echo "✓ Ray head is ready"; break; fi
+        if [[ $i -eq {self.head_startup_timeout} ]]; then echo "ERROR: Ray head failed to start" >&2; exit 1; fi
+        sleep 1
     done
 
     # ===== 3. Start Worker Nodes =====
     all_nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
-    head_node_name=$(hostname)
-    worker_nodes=()
     for node in "${{all_nodes[@]}}"; do
-        if [[ "$node" != "$head_node_name" ]]; then
-            worker_nodes+=("$node")
+        if [[ "$node" != "$head_node_name" ]]; then worker_nodes+=("$node"); fi
+    done
+    echo "Head node: $head_node_name"; echo "Worker nodes: ${{worker_nodes[@]}}"
+    for node_i in "${{worker_nodes[@]}}"; do
+        echo "Launching worker on $node_i..."
+        srun --nodes=1 --ntasks=1 -w "$node_i" \\
+            {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
+        WORKER_PIDS+=($!)
+        sleep {self.worker_startup_delay}
+    done
+
+    # ===== 4. Wait for All Workers to Register (THE FIX IS HERE) =====
+    echo "Waiting briefly for worker processes to launch..."
+    sleep 5 # Give workers a few seconds to start or fail
+    for pid in "${{WORKER_PIDS[@]}}"; do
+        # 'kill -0' checks if the process exists. If it doesn't, kill returns a non-zero exit code.
+        if ! kill -0 $pid 2>/dev/null; then
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+            echo "ERROR: A worker process (PID $pid) died immediately after launch." >&2
+            echo "This almost certainly means the 'ray start' command on the worker node failed." >&2
+            echo "Check slurm-<jobid>.err for errors from the worker node." >&2
+            echo "The most likely cause is a network issue preventing the worker from reaching the head." >&2
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+            exit 1
+        fi
+    done
+    echo "✓ All worker processes are running. Now checking for Ray registration..."
+
+    expected_nodes=${{SLURM_JOB_NUM_NODES:-1}}
+    echo "Waiting for all $expected_nodes nodes to register..."
+    for i in {{1..36}}; do
+        # This is the robust way: capture output first, then grep it.
+        # This prevents grep's non-zero exit code from triggering 'set -e'.
+        status_output=$(ray status 2>/dev/null || echo "ray status failed")
+        live_nodes=$(echo "$status_output" | grep -c "node_")
+
+        if [[ "$live_nodes" -ge "$expected_nodes" ]]; then
+            echo "✓ Success! $live_nodes of $expected_nodes nodes are active."
+            break
+        fi
+        echo "-> Waiting: $live_nodes of $expected_nodes nodes active. Retrying in 5s..."
+        sleep 5
+        if [[ $i -eq 36 ]]; then
+            echo "ERROR: Cluster did not come up within 3 minutes." >&2
+            echo "$status_output" >&2
+            exit 1
         fi
     done
 
-    echo "Head node: $head_node_name"
-    echo "Worker nodes: ${{worker_nodes[@]}}"
-
-    for node_i in "${{worker_nodes[@]}}"; do
-    echo "Launching worker on $node_i..."
-    srun --export=ALL --nodes=1 --ntasks=1 -w "$node_i" \\
-        {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
-    WORKER_PIDS+=($!)
-    sleep {self.worker_startup_delay}
-    done
-
-    echo "✓ All ${{#WORKER_PIDS[@]}} worker(s) launched"
-    sleep 5
-
-    # ===== 4. Wait for GCS Stabilization =====
-    echo "Waiting for GCS to stabilize and workers to register (Ray 2.50)..."
-    # Increased from 10 to 20 seconds to allow worker registration
-    sleep 20
-
-    # ===== 5. Verify Cluster =====
-    echo "======================================="
-    echo "Cluster Status:"
-    ray status --address="$RAY_ADDRESS"
-    echo "======================================="
-
-    # ===== 6. Run Payload =====
+    # ===== 5. Run Payload =====
     echo "Executing user payload..."
-
-    # Export connection parameters
-    export RAY_ADDRESS="$ip_head"
-    export RAY_NODE_IP_ADDRESS="$ip"
-    export RAY_REDIS_PASSWORD="$redis_password"
-
-    COMMAND_PLACEHOLDER
-
-    exit_code=$?
-    echo "======================================="
-    echo "Payload finished with exit code $exit_code"
-    echo "======================================="
-    exit $exit_code
+    export RAY_NODE_IP_ADDRESS="$head_node_name"
+    {shlex.quote(python_executable)} {shlex.quote(payload_path)}
     """
 
-        # Replace placeholder
-        python_command_placeholder = (
-            f"{shlex.quote(python_executable)} {shlex.quote(payload_path)}"
-        )
-        ray_driver_script = ray_driver_script.replace(
-            "COMMAND_PLACEHOLDER", python_command_placeholder
-        )
-
-        # --- Main sbatch payload ---
+        # --- Main sbatch payload (unchanged) ---
         main_sbatch_payload = f"""
-    # Find head node
     nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
     nodes_array=($nodes)
     head_node="${{nodes_array[0]}}"
-
     echo "Designated head node: $head_node"
-    echo "Launching cluster driver on head node..."
-
     srun --nodes=1 --ntasks=1 -w "$head_node" {working_dir}/ray_driver.sh "{activation_script}"
     """
-
         auxiliary_scripts = {
             "ray_driver.sh": ray_driver_script,
             "ray_worker.sh": ray_worker_script,
