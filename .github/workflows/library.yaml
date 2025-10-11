@@ -122,11 +122,12 @@ jobs:
           echo ""
           
           echo "=== 5. Test SSH with sshpass (exact healthcheck command) ==="
-          docker exec slurmctld bash -c "sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' 2>&1"
+          docker exec slurmctld bash -c "sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok' 2>&1"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2223 submitter@localhost 'echo ssh_direct_ok' 2>&1
           echo ""
           
           echo "=== 6. Test complete healthcheck command ==="
-          docker exec slurmctld bash -c "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1 && echo 'FULL HEALTHCHECK PASS' || echo 'FULL HEALTHCHECK FAIL'"
+          docker exec slurmctld bash -c "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok' >/dev/null 2>&1 && echo 'FULL HEALTHCHECK PASS' || echo 'FULL HEALTHCHECK FAIL'"
           echo ""
           
           echo "=== 7. Show healthcheck history from Docker ==="
