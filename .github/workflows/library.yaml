@@ -90,22 +90,6 @@ jobs:
             -f docker-compose.ci.yml \
             up -d
 
-      - name: Wait for SLURM Cluster to be Ready
-        run: |
-          echo "Waiting for SLURM nodes to become idle..."
-          for i in {1..24}; do
-            if docker exec slurmctld sinfo | grep -q "idle"; then
-              echo "✅ SLURM nodes are ready!"
-              docker exec slurmctld sinfo
-              exit 0
-            fi
-            echo "Still waiting... ($i/24)"
-            sleep 5
-          done
-          echo "❌ SLURM cluster did not become ready in time."
-          docker compose logs
-          exit 1
-
       - name: debugging deploy
         env:
           SLURM_EDGE_NODE_HOST: localhost
