@@ -107,6 +107,12 @@ jobs:
           exit 1
 
       - name: debugging deploy
+        env:
+          SLURM_EDGE_NODE: localhost
+          SLURM_EDGE_NODE_PORT: 2223
+          SLURM_EDGE_NODE_USER: submitter
+          SLURM_EDGE_NODE_PASSWORD: submitter
+          SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
         run: cd examples && pixi run deploy-prod-docker
 
       - name: Run integration tests against SLURM cluster
@@ -115,6 +121,7 @@ jobs:
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
+          SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
         run: pixi run -e build --frozen testpixi-integration
 
       - name: Stop SLURM Cluster and Clean Up
