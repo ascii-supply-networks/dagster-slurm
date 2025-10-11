@@ -84,7 +84,8 @@ services:
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
     depends_on:
-      - "slurmctld"
+      slurmctld:
+        condition: service_healthy
     networks:
       - slurm-network
 
@@ -92,11 +93,15 @@ services:
 
   c2:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    depends_on:
+      slurmctld:
+        condition: service_healthy
     command: ["slurmd"]
     hostname: c2
     container_name: c2
     privileged: true
     shm_size: '10gb'
+    
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -109,8 +114,6 @@ services:
       - "6379"      # Ray GCS port
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
-    depends_on:
-      - "slurmctld"
     networks:
       - slurm-network
 
