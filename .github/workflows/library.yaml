@@ -88,7 +88,15 @@ jobs:
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.ci.yml \
-            up -d
+            up -d --wait-timeout 120
+
+            echo "### Verifying container health status..."
+          echo "The 'STATUS' column should show '(healthy)' for all relevant containers."
+          docker compose ps
+          
+          echo
+          echo "### Application-level check (Optional but recommended)..."
+          docker exec slurmctld sinfo
 
       - name: debugging deploy
         env:
