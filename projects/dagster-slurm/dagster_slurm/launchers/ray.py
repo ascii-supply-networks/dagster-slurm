@@ -222,7 +222,7 @@ class RayLauncher(ComputeLauncher):
         redis_pw = self.redis_password or "$(uuidgen)"
         temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
 
-        common_args = [f"--temp-dir={temp_dir_path}"]
+        common_args = []
         if self.object_store_memory_gb is not None:
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
             common_args.append(f"--object-store-memory={bytes_value}")
@@ -236,6 +236,7 @@ class RayLauncher(ComputeLauncher):
             f"--dashboard-port={self.dashboard_port}",
             f"--num-gpus={self.num_gpus_per_node}",
             "--redis-password=$redis_password",
+            f"--temp-dir={temp_dir_path}",
         ] + common_args
 
         worker_args = [
