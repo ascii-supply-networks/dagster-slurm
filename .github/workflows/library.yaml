@@ -88,11 +88,13 @@ jobs:
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.ci.yml \
-            up -d --wait-timeout 120 || true
+            up -d --wait --wait-timeout 120 || {
+              echo "⚠️ Docker compose wait timed out or failed"
+            }
 
-            echo "### Verifying container health status..."
+          echo "### Verifying container health status..."
           echo "The 'STATUS' column should show '(healthy)' for all relevant containers."
-          docker compose ps
+          docker compose ps -a
           
           echo
           echo "### Application-level check (Optional but recommended)..."
@@ -100,6 +102,36 @@ jobs:
 
           echo "--- SLURMCTLD LOGS (where healthcheck output is) ---"
           docker logs slurmctld
+
+          # -----------------------------
+          echo "=== 1. Check if SSH is listening ==="
+          docker exec slurmctld ss -ltn
+          echo ""
+          
+          echo "=== 2. Test grep for :22 (with space) ==="
+          docker exec slurmctld bash -c "ss -ltn | grep ':22 ' && echo 'FOUND with space' || echo 'NOT FOUND with space'"
+          echo ""
+          
+          echo "=== 3. Test grep for :22 (without space) ==="
+          docker exec slurmctld bash -c "ss -ltn | grep ':22' && echo 'FOUND without space' || echo 'NOT FOUND without space'"
+          echo ""
+          
+          echo "=== 4. Test scontrol ping ==="
+          docker exec slurmctld scontrol ping
+          docker exec slurmctld bash -c "scontrol ping | grep -iq 'is up' && echo 'PING OK' || echo 'PING FAIL'"
+          echo ""
+          
+          echo "=== 5. Test SSH with sshpass (exact healthcheck command) ==="
+          docker exec slurmctld bash -c "sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' 2>&1"
+          echo ""
+          
+          echo "=== 6. Test complete healthcheck command ==="
+          docker exec slurmctld bash -c "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1 && echo 'FULL HEALTHCHECK PASS' || echo 'FULL HEALTHCHECK FAIL'"
+          echo ""
+          
+          echo "=== 7. Show healthcheck history from Docker ==="
+          docker inspect slurmctld --format='{{json .State.Health}}' | jq '.Log[-5:]'
+          # -----------------------------
           
           # Now, add a real check to fail the job if the container isn't healthy
           if ! docker ps | grep slurmctld | grep -q '(healthy)'; then
