@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+mkdir -p /var/spool/slurmd /var/run/slurmd /var/lib/slurmd /var/log/slurm
+chown -R slurm:slurm /var/spool/slurmd /var/run/slurmd /var/lib/slurmd /var/log/slurm /etc/slurm
+
 if [ "$1" = "slurmdbd" ]
 then
     echo "---> Starting the MUNGE Authentication service (munged) ..."
@@ -61,7 +64,7 @@ then
     echo "-- slurmctld is now active ..."
 
     echo "---> Starting the Slurm Node Daemon (slurmd) ..."
-    exec /usr/sbin/slurmd -Dvvv
+    exec gosu slurm /usr/sbin/slurmd -Dvvv
 fi
 
 exec "$@"
