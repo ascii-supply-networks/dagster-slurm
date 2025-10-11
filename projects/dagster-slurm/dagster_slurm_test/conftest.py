@@ -211,7 +211,8 @@ def deployment_metadata(example_project_dir: Path) -> Dict[str, Any]:
         elif system == "linux" and ("aarch64" in machine or "arm" in machine):
             prep_cmd = ["pixi", "run", "deploy-prod-docker"]
         else:
-            raise ValueError(f"Unsupported platform: {system}/{machine}")
+            # assuming default of x86_64 linux
+            prep_cmd = ["pixi", "run", "deploy-prod-docker"]
         subprocess.run(
             prep_cmd,
             cwd=example_project_dir,
