@@ -59,7 +59,8 @@ services:
     healthcheck:
       # This command checks that SLURM is idle AND the SSH port is listening
       # test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -p 22 submitter@localhost 'echo ssh_ok'"]
-      test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok'"]
+      # test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok'"]
+      test: ["CMD-SHELL", "sinfo --noheader | grep -q idle && sshpass -p 'submitter' ssh -o BatchMode=yes -o StrictHostKeyChecking=no -p 22 submitter@localhost 'echo ssh_ok'"]
       interval: 10s
       timeout: 5s
       retries: 12
