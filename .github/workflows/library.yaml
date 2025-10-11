@@ -88,7 +88,7 @@ jobs:
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.ci.yml \
-            up -d --wait --wait-timeout 120 || true
+            up -d --wait-timeout 120 || true
 
             echo "### Verifying container health status..."
           echo "The 'STATUS' column should show '(healthy)' for all relevant containers."
@@ -107,14 +107,14 @@ jobs:
             exit 1
           fi
 
-      - name: debugging deploy
-        env:
-          SLURM_EDGE_NODE_HOST: localhost
-          SLURM_EDGE_NODE_PORT: 2223
-          SLURM_EDGE_NODE_USER: submitter
-          SLURM_EDGE_NODE_PASSWORD: submitter
-          SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
-        run: cd examples && pixi run deploy-prod-docker
+      # - name: debugging deploy
+      #   env:
+      #     SLURM_EDGE_NODE_HOST: localhost
+      #     SLURM_EDGE_NODE_PORT: 2223
+      #     SLURM_EDGE_NODE_USER: submitter
+      #     SLURM_EDGE_NODE_PASSWORD: submitter
+      #     SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
+      #   run: cd examples && pixi run deploy-prod-docker
 
       - name: Run integration tests against SLURM cluster
         env:
