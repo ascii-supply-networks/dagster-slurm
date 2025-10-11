@@ -168,7 +168,7 @@ def slurm_cluster_ready():
     """Verify SLURM cluster is ready before running tests."""
     print("\n🔍 Checking SLURM cluster status...")
 
-    for attempt in range(12):
+    for attempt in range(30):
         try:
             result = subprocess.run(
                 ["docker", "exec", "slurmctld", "sinfo"],
