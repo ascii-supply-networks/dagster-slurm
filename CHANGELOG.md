@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.4.0-rc.1 (2025-10-12)
+
+### Features
+
+- Enable CI ([#38](https://github.com/ascii-supply-networks/dagster-slurm/pull/38),
+  [`df3bf3f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/df3bf3f2b84d68134214296e9545c914e204714c))
+
+- Refine 2 ([#38](https://github.com/ascii-supply-networks/dagster-slurm/pull/38),
+  [`df3bf3f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/df3bf3f2b84d68134214296e9545c914e204714c))
+
+
 ## v1.4.0 (2025-10-08)
 
 
