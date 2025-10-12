@@ -158,6 +158,13 @@ jobs:
           # -o PreferredAuthentications=password and -o PubkeyAuthentication=no force it to use only the method we care about.
           # -vvv provides maximum client-side debug information.
           if ! sshpass -p "$SSH_PASS" ssh -vvv \
+            -o HostKeyAlgorithms=+ssh-rsa \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -p "$SSH_PORT" ${SSH_USER}@${SSH_HOST} 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
+          if ! sshpass -p "$SSH_PASS" ssh -vvv \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
