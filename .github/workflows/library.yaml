@@ -123,7 +123,6 @@ jobs:
           
           echo "=== 5. Test SSH with sshpass (exact healthcheck command) ==="
           docker exec slurmctld grep -E "^PasswordAuthentication|^#PasswordAuthentication" /etc/ssh/sshd_config
-          docker exec slurmctld grep -E "^ChallengeResponseAuthentication|^#ChallengeResponseAuthentication" /etc/ssh/sshd_config
           echo "=== PAM line ==="
           docker exec slurmctld grep -nE '^[[:space:]]*session[[:space:]]+optional[[:space:]]+pam_loginuid\.so' /etc/pam.d/sshd || true
           echo "=== ssh test ==="
