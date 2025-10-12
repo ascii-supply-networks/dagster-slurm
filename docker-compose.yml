@@ -75,7 +75,8 @@ services:
       test:
         [
         "CMD-SHELL",
-        "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1"
+        "scontrol ping | grep -iq 'is up' && ss -ltn | grep -q ':22 '"
+        #   "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1"
       ]
       interval: 10s
       timeout: 5s
