@@ -52,11 +52,16 @@ RUN set -ex \
  && mkdir -p /run/sshd \
     && echo "Creating custom SSH override configuration..." \
     && { \
-        echo "# Custom settings for containerized environment"; \
+        echo "# --- Custom settings for containerized environment ---"; \
         echo "PasswordAuthentication yes"; \
         echo "UsePAM no"; \
-        echo "# Allow older, more compatible algorithms for clients like GHA runners"; \
+        echo; \
+        echo "# --- Allow older, more compatible algorithms for various clients ---"; \
+        echo "# Fix for 'kex_exchange_identification' by adding a common KEX algorithm."; \
+        echo "KexAlgorithms +diffie-hellman-group-exchange-sha256"; \
+        echo "# Fix for host key signature issues."; \
         echo "HostKeyAlgorithms +ssh-rsa"; \
+        echo "# Fix for user public key signature issues (good practice)."; \
         echo "PubkeyAcceptedAlgorithms +ssh-rsa"; \
     } > /etc/ssh/sshd_config.d/99-custom.conf \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \

@@ -178,7 +178,7 @@ jobs:
           echo "✅ All SSH checks passed successfully."
 
       
-      - name: debugging deploy
+      - name: debugging deployXX
         env:
           SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
