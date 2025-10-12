@@ -104,6 +104,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openssh-client sshpass netcat-openbsd
 
+      - name: 🕵️‍♀️ Check Runner Environment
+        run: |
+          echo "### Runner OS Information"
+          cat /etc/os-release
+          echo
+          echo "### OpenSSH Client Version"
+          ssh -V
+          echo
+          echo "### OpenSSH Client Configuration"
+          ssh -G localhost | grep -E '^(kexalgorithms|hostkeyalgorithms)'
+
       - name: Comprehensive SSH Verification (Runner -> Container)
         env:
           # Define credentials as ENV vars for clarity and reuse
