@@ -158,40 +158,25 @@ jobs:
           # -o PreferredAuthentications=password and -o PubkeyAuthentication=no force it to use only the method we care about.
           # -vvv provides maximum client-side debug information.
           if ! sshpass -p "$SSH_PASS" ssh -vvv \
-            -o HostKeyAlgorithms=+ssh-rsa \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o KexAlgorithms=+diffie-hellman-group14-sha256 \
-            -o HostKeyAlgorithms=+rsa-sha2-256 \
-            -p "$SSH_PORT" ${SSH_USER}@${SSH_HOST} 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
-          if ! sshpass -p "$SSH_PASS" ssh -vvv \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -p "$SSH_PORT" ${SSH_USER}@${SSH_HOST} 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
+            -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256 \
+            -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
             
             echo "======================================================================="
-            echo "❌ ERROR: SSH connection failed. The most common cause is 'Permission denied'."
+            echo "❌ ERROR: SSH connection failed. This is likely due to a crypto mismatch or auth issue."
             echo "======================================================================="
-            
             echo
             echo "### Client-side SSH debug output (-vvv):"
-            echo "This log shows what the client sees. Look for 'Authentications that can continue: password' and then the failure."
+            echo "This log shows what the client sees. Look for 'no matching host key type found' or similar errors."
             cat ssh_debug_output.log
-            
             echo
             echo "### Server-side Authentication Log (MOST IMPORTANT LOG):"
             echo "This log shows why the server REJECTED the login. This is where the root cause is usually found."
-            # Use '|| true' to prevent the step from failing if the log file doesn't exist yet.
-            docker exec slurmctld cat /var/log/secure || true
-            
-            echo
-            echo "### Full slurmctld container log (for context):"
-            docker logs slurmctld
-
+            docker logs slurmctld | grep 'sshd'
             exit 1
           fi
 
