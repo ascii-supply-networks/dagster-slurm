@@ -124,6 +124,12 @@ jobs:
           echo "=== 5. Test SSH with sshpass (exact healthcheck command) ==="
           docker exec slurmctld grep -E "^PasswordAuthentication|^#PasswordAuthentication" /etc/ssh/sshd_config
           docker exec slurmctld grep -E "^ChallengeResponseAuthentication|^#ChallengeResponseAuthentication" /etc/ssh/sshd_config
+          echo "=== PAM line ==="
+          docker exec slurmctld grep -nE '^[[:space:]]*session[[:space:]]+optional[[:space:]]+pam_loginuid\.so' /etc/pam.d/sshd || true
+          echo "=== ssh test ==="
+          docker exec slurmctld bash -lc "sshpass -p submitter ssh -o ConnectTimeout=3 -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null submitter@localhost 'echo ok'"
+
+
           docker exec slurmctld bash -c "sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok' 2>&1"
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2223 submitter@localhost 'echo ssh_direct_ok' 2>&1
           docker exec slurmctld cat /etc/pam.d/sshd | grep -v "^#"
