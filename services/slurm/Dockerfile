@@ -49,7 +49,12 @@ RUN set -ex \
  && echo "%wheel ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
  && ssh-keygen -A \
  && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
- && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+ && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+ && echo "HostKeyAlgorithms +ssh-rsa" >> /etc/ssh/sshd_config \
+ && echo "PubkeyAcceptedAlgorithms +ssh-rsa" >> /etc/ssh/sshd_config \
+ && sed -ri 's/^session\s+required\s+pam_loginuid\.so/session optional pam_loginuid.so/' /etc/pam.d/sshd \
+ && mkdir -p /run/sshd
+
 
 # This command creates a .bashrc file for the 'submitter' user.
 # It includes a guard to only source profile scripts in interactive shells,
@@ -109,9 +114,6 @@ RUN set -ex \
         /var/lib/slurmd/fed_mgr_state \
     && chown -R slurm:slurm /var/*/slurm* \
     && /sbin/create-munge-key
-
-RUN sed -ri 's/^session\s+required\s+pam_loginuid\.so/session optional pam_loginuid.so/' /etc/pam.d/sshd \
- && mkdir -p /run/sshd
 
 COPY slurm.conf /etc/slurm/slurm.conf
 COPY slurmdbd.conf /etc/slurm/slurmdbd.conf
