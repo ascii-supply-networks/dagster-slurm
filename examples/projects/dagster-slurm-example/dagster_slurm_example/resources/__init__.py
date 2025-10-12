@@ -58,6 +58,16 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "spark": {"driver_memory": "8g", "executor_memory": "16g"},
     },
 }
+PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
+    "slurm_queue_config": {
+        "time_limit": "04:00:00",
+        "cpus": 2,
+        "mem": "4G",
+    },
+    "compute_config": {
+        "debug_mode": False,
+    },
+}
 
 # --- Supercomputer Slurm (Production) ---
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
@@ -96,6 +106,31 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "spark": {"driver_memory": "8g", "executor_memory": "16g"},
     },
 }
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge override into base, modifying base in-place."""
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _is_docker_based(environment: Environment) -> bool:
+    """Check if environment uses docker (local slurm)."""
+    return "_docker" in environment.value
+
+
+def _is_supercomputer_based(environment: Environment) -> bool:
+    """Check if environment uses supercomputer."""
+    return "_supercomputer" in environment.value
+
+
+def _is_production(environment: Environment) -> bool:
+    """Check if environment is production-based."""
+    return environment.value.startswith("production_")
 
 
 def build_slurm_resources(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -161,15 +196,15 @@ def get_dagster_deployment_environment(
 def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     """
     Builds the Dagster resource dictionary based on the DAGSTER_DEPLOYMENT environment variable.
-    This function selects a base configuration and applies modifiers based on the environment name,
-    making it highly reusable and easy to extend.
+
+    This function selects between Docker and Supercomputer base configs, then applies
+    staging/production and execution mode modifiers.
     """
     deployment = get_dagster_deployment_environment()
     deployment_name = deployment.value
 
     # --- Case 1: Local Development ---
     if deployment == Environment.DEVELOPMENT:
-        # For local, we don't need the full builder logic.
         return {
             "compute": ComputeResource(
                 mode=ExecutionMode.LOCAL,
@@ -193,26 +228,38 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
 
     # --- Case 2: All Slurm-based environments ---
 
-    # Step 2.1: Select the appropriate base configuration.
-    if "supercomputer" in deployment_name:
-        config = copy.deepcopy(SUPERCOMPUTER_SLURM_BASE_CONFIG)
-    else:  # All "docker" variants use the docker base
+    # Step 2.1: Select base config based on docker vs supercomputer
+    if _is_docker_based(deployment):
         config = copy.deepcopy(DOCKER_SLURM_BASE_CONFIG)
-        # As per the original request, 'production_docker' implies a session.
-        # 'staging_docker' uses the default per-asset SLURM mode.
-        if deployment == Environment.PRODUCTION_DOCKER:
-            config["mode"] = ExecutionMode.SLURM_SESSION
+        # Apply production overrides if needed
+        if _is_production(deployment):
+            _deep_merge(config, PRODUCTION_DOCKER_OVERRIDES)
+    elif _is_supercomputer_based(deployment):
+        config = copy.deepcopy(SUPERCOMPUTER_SLURM_BASE_CONFIG)
+    else:
+        raise ValueError(f"Unexpected environment: {deployment_name}")
 
-    # Step 2.2: Apply modifiers based on the environment name.
-    # The elif chain ensures only the most specific modifier is applied.
+    # Step 2.2: Handle pre_deployed_env_path requirement for production
+    if _is_production(deployment):
+        pre_deployed_env_path = os.environ.get("CI_DEPLOYED_ENVIRONMENT_PATH")
+        if not pre_deployed_env_path:
+            raise ValueError(
+                f"Production environment '{deployment_name}' requires "
+                "CI_DEPLOYED_ENVIRONMENT_PATH to be set"
+            )
+        config["compute_config"]["pre_deployed_env_path"] = pre_deployed_env_path
+
+    # Step 2.3: Apply execution mode modifiers based on environment name
+    # Priority order: hetjob > cluster_reuse > session > default
+
     if "hetjob" in deployment_name:
         config["mode"] = ExecutionMode.SLURM_HETJOB
-        # Cluster reuse is not compatible with HETJOB mode
-        if "enable_cluster_reuse" in config.get("compute_config", {}):
-            del config["compute_config"]["enable_cluster_reuse"]
+        # Cluster reuse is incompatible with HETJOB
+        config.get("compute_config", {}).pop("enable_cluster_reuse", None)
+        config.get("compute_config", {}).pop("cluster_reuse_tolerance", None)
 
     elif "cluster_reuse" in deployment_name:
-        config["mode"] = ExecutionMode.SLURM_SESSION  # Cluster reuse implies session
+        config["mode"] = ExecutionMode.SLURM_SESSION
         config.setdefault("compute_config", {})
         config["compute_config"]["enable_cluster_reuse"] = True
         config["compute_config"]["cluster_reuse_tolerance"] = 0.2
@@ -220,11 +267,8 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     elif "session" in deployment_name:
         config["mode"] = ExecutionMode.SLURM_SESSION
 
-    # For debugging, you can force debug_mode for a specific environment
-    # if "debug" in deployment_name:
-    #     config["compute_config"]["debug_mode"] = True
+    # Default mode is already set to SLURM in base configs
 
-    # Step 2.3: Build the resources from the final config spec.
+    # Step 2.4: Build the resources from the final config
     slurm_resources = build_slurm_resources(config)
-
     return build_compute_resources(config, slurm_resources)

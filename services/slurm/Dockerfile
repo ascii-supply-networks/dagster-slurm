@@ -36,18 +36,30 @@ RUN set -ex \
        http-parser-devel \
        json-c-devel \
        openssh-server \
+       nc \
+       sshpass \
        sudo \
     && yum clean all \
     && rm -rf /var/cache/yum
 
 RUN set -ex \
+ && update-crypto-policies --set DEFAULT \
  && useradd -m -s /bin/bash submitter \
  && echo "submitter:submitter" | chpasswd \
  && usermod -aG wheel submitter \
+ && chmod 700 /home/submitter \
  && echo "%wheel ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
  && ssh-keygen -A \
- && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
- && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+ && mkdir -p /run/sshd \
+    && echo "Creating custom SSH override configuration..." \
+    && { \
+        echo "# Custom override for containerized environment"; \
+        echo  "PasswordAuthentication yes"; \
+        echo "UsePAM no"; \
+    } > /etc/ssh/sshd_config.d/50-redhat.conf \
+    && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
 
 # This command creates a .bashrc file for the 'submitter' user.
 # It includes a guard to only source profile scripts in interactive shells,
@@ -55,6 +67,7 @@ RUN set -ex \
 COPY submitter.bashrc /home/submitter/.bashrc
 RUN chown submitter:submitter /home/submitter/.bashrc \
     && chmod +x /home/submitter/.bashrc
+    
 
 EXPOSE 22
 

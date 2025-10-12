@@ -71,6 +71,9 @@ jobs:
             frozen: true
       - run: pixi run -e build --frozen lint
 
+      - name: Run unit tests without real SLURM
+        run: pixi run -e build --frozen testpixi
+
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3
         with:
@@ -78,43 +81,132 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # - name: Start SLURM Cluster using pre-built image
-      #   env:
-      #     IMAGE_TAG: ${{ env.SLURM_VERSION }}
-      #   run: docker compose up -d
-      #   # REMOVED: --build. This is now much faster.
-      #   # docker-compose will pull the 'latest' image from ghcr.io.
-
-      # - name: Wait for SLURM Cluster to be Ready
-      #   run: |
-      #     echo "Waiting for SLURM nodes to become idle..."
-      #     for i in {1..24}; do
-      #       if docker exec slurmctld sinfo | grep -q "idle"; then
-      #         echo "✅ SLURM nodes are ready!"
-      #         docker exec slurmctld sinfo
-      #         exit 0
-      #       fi
-      #       echo "Still waiting... ($i/24)"
-      #       sleep 5
-      #     done
-      #     echo "❌ SLURM cluster did not become ready in time."
-      #     docker compose logs
-      #     exit 1
-
-      - name: Run tests against SLURM cluster
+      - name: Start SLURM Cluster using pre-built image
         env:
-          SLURM_EDGE_NODE: localhost
+          IMAGE_TAG: ${{ env.SLURM_VERSION }}
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.ci.yml \
+            up -d --wait --wait-timeout 120 || {
+              echo "⚠️ Docker compose wait timed out or failed"
+            }
+
+          # Now, add a real check to fail the job if the container isn't healthy
+          if ! docker ps | grep slurmctld | grep -q '(healthy)'; then
+            echo "❌ slurmctld did not become healthy."
+            docker logs slurmctld
+            exit 1
+          fi
+
+      - name: Install SSH client on runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-client sshpass netcat-openbsd
+
+      - name: 🕵️‍♀️ Check Runner Environment
+        run: |
+          echo "### Runner OS Information"
+          cat /etc/os-release
+          echo
+          echo "### OpenSSH Client Version"
+          ssh -V
+          echo
+          echo "### OpenSSH Client Configuration"
+          ssh -G localhost | grep -E '^(kexalgorithms|hostkeyalgorithms)'
+
+      - name: Comprehensive SSH Verification (Runner -> Container)
+        env:
+          # Define credentials as ENV vars for clarity and reuse
+          SSH_USER: submitter
+          SSH_PASS: submitter
+          SSH_HOST: localhost
+          SSH_PORT: 2223
+        run: |
+          set -x # Print each command
+
+          echo "---"
+          echo "### STEP 1: Pre-flight Checks (Verifying Container State)"
+          echo "---"
+
+          echo "--> Effective sshd config (checking auth-related directives):"
+          docker exec slurmctld sshd -T | egrep '^(passwordauthentication|pubkeyauthentication|usepam|permit.*login|allowusers|denyusers|allowgroups|denygroups|permitemptypasswords)' | sed 's/^/    /'
+
+          echo "--> 'submitter' user status:"
+          docker exec slurmctld id $SSH_USER
+          docker exec slurmctld passwd -S $SSH_USER
+
+          echo "--> 'submitter' user shell validity:"
+          docker exec slurmctld getent passwd $SSH_USER
+          docker exec slurmctld grep "$(getent passwd $SSH_USER | cut -d: -f7)" /etc/shells || echo "WARNING: User's shell may not be in /etc/shells"
+          
+          echo "--> Network listener INSIDE container:"
+          docker exec slurmctld ss -ltn | grep ':22 '
+
+          echo
+          echo "---"
+          echo "### STEP 2: Network Connectivity (Verifying Host State)"
+          echo "---"
+          echo "--> Basic TCP connection test:"
+          nc -zv $SSH_HOST $SSH_PORT
+
+          echo
+          echo "---"
+          echo "### STEP 3: Full SSH Connection Test (The Final Boss)"
+          echo "---"
+          # This is the most robust command.
+          # -o PreferredAuthentications=password and -o PubkeyAuthentication=no force it to use only the method we care about.
+          # -vvv provides maximum client-side debug information.
+          if ! sshpass -p "$SSH_PASS" ssh -vvv \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o KexAlgorithms=+diffie-hellman-group14-sha256 \
+            -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256 \
+            -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
+            
+            echo "======================================================================="
+            echo "❌ ERROR: SSH connection failed. This is likely due to a crypto mismatch or auth issue."
+            echo "======================================================================="
+            echo
+            echo "### Client-side SSH debug output (-vvv):"
+            echo "This log shows what the client sees. Look for 'no matching host key type found' or similar errors."
+            cat ssh_debug_output.log
+            echo
+            echo "### Server-side Authentication Log (MOST IMPORTANT LOG):"
+            echo "This log shows why the server REJECTED the login. This is where the root cause is usually found."
+            docker logs slurmctld | grep 'sshd'
+            exit 1
+          fi
+
+          echo "✅ All SSH checks passed successfully."
+
+      
+      - name: debugging deploy
+        env:
+          SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
-        run: pixi run -e build --frozen testpixi
+          SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
+        run: cd examples && pixi run deploy-prod-docker
 
-      # - name: Stop SLURM Cluster and Clean Up
-      #   if: always()
-      #   run: |
-      #     echo "Tearing down SLURM cluster..."
-      #     docker compose logs
-      #     docker compose down -v
+      - name: Run integration tests against SLURM cluster
+        env:
+          SLURM_EDGE_NODE_HOST: localhost
+          SLURM_EDGE_NODE_PORT: 2223
+          SLURM_EDGE_NODE_USER: submitter
+          SLURM_EDGE_NODE_PASSWORD: submitter
+          SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
+        run: pixi run -e build --frozen testpixi-integration
+
+      - name: Stop SLURM Cluster and Clean Up
+        if: always()
+        run: |
+          echo "Tearing down SLURM cluster..."
+          docker compose logs
+          docker compose down -v
 
       - run: pixi run -e build --frozen build-lib
 

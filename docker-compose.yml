@@ -12,9 +12,16 @@ services:
       - var_lib_mysql:/var/lib/mysql
     networks:
       - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3306'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
 
   slurmdbd:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     build:
       context: services/slurm
       args:
@@ -30,12 +37,19 @@ services:
     expose:
       - "6819"
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     networks:
       - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1' | mysql -hmysql -uslurm -ppassword >/dev/null 2>&1 && ss -ltn | grep -q ':6819'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
 
   slurmctld:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmctld"]
     container_name: slurmctld
     hostname: slurmctld
@@ -51,14 +65,26 @@ services:
     expose:
       - "6817"
     depends_on:
-      - "slurmdbd"
+      slurmdbd:
+        condition: service_healthy
     networks:
       - slurm-network
     ports:
       - 2223:22
+    healthcheck:
+      test:
+        [
+        "CMD-SHELL",
+        "scontrol ping | grep -iq 'is up' && ss -ltn | grep -q ':22 '"
+        #   "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1"
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   c1:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c1
     container_name: c1
@@ -77,14 +103,15 @@ services:
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
     depends_on:
-      - "slurmctld"
+      slurmctld:
+        condition: service_started
     networks:
       - slurm-network
 
     
 
   c2:
-    image: slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
     command: ["slurmd"]
     hostname: c2
     container_name: c2
@@ -103,7 +130,8 @@ services:
       - "8265"      # Ray dashboard
       - "10001"     # Ray client server
     depends_on:
-      - "slurmctld"
+      slurmctld:
+        condition: service_started
     networks:
       - slurm-network
 

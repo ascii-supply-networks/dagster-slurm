@@ -1,6 +1,16 @@
 #!/bin/bash
 set -e
 
+mkdir -p \
+  /var/spool/slurmd /var/run/slurmd /var/lib/slurmd \
+  /var/spool/slurmctld /var/run/slurmctld /var/lib/slurm \
+  /var/log/slurm
+
+chown -R slurm:slurm \
+  /var/spool/slurmd /var/run/slurmd /var/lib/slurmd \
+  /var/spool/slurmctld /var/run/slurmctld /var/lib/slurm \
+  /var/log/slurm /etc/slurm
+
 if [ "$1" = "slurmdbd" ]
 then
     echo "---> Starting the MUNGE Authentication service (munged) ..."
@@ -23,13 +33,26 @@ fi
 
 if [ "$1" = "slurmctld" ]
 then
-    # This block is ONLY executed for the slurmctld container.
-
     echo "---> Starting the MUNGE Authentication service (munged) ..."
-    gosu munge /usr/sbin/munged
+    gosu munge /usr/sbin/munged &
 
-    echo "---> Starting the SSH daemon (sshd) ..."
-    /usr/sbin/sshd -D & # This will only run for slurmctld
+    echo "---> Starting the SSH daemon (sshd) in debug mode to capture auth logs..."
+    # The '-d' flag runs sshd in the foreground for one connection. 
+    # The '-e' flag sends all logs to stderr instead of syslog.
+    # The '&' at the end runs the process in the background so the script can continue.
+    # All sshd logs will now appear in `docker logs slurmctld`.
+    /usr/sbin/sshd -D -e &
+
+    sleep 2 
+
+    # Verify sshd started and is listening on port 22
+    if ! ss -ltn | grep -q ':22 '; then
+        echo "❌ CRITICAL: SSH daemon failed to start or is not listening on port 22."
+        # If it failed, its error message will be in the container logs.
+        # No need to dump logs here as this script's output is already part of them.
+        exit 1
+    fi
+    echo "---> SSH daemon started successfully and is logging to stderr."
 
     echo "---> Waiting for slurmdbd to become active before starting slurmctld ..."
     until 2>/dev/null >/dev/tcp/slurmdbd/6819
@@ -40,7 +63,8 @@ then
     echo "-- slurmdbd is now active ..."
 
     echo "---> Starting the Slurm Controller Daemon (slurmctld) ..."
-    # The -D flag keeps the process in the foreground, which is correct.
+    # The 'exec' command replaces this script with the slurmctld process.
+    # The backgrounded sshd process will continue to run alongside it.
     exec gosu slurm /usr/sbin/slurmctld -Dvvv
 fi
 
