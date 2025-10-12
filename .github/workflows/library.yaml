@@ -102,47 +102,6 @@ jobs:
 
           echo "--- SLURMCTLD LOGS (where healthcheck output is) ---"
           docker logs slurmctld
-
-          # -----------------------------
-          echo "=== 1. Check if SSH is listening ==="
-          docker exec slurmctld ss -ltn
-          echo ""
-          
-          echo "=== 2. Test grep for :22 (with space) ==="
-          docker exec slurmctld bash -c "ss -ltn | grep ':22 ' && echo 'FOUND with space' || echo 'NOT FOUND with space'"
-          echo ""
-          
-          echo "=== 3. Test grep for :22 (without space) ==="
-          docker exec slurmctld bash -c "ss -ltn | grep ':22' && echo 'FOUND without space' || echo 'NOT FOUND without space'"
-          echo ""
-          
-          echo "=== 4. Test scontrol ping ==="
-          docker exec slurmctld scontrol ping
-          docker exec slurmctld bash -c "scontrol ping | grep -iq 'is up' && echo 'PING OK' || echo 'PING FAIL'"
-          echo ""
-          
-          echo "=== 5. Test SSH with sshpass (exact healthcheck command) ==="
-          docker exec slurmctld grep -E "^PasswordAuthentication|^#PasswordAuthentication" /etc/ssh/sshd_config
-          echo "=== PAM line ==="
-          docker exec slurmctld grep -nE '^[[:space:]]*session[[:space:]]+optional[[:space:]]+pam_loginuid\.so' /etc/pam.d/sshd || true
-          echo "=== ssh test ==="
-          docker exec slurmctld bash -lc "sshpass -p submitter ssh -o ConnectTimeout=3 -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null submitter@localhost 'echo ok'"
-
-
-          docker exec slurmctld bash -c "sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok' 2>&1"
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2223 submitter@localhost 'echo ssh_direct_ok' 2>&1
-          docker exec slurmctld cat /etc/pam.d/sshd | grep -v "^#"
-
-          docker exec slurmctld passwd -S submitter
-          echo ""
-          
-          echo "=== 6. Test complete healthcheck command ==="
-          docker exec slurmctld bash -c "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@localhost 'echo ssh_ok' >/dev/null 2>&1 && echo 'FULL HEALTHCHECK PASS' || echo 'FULL HEALTHCHECK FAIL'"
-          echo ""
-          
-          echo "=== 7. Show healthcheck history from Docker ==="
-          docker inspect slurmctld --format='{{json .State.Health}}' | jq '.Log[-5:]'
-          # -----------------------------
           
           # Now, add a real check to fail the job if the container isn't healthy
           if ! docker ps | grep slurmctld | grep -q '(healthy)'; then
