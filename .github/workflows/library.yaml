@@ -145,7 +145,7 @@ jobs:
             exit 1
           fi
 
-      - name: debugging deploy
+      - name: debugging deployx
         env:
           SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
