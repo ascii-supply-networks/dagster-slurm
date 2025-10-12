@@ -92,85 +92,73 @@ jobs:
               echo "⚠️ Docker compose wait timed out or failed"
             }
 
-          echo "### Verifying container health status..."
-          echo "The 'STATUS' column should show '(healthy)' for all relevant containers."
-          docker compose ps -a
-          
-          echo
-          echo "### Application-level check (Optional but recommended)..."
-          docker exec slurmctld sinfo
-
-          echo "--- SLURMCTLD LOGS (where healthcheck output is) ---"
-          docker logs slurmctld
-          
           # Now, add a real check to fail the job if the container isn't healthy
           if ! docker ps | grep slurmctld | grep -q '(healthy)'; then
             echo "❌ slurmctld did not become healthy."
-            exit 1
-          fi
-
-      - name: Verify sshd inside slurmctld
-        run: |
-          docker exec slurmctld bash -lc '
-            ss -ltn | grep ":22 " || (echo "sshd not listening" && exit 1)
-            echo "[effective sshd]:"
-            sshd -T | egrep "^(passwordauthentication|pubkeyauthentication|usepam)"
-            echo "[submitter status]:"
-            passwd -S submitter
-          '
-
-      
-      - name: Install SSH client tools on runner
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-client sshpass
-          ssh -V
-
-      - name: Smoke test SSH to slurmctld (runner -> container)
-        env:
-          HOST: localhost
-          PORT: "2223"
-          USER: submitter
-          PASS: submitter
-        run: |
-          # wait for port mapping to be ready
-          for i in {1..60}; do nc -z ${HOST} ${PORT} && break; sleep 2; done
-          # explicit password-only auth to avoid key prompts
-          sshpass -p "${PASS}" ssh \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -p "${PORT}" ${USER}@${HOST} 'echo ssh_ok'
-      
-      - name: Verify SSH Access to slurmctld
-        run: |
-          echo "### 1. Checking if port 2223 is listening on the host..."
-          ss -ltn | grep 2223 || (echo "❌ ERROR: Port 2223 is not listening on the GHA runner!"; exit 1)
-          echo "✅ Port 2223 is listening."
-          echo
-
-          echo "### 2. Running verbose SSH test from host to container..."
-          # The `-v` flag provides detailed debugging of the SSH handshake
-          if ! sshpass -p 'submitter' ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2223 submitter@localhost 'echo "SSH connection successful"'; then
-            echo
-            echo "❌ ERROR: SSH connection from GHA runner failed."
-            echo
-            echo "### 3. Dumping sshd logs from inside the slurmctld container..."
             docker logs slurmctld
             exit 1
           fi
-          echo "✅ SSH connection from host to container is working."
-      - name: SSH diagnostics (runner)
-        run: |
-          set -x
-          ssh -vvv -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -p 2223 submitter@localhost 'echo ok' || true
 
-      - name: SSHD auth logs (container)
+      - name: Install SSH client on runner
         run: |
-          docker exec slurmctld bash -lc 'test -f /var/log/secure && tail -n 200 /var/log/secure || (test -f /var/log/auth.log && tail -n 200 /var/log/auth.log || true)'
+          sudo apt-get update
+          sudo apt-get install -y openssh-client sshpass netcat-openbsd
+
+      - name: Comprehensive SSH Verification (Runner -> Container)
+        run: |
+          set -x # Print each command for easy debugging
+
+          echo "---"
+          echo "### STEP 1: Pre-flight Checks (Container State)"
+          echo "---"
+
+          echo "--> Effective sshd config inside container (sshd -T is the best way to check):"
+          docker exec slurmctld sshd -T | egrep '^(passwordauthentication|pubkeyauthentication|usepam|permitrootlogin)' | sed 's/^/    /'
+
+          echo "--> 'submitter' user status inside container:"
+          docker exec slurmctld id submitter
+          docker exec slurmctld passwd -S submitter
+
+          echo "--> Checking listener on port 22 INSIDE container:"
+          docker exec slurmctld ss -ltn | grep ':22 ' || (echo "❌ CRITICAL: sshd is not listening on port 22 inside the container!" && exit 1)
+          
+          echo
+          echo "---"
+          echo "### STEP 2: Network Connectivity Checks (Host State)"
+          echo "---"
+
+          echo "--> Host network listeners (checking for port 2223):"
+          ss -ltn | grep 2223 || (echo "❌ CRITICAL: Port 2223 is not mapped on the GHA runner host!" && exit 1)
+
+          echo "--> Basic TCP connection test (using netcat):"
+          nc -zv localhost 2223
+
+          echo
+          echo "---"
+          echo "### STEP 3: Full SSH Connection Test (Maximum Verbosity)"
+          echo "---"
+
+          # Use sshpass to provide the password, and -vvv for maximum client-side logging.
+          # Redirect stderr to a file to print it cleanly on failure.
+          if ! sshpass -p 'submitter' ssh -vvv -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2223 submitter@localhost 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
+            echo "======================================================================="
+            echo "❌ ERROR: SSH connection from GHA runner FAILED."
+            echo "======================================================================="
+            echo
+            echo "### Client-side SSH debug output (-vvv):"
+            cat ssh_debug_output.log
+            echo
+            echo "### Server-side logs (from container):"
+            echo "--- Full 'slurmctld' container log ---"
+            docker logs slurmctld
+            echo
+            echo "--- Authentication log from inside container (/var/log/secure) ---"
+            docker exec slurmctld cat /var/log/secure || echo "NOTE: /var/log/secure not found or empty."
+            echo
+            exit 1
+          fi
+
+          echo "✅ All SSH checks passed successfully."
 
       
       - name: debugging deploy
