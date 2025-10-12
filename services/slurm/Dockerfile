@@ -53,10 +53,10 @@ RUN set -ex \
  && mkdir -p /run/sshd \
     && echo "Creating custom SSH override configuration..." \
     && { \
-        echo "# Custom settings for containerized environment"; \
-        echo "PasswordAuthentication yes"; \
+        echo "# Custom override for containerized environment"; \
+        echo  "PasswordAuthentication yes"; \
         echo "UsePAM no"; \
-    } > /etc/ssh/sshd_config.d/99-custom.conf \
+    } > /etc/ssh/sshd_config.d/50-redhat.conf \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
