@@ -109,7 +109,71 @@ jobs:
             exit 1
           fi
 
-      - name: debugging deployxx
+      - name: Verify sshd inside slurmctld
+        run: |
+          docker exec slurmctld bash -lc '
+            ss -ltn | grep ":22 " || (echo "sshd not listening" && exit 1)
+            echo "[effective sshd]:"
+            sshd -T | egrep "^(passwordauthentication|pubkeyauthentication|usepam)"
+            echo "[submitter status]:"
+            passwd -S submitter
+          '
+
+      
+      - name: Install SSH client tools on runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-client sshpass
+          ssh -V
+
+      - name: Smoke test SSH to slurmctld (runner -> container)
+        env:
+          HOST: localhost
+          PORT: "2223"
+          USER: submitter
+          PASS: submitter
+        run: |
+          # wait for port mapping to be ready
+          for i in {1..60}; do nc -z ${HOST} ${PORT} && break; sleep 2; done
+          # explicit password-only auth to avoid key prompts
+          sshpass -p "${PASS}" ssh \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -p "${PORT}" ${USER}@${HOST} 'echo ssh_ok'
+      
+      - name: Verify SSH Access to slurmctld
+        run: |
+          echo "### 1. Checking if port 2223 is listening on the host..."
+          ss -ltn | grep 2223 || (echo "❌ ERROR: Port 2223 is not listening on the GHA runner!"; exit 1)
+          echo "✅ Port 2223 is listening."
+          echo
+
+          echo "### 2. Running verbose SSH test from host to container..."
+          # The `-v` flag provides detailed debugging of the SSH handshake
+          if ! sshpass -p 'submitter' ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2223 submitter@localhost 'echo "SSH connection successful"'; then
+            echo
+            echo "❌ ERROR: SSH connection from GHA runner failed."
+            echo
+            echo "### 3. Dumping sshd logs from inside the slurmctld container..."
+            docker logs slurmctld
+            exit 1
+          fi
+          echo "✅ SSH connection from host to container is working."
+      - name: SSH diagnostics (runner)
+        run: |
+          set -x
+          ssh -vvv -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p 2223 submitter@localhost 'echo ok' || true
+
+      - name: SSHD auth logs (container)
+        run: |
+          docker exec slurmctld bash -lc 'test -f /var/log/secure && tail -n 200 /var/log/secure || (test -f /var/log/auth.log && tail -n 200 /var/log/auth.log || true)'
+
+      
+      - name: debugging deploy
         env:
           SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
