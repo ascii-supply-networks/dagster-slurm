@@ -34,14 +34,14 @@ fi
 if [ "$1" = "slurmctld" ]
 then
     echo "---> Starting the MUNGE Authentication service (munged) ..."
-    gosu munge /usr/sbin/munged
+    gosu munge /usr/sbin/munged &
 
     echo "---> Starting the SSH daemon (sshd) in debug mode to capture auth logs..."
     # The '-d' flag runs sshd in the foreground for one connection. 
     # The '-e' flag sends all logs to stderr instead of syslog.
     # The '&' at the end runs the process in the background so the script can continue.
     # All sshd logs will now appear in `docker logs slurmctld`.
-    /usr/sbin/sshd -d -e &
+    /usr/sbin/sshd -D -e &
 
     sleep 2 
 
