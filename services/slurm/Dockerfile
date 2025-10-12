@@ -49,12 +49,23 @@ RUN set -ex \
  && chmod 700 /home/submitter \
  && echo "%wheel ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
  && ssh-keygen -A \
- && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
- && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config \
- && echo "HostKeyAlgorithms +ssh-rsa" >> /etc/ssh/sshd_config \
- && echo "PubkeyAcceptedAlgorithms +ssh-rsa" >> /etc/ssh/sshd_config \
- && sed -ri 's/^session\s+required\s+pam_loginuid\.so/session optional pam_loginuid.so/' /etc/pam.d/sshd \
- && mkdir -p /run/sshd
+ && mkdir -p /run/sshd \
+    # On modern RHEL/Rocky, settings are overridden by files in sshd_config.d.
+    # We will create our own override file that loads last (99-custom.conf)
+    # to ensure our settings are applied.
+    && echo "Creating custom SSH override configuration..." \
+    && { \
+        echo "# Custom settings for containerized environment"; \
+        echo "PasswordAuthentication yes"; \
+        echo "UsePAM no"; \
+        echo "# Allow older, more compatible algorithms for clients like GHA runners"; \
+        echo "HostKeyAlgorithms +ssh-rsa"; \
+        echo "PubkeyAcceptedAlgorithms +ssh-rsa"; \
+    } > /etc/ssh/sshd_config.d/99-custom.conf \
+    # The 'sed' commands on the main file are no longer necessary as they are
+    # handled by the override file, but leaving them does no harm.
+    && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
 
 # This command creates a .bashrc file for the 'submitter' user.
