@@ -57,6 +57,7 @@ RUN set -ex \
 COPY submitter.bashrc /home/submitter/.bashrc
 RUN chown submitter:submitter /home/submitter/.bashrc \
     && chmod +x /home/submitter/.bashrc
+    
 
 EXPOSE 22
 
@@ -108,6 +109,9 @@ RUN set -ex \
         /var/lib/slurmd/fed_mgr_state \
     && chown -R slurm:slurm /var/*/slurm* \
     && /sbin/create-munge-key
+
+RUN sed -ri 's/^session\s+required\s+pam_loginuid\.so/session optional pam_loginuid.so/' /etc/pam.d/sshd \
+ && mkdir -p /run/sshd
 
 COPY slurm.conf /etc/slurm/slurm.conf
 COPY slurmdbd.conf /etc/slurm/slurmdbd.conf
