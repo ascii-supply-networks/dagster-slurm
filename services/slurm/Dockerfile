@@ -46,6 +46,7 @@ RUN set -ex \
  && useradd -m -s /bin/bash submitter \
  && echo "submitter:submitter" | chpasswd \
  && usermod -aG wheel submitter \
+ && chmod 700 /home/submitter \
  && echo "%wheel ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
  && ssh-keygen -A \
  && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
