@@ -123,12 +123,9 @@ def main():
                 "deployment_path": deployment_path,
                 "platform": args.platform or "default",
             }
-
-            print("xxxxyyy")
             
             with open(args.output_json, "w") as f:
                 json.dump(metadata, f, indent=2)
-            print("xxxx")
             logger.info(f"Successfully wrote deployment metadata to {args.output_json}")
 
         except Exception as e:
