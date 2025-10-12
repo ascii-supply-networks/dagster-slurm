@@ -50,9 +50,6 @@ RUN set -ex \
  && echo "%wheel ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
  && ssh-keygen -A \
  && mkdir -p /run/sshd \
-    # On modern RHEL/Rocky, settings are overridden by files in sshd_config.d.
-    # We will create our own override file that loads last (99-custom.conf)
-    # to ensure our settings are applied.
     && echo "Creating custom SSH override configuration..." \
     && { \
         echo "# Custom settings for containerized environment"; \
@@ -62,8 +59,6 @@ RUN set -ex \
         echo "HostKeyAlgorithms +ssh-rsa"; \
         echo "PubkeyAcceptedAlgorithms +ssh-rsa"; \
     } > /etc/ssh/sshd_config.d/99-custom.conf \
-    # The 'sed' commands on the main file are no longer necessary as they are
-    # handled by the override file, but leaving them does no harm.
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 

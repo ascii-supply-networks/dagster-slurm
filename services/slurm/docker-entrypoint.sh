@@ -36,7 +36,6 @@ then
     echo "---> Starting the MUNGE Authentication service (munged) ..."
     gosu munge /usr/sbin/munged
 
-    # --- START of MODIFIED SECTION ---
     echo "---> Starting the SSH daemon (sshd) in debug mode to capture auth logs..."
     # The '-d' flag runs sshd in the foreground for one connection. 
     # The '-e' flag sends all logs to stderr instead of syslog.
