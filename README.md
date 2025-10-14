@@ -120,7 +120,7 @@ source /home/submitter/activate.sh
 
 is now available on all the cluster nodes
 
-## ray
+### ray
 
 docs: https://docs.ray.io/en/latest/cluster/vms/user-guides/community/slurm.html#id7
 
