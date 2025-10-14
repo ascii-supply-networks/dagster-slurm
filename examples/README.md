@@ -90,6 +90,37 @@ go to http://localhost:3000 and you should see the dagster webserver running.
 - large data
 - you have to adapt the configuration to target your specific HPC deployment
 
+### SLURM tricks
+
+When exploring slurm in this mini example you may find the following commands useful
+
+```bash
+# ongoing
+squeue -u submitter
+
+# status after completion by job id
+sacct -j 1.1
+# by user
+sacct -u submitter
+
+# all jobs
+sacct
+
+# logs (only whilst running, not after completion)
+scontrol show job 3
+cat $(scontrol show job 1 | grep -oP 'StdOut=\K\S+')
+```
+
+debugging
+
+```bash
+yum install procps
+
+ps aux | grep ray
+
+# cancel a stuck job
+scancel 6
+```
 
 ## contributing
 

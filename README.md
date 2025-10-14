@@ -9,6 +9,8 @@
 
 Integration for running Dagster assets on Slurm HPC clusters.
 
+See the [docs](https://ascii-supply-networks.github.io/dagster-slurm/) for instructions.
+
 ## ✨ features
 
 - **Unified API**: Same asset code works in dev (local) for rapid prototyping but just as well on a massive HPC system via SLURM.

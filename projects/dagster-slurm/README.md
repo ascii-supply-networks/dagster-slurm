@@ -2,7 +2,7 @@
 
 Integrating dagster to orchestrate slurm jobs for HPC systems and frameworks for scaling compute like ray for a better developer experience on supercomputers.
 
-## Basica example
+## Basic example
 
 https://github.com/ascii-supply-networks/dagster-slurm/tree/main/examples
 
