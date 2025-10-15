@@ -51,11 +51,10 @@ def process_data(
     )
 
 
-@dg.asset
+@dg.asset(deps=[process_data])
 def aggregate_results(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
-    process_data,  # Dependency
 ):
     """Aggregate results from processing."""
     script_path = dg.file_relative_path(

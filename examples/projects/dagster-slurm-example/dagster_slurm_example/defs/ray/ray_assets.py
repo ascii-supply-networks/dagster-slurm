@@ -40,11 +40,10 @@ def distributed_training(
     yield from completed_run.get_results()
 
 
-@dg.asset
+@dg.asset(deps=[distributed_training])
 def distributed_inference(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
-    distributed_training,  # Uses trained model
 ):
     """Run inference using Ray.
     In session mode, this reuses the same Ray cluster from training!
@@ -53,6 +52,28 @@ def distributed_inference(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/infer_ray.py",
     )
+
+    event_record = context.instance.get_latest_materialization_event(
+        asset_key=distributed_training.key
+    )
+
+    # 2. Check that the materialization and metadata exist.
+    if (
+        not event_record
+        or not event_record.asset_materialization
+        or not event_record.asset_materialization.metadata
+        or "model_path" not in event_record.asset_materialization.metadata
+    ):
+        # If any part of the chain is missing, raise a clear error.
+        raise dg.DagsterError(
+            f"Could not find `model_path` in the metadata of the latest "
+            f"materialization of upstream asset '{distributed_training.key}'. "
+            "Please ensure the upstream asset has been materialized and reports this metadata."
+        )
+
+    # 3. If we get here, we know all objects exist. Extract the path.
+    model_path = event_record.asset_materialization.metadata["model_path"].value
+    context.log.info(f"Found upstream model path from metadata: {model_path}")
 
     ray_launcher = RayLauncher(
         num_gpus_per_node=0,
@@ -63,7 +84,7 @@ def distributed_inference(
         payload_path=script_path,
         launcher=ray_launcher,
         extra_env={
-            "MODEL_PATH": distributed_training["model_path"],
+            "MODEL_PATH": model_path,
             "INPUT_DATA": "/path/to/input",
         },
     )
