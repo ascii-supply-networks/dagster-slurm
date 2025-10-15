@@ -13,17 +13,17 @@ const FeatureList: FeatureItem[] = [
   {
     title: 'Unified Compute Interface',
     // Suggestion: An SVG representing a developer or a clean interface.
-    Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
+    Svg: require('@site/static/img/undraw_server-cluster_7ugi.svg').default,
     description: (
       <>
-        Develop on your laptop, deploy to an HPC cluster. The <strong>ComputeResource</strong> provides a single, consistent API for local and remote execution, so your asset code never has to change. Dependencies are consistently managed and distributed automatically via <strong>pixi</strong>
+        Develop on your laptop, deploy to an HPC cluster. The <strong>ComputeResource</strong> provides a single, consistent API for local and remote execution, so your code never has to change. Dependencies are consistently managed and distributed automatically via <strong>pixi</strong>
       </>
     ),
   },
   {
     title: 'HPC-Optimized Execution',
     // Suggestion: An SVG representing a server cluster or high performance.
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
+    Svg: require('@site/static/img/undraw_scooter_izdb.svg').default,
     description: (
       <>
         Go beyond simple job submission. Use <strong>multi-assets</strong> to fuse multiple assets into a single Slurm allocation, minimizing queue times.
@@ -33,7 +33,7 @@ const FeatureList: FeatureItem[] = [
   {
     title: 'Extensible & Environment-Aware',
     // Suggestion: An SVG representing building blocks or packaging.
-    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
+    Svg: require('@site/static/img/undraw_monitor_ypga.svg').default,
     description: (
       <>
         Built-in <strong>Launchers</strong> for Ray and Spark (WIP) enable distributed workloads out of the box. Automatic environment packaging with <code>pixi</code> ensures that your remote execution environment is a perfect replica of your local one.
