@@ -109,7 +109,13 @@ class SlurmPipesClient(PipesClient):
             Dagster events
 
         """
-        run_id = context.run_id or uuid.uuid4().hex
+        if context.run:
+            run_id = context.run.run_id
+        else:
+            self.logger.warning(
+                "Context is not part of a Dagster run, generating a temporary run_id."
+            )
+            run_id = uuid.uuid4().hex
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
