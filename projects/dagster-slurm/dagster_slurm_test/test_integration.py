@@ -18,10 +18,10 @@ with open_dagster_pipes() as context:
 
     @asset
     def test_asset(context: AssetExecutionContext, compute: ComputeResource):
-        compute.run(
+        yield from compute.run(
             context=context,
             payload_path=str(payload),
-        )
+        ).get_results()
 
     result = materialize(
         [test_asset],
@@ -46,11 +46,11 @@ with open_dagster_pipes() as context:
 
     @asset
     def bash_asset(context: AssetExecutionContext, compute: ComputeResource):
-        compute.run(
+        yield from compute.run(
             context=context,
             payload_path=str(payload),
             extra_env={"TEST_VAR": "test_value"},
-        )
+        ).get_results()
 
     result = materialize(
         [bash_asset],
