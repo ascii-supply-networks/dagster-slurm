@@ -18,6 +18,7 @@ from dagster import (
     get_dagster_logger,
     open_pipes_session,
 )
+from dagster._core.pipes.client import PipesClientCompletedInvocation
 
 from ..helpers.env_packaging import pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
@@ -91,7 +92,7 @@ class SlurmPipesClient(PipesClient):
         use_session: bool = False,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
         **kwargs,
-    ) -> Iterator:
+    ) -> PipesClientCompletedInvocation:
         """Execute payload on Slurm cluster with real-time log streaming.
 
         Args:
@@ -199,7 +200,7 @@ class SlurmPipesClient(PipesClient):
                 )
 
                 with open_pipes_session(
-                    context=context,
+                    context=context.op_execution_context,
                     context_injector=context_injector,
                     message_reader=message_reader,
                     extras=extras,
@@ -273,10 +274,6 @@ class SlurmPipesClient(PipesClient):
                     except Exception as e:
                         self.logger.warning(f"Failed to collect metrics: {e}")
 
-                    # Yield results
-                    for event in session.get_results():
-                        yield event
-
                 # Cleanup (unless debug mode)
                 if not self.debug_mode:
                     try:
@@ -323,6 +320,8 @@ class SlurmPipesClient(PipesClient):
             self._current_job_id = None
             self._ssh_pool = None
             self._cancellation_requested = False
+
+        return PipesClientCompletedInvocation(session)
 
     def _cancel_slurm_job(self, job_id: int):
         """Cancel a Slurm job.

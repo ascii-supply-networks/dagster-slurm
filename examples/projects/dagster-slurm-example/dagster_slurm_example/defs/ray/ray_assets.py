@@ -8,7 +8,7 @@ from dagster_slurm import ComputeResource, RayLauncher
 def distributed_training(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
-) -> dg.Output:
+):
     """Train model using Ray for distributed compute.
     In dev: starts local Ray
     In prod session: starts Ray cluster across allocated nodes.
@@ -23,27 +23,21 @@ def distributed_training(
         num_gpus_per_node=0,  # Set to >0 if using GPUs
     )
 
-    _ = list(
-        compute_ray.run(
-            context=context,
-            payload_path=script_path,
-            launcher=ray_launcher,
-            extra_env={
-                "MODEL_CONFIG": "config.yaml",
-                "CHECKPOINT_DIR": "/path/to/checkpoints",
-            },
-            extra_slurm_opts={
-                "nodes": 1,  # Single node = local Ray mode
-                "cpus_per_task": 2,
-                "mem": "4G",
-            },
-        )
+    completed_run = compute_ray.run(
+        context=context,
+        payload_path=script_path,
+        launcher=ray_launcher,
+        extra_env={
+            "MODEL_CONFIG": "config.yaml",
+            "CHECKPOINT_DIR": "/path/to/checkpoints",
+        },
+        extra_slurm_opts={
+            "nodes": 1,  # Single node = local Ray mode
+            "cpus_per_task": 2,
+            "mem": "4G",
+        },
     )
-
-    return dg.Output(
-        value={"model_path": "/path/to/model"},
-        metadata={"framework": "ray"},
-    )
+    yield from completed_run.get_results()
 
 
 @dg.asset
@@ -51,7 +45,7 @@ def distributed_inference(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
     distributed_training,  # Uses trained model
-) -> dg.Output:
+):
     """Run inference using Ray.
     In session mode, this reuses the same Ray cluster from training!
     """
@@ -64,16 +58,14 @@ def distributed_inference(
         num_gpus_per_node=0,
     )
 
-    _ = list(
-        compute_ray.run(
-            context=context,
-            payload_path=script_path,
-            launcher=ray_launcher,
-            extra_env={
-                "MODEL_PATH": distributed_training["model_path"],
-                "INPUT_DATA": "/path/to/input",
-            },
-        )
+    completed_run = compute_ray.run(
+        context=context,
+        payload_path=script_path,
+        launcher=ray_launcher,
+        extra_env={
+            "MODEL_PATH": distributed_training["model_path"],
+            "INPUT_DATA": "/path/to/input",
+        },
     )
 
-    return dg.Output(value={"predictions_path": "/path/to/predictions"})
+    yield from completed_run.get_results()

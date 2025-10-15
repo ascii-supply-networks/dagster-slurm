@@ -13,6 +13,7 @@ from dagster import (
     get_dagster_logger,
     open_pipes_session,
 )
+from dagster._core.pipes.client import PipesClientCompletedInvocation
 
 from ..helpers.message_readers import LocalMessageReader
 from ..launchers.base import ComputeLauncher
@@ -97,7 +98,7 @@ class LocalPipesClient(PipesClient):
         extra_env: Optional[Dict[str, str]] = None,
         extras: Optional[Dict[str, Any]] = None,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
-    ) -> Iterator:
+    ) -> PipesClientCompletedInvocation:
         """Execute payload locally.
 
         Args:
@@ -111,11 +112,16 @@ class LocalPipesClient(PipesClient):
             Dagster events (materializations, logs, etc.)
 
         """
-        # Use current Python by default
         if python_executable is None:
             python_executable = sys.executable
 
-        run_id = context.run_id or uuid.uuid4().hex
+        if context.run:
+            run_id = context.run.run_id
+        else:
+            self.logger.warning(
+                "Context is not part of a Dagster run, generating a temporary run_id."
+            )
+            run_id = uuid.uuid4().hex
         working_dir = f"{self.base_dir}/{run_id}"
         messages_path = f"{working_dir}/messages.jsonl"
 
@@ -130,7 +136,7 @@ class LocalPipesClient(PipesClient):
         )
 
         with open_pipes_session(
-            context=context,
+            context=context.op_execution_context,
             context_injector=context_injector,
             message_reader=message_reader,
             extras=extras,
@@ -161,6 +167,4 @@ class LocalPipesClient(PipesClient):
                 self.logger.error(f"Local execution failed: {e}")
                 raise
 
-            # Yield results
-            for event in session.get_results():
-                yield event
+            return PipesClientCompletedInvocation(session)

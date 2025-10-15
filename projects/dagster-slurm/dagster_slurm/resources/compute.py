@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
 from pydantic import Field, PrivateAttr, model_validator
+from dagster._core.pipes.client import PipesClientCompletedInvocation
 
 from ..config.environment import ExecutionMode
 from ..helpers.ssh_pool import SSHConnectionPool
@@ -249,7 +250,7 @@ class ComputeResource(ConfigurableResource):
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
         resource_requirements: Optional[Dict[str, Any]] = None,
         **kwargs,
-    ):
+    ) -> PipesClientCompletedInvocation:
         """Execute asset with optional resource overrides.
 
         Args:
@@ -345,7 +346,10 @@ class ComputeResource(ConfigurableResource):
             kwargs.setdefault("use_session", True)
 
         # Run with the configured client
-        yield from client.run(context=context, payload_path=payload_path, **kwargs)
+        completed_invocation = client.run(
+            context=context, payload_path=payload_path, **kwargs
+        )
+        return completed_invocation
 
     def run_hetjob(
         self,

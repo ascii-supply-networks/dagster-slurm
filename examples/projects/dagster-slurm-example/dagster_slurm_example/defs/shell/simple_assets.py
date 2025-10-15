@@ -19,7 +19,7 @@ from dagster_slurm import ComputeResource
 def process_data(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
-) -> dg.Output:
+):
     """Process data using bash script.
     Works in all modes (dev/staging/prod) without code changes.
     """
@@ -29,25 +29,24 @@ def process_data(
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/process.py",
     )
     # Run via compute resource
-    results = list(
-        compute.run(
-            context=context,
-            payload_path=script_path,
-            extra_env={
-                "INPUT_DATA": "/path/to/input",
-                "OUTPUT_DATA": "/path/to/output",
-            },
-            extras={
-                "foo": "bar",
-                "config": {"batch_size": 100},
-            },
-        )
+    completed_run = compute.run(
+        context=context,
+        payload_path=script_path,
+        extra_env={
+            "INPUT_DATA": "/path/to/input",
+            "OUTPUT_DATA": "/path/to/output",
+        },
+        extras={
+            "foo": "bar",
+            "config": {"batch_size": 100},
+        },
     )
-    return dg.Output(
-        value=None,
+    yield from completed_run.get_results()
+    yield dg.AssetObservation(
+        asset_key=context.asset_key,
         metadata={
-            "deployment": str(compute.mode),
-            "events_count": len(results),
+            "deployment_mode": str(compute.mode),
+            "custom_messages_count": len(completed_run.get_custom_messages()),
         },
     )
 
@@ -57,22 +56,63 @@ def aggregate_results(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
     process_data,  # Dependency
-) -> dg.Output:
+):
     """Aggregate results from processing."""
     script_path = dg.file_relative_path(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/aggregate.py",
     )
-    _ = list(
-        compute.run(
-            context=context,
-            payload_path=script_path,
-            extra_env={
-                "PROCESSED_DATA": "/path/to/processed",
-            },
-        )
+
+    return compute.run(
+        context=context,
+        payload_path=script_path,
+        extra_env={
+            "PROCESSED_DATA": "/path/to/processed",
+        },
+    ).get_results()
+
+
+@dg.multi_asset(specs=[dg.AssetSpec(key=["myprefix", "orders"]), dg.AssetSpec("users")])
+def subprocess_asset(
+    context: dg.AssetExecutionContext,
+    compute: ComputeResource,
+):
+    """Multi asset example with tests"""
+    script_path = dg.file_relative_path(
+        __file__,
+        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/multi_asset_example.py",
     )
-    return dg.Output(value=None)
+    return compute.run(
+        context=context,
+        payload_path=script_path,
+        extras={"foo": "bar"},
+        extra_env={
+            "MY_ENV_VAR_IN_SUBPROCESS": "my_value",
+        },
+    ).get_results()
+
+
+@dg.asset_check(
+    asset=dg.AssetKey(["myprefix", "orders"]),
+    blocking=True,
+)
+def no_empty_order_check(
+    context: dg.AssetCheckExecutionContext,
+    compute: ComputeResource,
+) -> dg.AssetCheckResult:
+    """asset check example"""
+    script_path = dg.file_relative_path(
+        __file__,
+        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/multi_asset_example_checking.py",
+    )
+    return compute.run(
+        context=context,
+        payload_path=script_path,
+        extras={"foo": "bar"},
+        extra_env={
+            "MY_ENV_VAR_IN_SUBPROCESS": "my_value",
+        },
+    ).get_asset_check_result()
 
 
 # # Define a job that runs assets as heterogeneous job
