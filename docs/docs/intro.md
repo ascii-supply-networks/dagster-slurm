@@ -23,8 +23,8 @@ cd dagster-slurm/examples
 ### local execution
 
 Execute without slurm.
-- Small data
-- Rapid local prototyping
+- small data
+- rapid local prototyping
 
 ```bash
 pixi run start
@@ -34,9 +34,9 @@ go to http://localhost:3000 and you should see the dagster webserver running.
 
 ### docker local execution
 
-- Test everything works on SLURM
-- Still small data
-- Mainly used for developing this integration
+- test everything works on SLURM
+- still small data
+- mainly used for developing this integration
 
 Ensure you have a `.env` file with the following content:
 
@@ -56,10 +56,10 @@ go to http://localhost:3000 and you should see the dagster webserver running.
 
 ### prod docker local execution
 
-- Test everything works on SLURM
-- Still small data
-- Mainly used for developing this integration
-- This target instead supports a faster startup of the job
+- test everything works on SLURM
+- still small data
+- mainly used for developing this integration
+- this target instead supports a faster startup of the job
 
 Ensure you have a `.env` file with the following content:
 
