@@ -35,6 +35,15 @@ Visible in Dagster UI metadata.
 
 ### 🏗️ Architecture
 
+#### Components
+
+- Your server coordinating HPC and non HPC jobs
+- The HPC compute resource
+
+![](./docs/static/img/arch-overview.png)
+
+#### Layers of dagster-slurm
+
 ```
 Asset Layer (user code)
   ↓

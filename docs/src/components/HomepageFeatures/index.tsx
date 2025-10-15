@@ -11,36 +11,37 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'Easy to Use',
+    title: 'Unified Compute Interface',
+    // Suggestion: An SVG representing a developer or a clean interface.
     Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
     description: (
       <>
-        Docusaurus was designed from the ground up to be easily installed and
-        used to get your website up and running quickly.
+        Develop on your laptop, deploy to an HPC cluster. The <strong>ComputeResource</strong> provides a single, consistent API for local and remote execution, so your asset code never has to change. Dependencies are consistently managed and distributed automatically via <strong>pixi</strong>
       </>
     ),
   },
   {
-    title: 'Focus on What Matters',
+    title: 'HPC-Optimized Execution',
+    // Suggestion: An SVG representing a server cluster or high performance.
     Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
       <>
-        Docusaurus lets you focus on your docs, and we&apos;ll do the chores. Go
-        ahead and move your docs into the <code>docs</code> directory.
+        Go beyond simple job submission. Use <strong>multi-assets</strong> to fuse multiple assets into a single Slurm allocation, minimizing queue times.
       </>
     ),
   },
   {
-    title: 'Powered by React',
+    title: 'Extensible & Environment-Aware',
+    // Suggestion: An SVG representing building blocks or packaging.
     Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
     description: (
       <>
-        Extend or customize your website layout by reusing React. Docusaurus can
-        be extended while reusing the same header and footer.
+        Built-in <strong>Launchers</strong> for Ray and Spark (WIP) enable distributed workloads out of the box. Automatic environment packaging with <code>pixi</code> ensures that your remote execution environment is a perfect replica of your local one.
       </>
     ),
   },
 ];
+
 
 function Feature({title, Svg, description}: FeatureItem) {
   return (

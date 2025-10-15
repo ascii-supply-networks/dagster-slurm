@@ -69,7 +69,7 @@ SLURM_EDGE_NODE_USER=submitter
 SLURM_EDGE_NODE_PASSWORD=submitter
 SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 
-# see the JQ command below for dynamically setting this
+# see the jq command below for dynamically setting this
 # DAGSTER_PROD_ENV_PATH=/home/submitter/pipelines/deployments/<<<your deployment >>>
 ```
 
@@ -94,5 +94,71 @@ go to http://localhost:3000 and you should see the dagster webserver running.
 
 ## API examples
 
-> TODO: Showcase how to use the basic integration (not yet the distrbuted frameworks)
-> These come into the dedicated folder
+### controlplane
+
+This is part of your [dagster](https://dagster.io/) deployment.
+Possibly you might be using an instance of the [local-data-stack](https://github.com/l-mds/local-data-stack/).
+
+```python
+import dagster as dg
+from dagster_slurm import ComputeResource
+
+
+@dg.asset
+def process_data(
+    context: dg.AssetExecutionContext,
+    compute: ComputeResource,
+):
+    """Some mini example of dagster-slurm"""
+    script_path = dg.file_relative_path(
+        __file__,
+        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/myfile.py",
+    )
+    completed_run = compute.run(
+        context=context,
+        payload_path=script_path,
+        extra_env={
+            "KEY_ENV": "value",
+        },
+        extras={
+            "foo": "bar",
+        },
+    )
+    yield from completed_run.get_results()
+```
+
+### userplane
+
+```python
+import os
+from dagster_pipes import PipesContext, open_dagster_pipes
+
+
+def main():
+    context = PipesContext.get()
+    context.log.info("Starting data processing...")
+    context.log.debug(context.extras)
+    key_env = os.environ.get("KEY_ENV")
+    context.log.info(f"KEY_ENV: {key_env}")
+    context.log.info(f"foo: {context.extras['foo']}")
+    
+    # Your processing logic here
+    
+    result = {"rows_processed": 1000}
+    context.report_asset_materialization(
+        metadata={
+            "rows": result["rows_processed"],
+            "processing_time": "10s",
+        }
+    )
+    context.log.info("Processing complete!")
+
+
+if __name__ == "__main__":
+    with open_dagster_pipes() as context:
+        main()
+```
+
+### resource configuration
+
+Take a look here to understand how to set up the resource configuration to interact with the local, docker-slurm or real HPC slurm runners https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py
