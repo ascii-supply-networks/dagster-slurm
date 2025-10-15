@@ -6,7 +6,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'dagster-slurm',
-  tagline: 'Improving developer experience for HPC',
+  tagline: 'The Super developer experience for HPC',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future

@@ -66,6 +66,7 @@ def main():  # noqa: C901
         metadata={
             "num_batches": num_batches,
             "framework": "ray",
+            "predictions_path": "/path/to/predictions",
         }
     )
     context.log.info("Inference complete!")

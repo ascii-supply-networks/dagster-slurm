@@ -24,6 +24,7 @@ def main():
         metadata={
             "num_chunks": num_chunks,
             "framework": "ray",
+            "model_path": "/path/to/model",
         }
     )
     context.log.info("Training complete!")

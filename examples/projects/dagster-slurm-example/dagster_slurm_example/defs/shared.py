@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 
 foo = "bar"
-example_defs_prefix = "dse"
 
 # TODO clarify if we really need these tings here
 # TODO: we rather should have shared IO pats for local testing vs. SLURM mode coherhenc

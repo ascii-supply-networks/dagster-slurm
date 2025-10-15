@@ -20,7 +20,7 @@ Run Dagster assets on Slurm clusters with support for:
 
 ### *class* dagster_slurm.BashLauncher(\*\*data)
 
-Bases: `ComputeLauncher`
+Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
 Executes Python scripts via bash.
 
@@ -46,6 +46,32 @@ Generate bash execution plan.
   `ExecutionPlan`
 * **Returns:**
   ExecutionPlan with shell script
+
+### *class* dagster_slurm.ComputeLauncher(\*\*data)
+
+Bases: `ConfigurableResource`
+
+Base class for compute launchers.
+
+* **Parameters:**
+  **data** (`Any`)
+
+#### prepare_execution(payload_path, python_executable, working_dir, pipes_context, extra_env=None, allocation_context=None, activation_script=None)
+
+Prepare execution plan.
+
+* **Parameters:**
+  * **payload_path** (`str`) – Path to Python script on remote
+  * **python_executable** (`str`) – Python interpreter path
+  * **working_dir** (`str`) – Working directory
+  * **pipes_context** (`Dict`[`str`, `str`]) – Dagster Pipes environment
+  * **extra_env** (`Optional`[`Dict`[`str`, `str`]]) – Additional environment variables
+  * **allocation_context** (`Optional`[`Dict`[`str`, `Any`]]) – Slurm allocation info (for session mode)
+  * **activation_script** (`Optional`[`str`]) – Environment activation script
+* **Return type:**
+  `ExecutionPlan`
+* **Returns:**
+  ExecutionPlan with script and metadata
 
 ### *class* dagster_slurm.ComputeResource(\*\*data)
 
@@ -107,7 +133,7 @@ Heterogeneous job mode (optimal resource allocation):
 
 #### debug_mode *: `bool`*
 
-#### default_launcher *: `Annotated`[`Union`[`ComputeLauncher`, `PartialResource`]]*
+#### default_launcher *: `Annotated`[`Union`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher), `PartialResource`]]*
 
 #### enable_cluster_reuse *: `bool`*
 
@@ -117,7 +143,7 @@ Get appropriate Pipes client for this mode.
 
 * **Parameters:**
   * **context** (`InitResourceContext`) – Dagster resource context
-  * **launcher** (`Optional`[`ComputeLauncher`]) – Override launcher (uses default if None)
+  * **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher (uses default if None)
 * **Returns:**
   LocalPipesClient or SlurmPipesClient
 
@@ -157,7 +183,7 @@ Execute asset with optional resource overrides.
 * **Parameters:**
   * **context** – Dagster execution context
   * **payload_path** (`str`) – Path to Python script
-  * **launcher** (`Optional`[`ComputeLauncher`]) – Override launcher for this asset
+  * **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher for this asset
   * **extra_slurm_opts** (`Optional`[`Dict`[`str`, `Any`]]) – Override Slurm options (non-session mode)
     - nodes: int
     - cpus_per_task: int
@@ -223,7 +249,7 @@ Only waits in queue ONCE, but each asset gets the resources it needs.
     > - mem: str (default: “4G”)
     > - gpus_per_node: int (default: 0)
     > - time_limit: str (default: “01:00:00”)
-  * **launchers** (`Optional`[`Dict`[`str`, `ComputeLauncher`]]) – Optional dict mapping asset_key to ComputeLauncher
+  * **launchers** (`Optional`[`Dict`[`str`, [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]]) – Optional dict mapping asset_key to ComputeLauncher
 * **Yields:**
   Dagster events
 
@@ -263,7 +289,7 @@ Validate configuration - runs during Pydantic validation.
 * **Return type:**
   [`ComputeResource`](#id0)
 
-### *class* dagster_slurm.LocalPipesClient(launcher, base_dir='/tmp/dagster_local_runs', require_pixi=True)
+### *class* dagster_slurm.LocalPipesClient(launcher, base_dir=None, require_pixi=True)
 
 Bases: `PipesClient`
 
@@ -271,9 +297,13 @@ Pipes client for local execution (dev mode).
 No SSH, no Slurm - just runs scripts locally via subprocess.
 
 * **Parameters:**
-  * **launcher** (`ComputeLauncher`)
-  * **base_dir** (`str`)
+  * **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
+  * **base_dir** (`Optional`[`str`])
   * **require_pixi** (`bool`)
+
+#### cleanup()
+
+Explicitly clean up resources.
 
 #### run(context, , payload_path, python_executable=None, extra_env=None, extras=None, extra_slurm_opts=None)
 
@@ -293,7 +323,7 @@ Execute payload locally.
 
 ### *class* dagster_slurm.RayLauncher(\*\*data)
 
-Bases: `ComputeLauncher`
+Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
 Ray distributed computing launcher.
 
@@ -547,7 +577,7 @@ Works in two modes:
 
 * **Parameters:**
   * **slurm_resource** ([`SlurmResource`](#id19))
-  * **launcher** (`ComputeLauncher`)
+  * **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
   * **session_resource** (`Optional`[[`SlurmSessionResource`](#id42)])
   * **cleanup_on_failure** (`bool`)
   * **debug_mode** (`bool`)
@@ -709,7 +739,7 @@ This is the proper Dagster resource lifecycle hook.
 
 ### *class* dagster_slurm.SparkLauncher(\*\*data)
 
-Bases: `ComputeLauncher`
+Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
 Apache Spark launcher.
 
@@ -808,7 +838,7 @@ Heterogeneous job mode (optimal resource allocation):
 
 #### debug_mode *: `bool`*
 
-#### default_launcher *: `Annotated`[`Union`[`ComputeLauncher`, `PartialResource`]]*
+#### default_launcher *: `Annotated`[`Union`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher), `PartialResource`]]*
 
 #### enable_cluster_reuse *: `bool`*
 
@@ -818,7 +848,7 @@ Get appropriate Pipes client for this mode.
 
 * **Parameters:**
   * **context** (`InitResourceContext`) – Dagster resource context
-  * **launcher** (`Optional`[`ComputeLauncher`]) – Override launcher (uses default if None)
+  * **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher (uses default if None)
 * **Returns:**
   LocalPipesClient or SlurmPipesClient
 
@@ -858,7 +888,7 @@ Execute asset with optional resource overrides.
 * **Parameters:**
   * **context** – Dagster execution context
   * **payload_path** (`str`) – Path to Python script
-  * **launcher** (`Optional`[`ComputeLauncher`]) – Override launcher for this asset
+  * **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher for this asset
   * **extra_slurm_opts** (`Optional`[`Dict`[`str`, `Any`]]) – Override Slurm options (non-session mode)
     - nodes: int
     - cpus_per_task: int
@@ -924,7 +954,7 @@ Only waits in queue ONCE, but each asset gets the resources it needs.
     > - mem: str (default: “4G”)
     > - gpus_per_node: int (default: 0)
     > - time_limit: str (default: “01:00:00”)
-  * **launchers** (`Optional`[`Dict`[`str`, `ComputeLauncher`]]) – Optional dict mapping asset_key to ComputeLauncher
+  * **launchers** (`Optional`[`Dict`[`str`, [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]]) – Optional dict mapping asset_key to ComputeLauncher
 * **Yields:**
   Dagster events
 

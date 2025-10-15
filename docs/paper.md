@@ -1,15 +1,21 @@
 ---
-title: 'LLM-in-a-Box: A Templated, Self-Hostable Framework for Generative AI in Research'
+title: 'Discovering the SUPER in computing - dagster-slurm for reproducible research on HPC'
 tags:
   - Python
   - dagster
   - slurm
-  - reproducible research
+  - reproducible-research
   - RSE
   - secops
   - sops
   - age
+  - pixi
+  - pixi-pack
+  - conda
 authors:
+  - name: Hernan Picatto
+    orcid: 0000-0002-8684-1163
+    affiliation: "2"
   - name: Georg Heiler
     orcid: 0000-0002-8684-1163
     affiliation: "1, 2"
@@ -19,7 +25,7 @@ affiliations:
  - name: Austrian Supply Chain Intelligence Institute (ASCII)
    index: 2
 
-date: 1st October 2025
+date: 1st November 2025
 bibliography: paper.bib
 
 # Optional fields if submitting to a AAS journal too, see this blog post:
@@ -32,29 +38,37 @@ aas-journal: Journal of Open Source Software
 
 TODO write the text
 
-Some citatione [@graham_mcps_2025].
+Some citation [@graham_mcps_2025].
 
 # Statement of Need 
 
 
 # Example usage
 
-some code
 Then you can start the template project with:
 ```bash
-# cpu
-docker compose \
-  --profile llminabox \
-  --profile ollama-cpu \
-  --profile docling-cpu \
-  --profile vectordb-cpu \
-  up -d
+git clone https://github.com/ascii-supply-networks/dagster-slurm.git
+cd dagster-slurm/examples
+
+# local
+pixi run start
+
+# slurm docker
+docker compose up -d
+pixi run start-staging
 ```
 
-Please follow along with the [README.md](https://github.com/complexity-science-hub/llm-in-a-box-template/blob/main/README.md) file from here.
+Then go to http://localhost:3000 and explore for yourself
+```
+
+Check out for much more detail:
+- [the docs](https://ascii-supply-networks.github.io/dagster-slurm/)
+- [the example](https://github.com/ascii-supply-networks/dagster-slurm/tree/main/examples)
 
 # Impact and future work
 
+Please use and help us improve this integration.
+https://github.com/ascii-supply-networks/dagster-slurm
 
 # Acknowledgements
 
