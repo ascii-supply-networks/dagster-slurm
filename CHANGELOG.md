@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.5.0-rc.1 (2025-10-15)
+
+### Features
+
+- Add new key of Hernan ([#53](https://github.com/ascii-supply-networks/dagster-slurm/pull/53),
+  [`5c474dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5c474dcd02712ded54aeabb574af0aefa66c68ba))
+
+- Refine 3 ([#53](https://github.com/ascii-supply-networks/dagster-slurm/pull/53),
+  [`5c474dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5c474dcd02712ded54aeabb574af0aefa66c68ba))
+
+- Refine docs ([#53](https://github.com/ascii-supply-networks/dagster-slurm/pull/53),
+  [`5c474dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5c474dcd02712ded54aeabb574af0aefa66c68ba))
+
+- Showcase asset tests; standardize on default pipes client protocol
+  ([#53](https://github.com/ascii-supply-networks/dagster-slurm/pull/53),
+  [`5c474dc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5c474dcd02712ded54aeabb574af0aefa66c68ba))
+
+
 ## v1.5.0 (2025-10-12)
 
 
