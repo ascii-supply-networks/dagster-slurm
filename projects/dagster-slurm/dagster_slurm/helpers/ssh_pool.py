@@ -23,6 +23,7 @@ class SSHConnectionPool:
         self.config = ssh_config
         self.control_path = f"/tmp/dagster-ssh-{uuid.uuid4().hex}"
         self._master_started = False
+        self._use_controlmaster = ssh_config.uses_key_auth
         self.logger = get_dagster_logger()
 
     def __enter__(self):
@@ -107,6 +108,20 @@ class SSHConnectionPool:
         self._master_started = True
         auth_method = "key" if self.config.uses_key_auth else "password"
         self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
+
+        try:
+            self.run("echo 'SSH connection test successful'")
+        except Exception as e:
+            self.logger.warning(
+                f"ControlMaster failed ({e}); falling back to direct SSH."
+            )
+            self._use_controlmaster = False
+            try:
+                self._run_direct("echo 'Direct connection test successful'")
+            except Exception as direct_e:
+                raise RuntimeError(
+                    "SSH connection failed - neither ControlMaster nor direct connections work"
+                ) from direct_e
 
         return self
 
@@ -198,6 +213,10 @@ class SSHConnectionPool:
         if not self._master_started:
             raise RuntimeError("SSH pool not started - use context manager")
 
+        # Added fallback: if ControlMaster not in use, run direct
+        if not self._use_controlmaster:
+            return self._run_direct(cmd, timeout)
+
         # Wrap in clean shell
         remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
 
@@ -207,6 +226,61 @@ class SSHConnectionPool:
             f"ControlPath={self.control_path}",
             "-o",
             "ControlMaster=no",
+            f"{self.config.user}@{self.config.host}",
+            remote_cmd,
+        ]
+
+        result = subprocess.run(
+            ssh_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"SSH command failed (exit {result.returncode}): {cmd}\n"
+                f"stdout: {result.stdout}\n"
+                f"stderr: {result.stderr}"
+            )
+
+        return result.stdout
+
+    def _run_direct(self, cmd: str, timeout: Optional[int] = None) -> str:
+        """Run command via direct SSH connection (no ControlMaster)."""
+        remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
+
+        ssh_cmd = [
+            "ssh",
+            "-p",
+            str(self.config.port),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+        ]
+
+        if self.config.uses_key_auth:
+            ssh_cmd += ["-i", self.config.key_path, "-o", "IdentitiesOnly=yes"]
+        else:
+            try:
+                import pexpect
+                cmd_str = " ".join(
+                    shlex.quote(arg)
+                    for arg in ssh_cmd
+                    + [f"{self.config.user}@{self.config.host}", remote_cmd]
+                )
+                child = pexpect.spawn(cmd_str, timeout=timeout, encoding="utf-8")
+                child.expect(r"(?i)password:", timeout=10)
+                child.sendline(self.config.password)
+                child.expect(pexpect.EOF, timeout=timeout)
+                output = child.before
+                child.close()
+                return output
+            except Exception as e:
+                raise RuntimeError(f"Direct SSH password auth failed: {e}")
+
+        ssh_cmd += [
             f"{self.config.user}@{self.config.host}",
             remote_cmd,
         ]
@@ -254,15 +328,32 @@ class SSHConnectionPool:
         self.run(f"mkdir -p {shlex.quote(remote_dir)}")
 
         # Build SCP command
-        scp_cmd = [
-            "scp",
-            "-o",
-            f"ControlPath={self.control_path}",
-            "-P",
-            str(self.config.port),
-            local_path,
-            f"{self.config.user}@{self.config.host}:{remote_path}",
-        ]
+        if self._use_controlmaster:
+            scp_cmd = [
+                "scp",
+                "-o",
+                f"ControlPath={self.control_path}",
+                "-P",
+                str(self.config.port),
+                local_path,
+                f"{self.config.user}@{self.config.host}:{remote_path}",
+            ]
+        else:
+            scp_cmd = [
+                "scp",
+                "-P",
+                str(self.config.port),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+            ]
+            if self.config.uses_key_auth:
+                scp_cmd.extend(["-i", self.config.key_path])
+            scp_cmd.extend([
+                local_path,
+                f"{self.config.user}@{self.config.host}:{remote_path}",
+            ])
 
         result = subprocess.run(scp_cmd, capture_output=True, text=True)
 

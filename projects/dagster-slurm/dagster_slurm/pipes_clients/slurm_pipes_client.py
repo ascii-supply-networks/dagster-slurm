@@ -155,7 +155,7 @@ class SlurmPipesClient(PipesClient):
                     run_dir = f"{remote_base}/runs/{run_id}"
                     messages_path = f"{run_dir}/messages.jsonl"
                     self.logger.debug(f"Creating remote run directory: {run_dir}")
-                    ssh_pool.run(f"mkdir -p {run_dir}")
+                    ssh_pool.run(f"mkdir -p {run_dir}", timeout=60)
                 else:
                     # Pack environment using pixi
                     self.logger.info("Packing environment with pixi...")
@@ -169,8 +169,8 @@ class SlurmPipesClient(PipesClient):
                     env_dir = f"{run_dir}/env"
 
                     self.logger.debug(f"Creating remote directory: {run_dir}")
-                    ssh_pool.run(f"mkdir -p {run_dir}")
-                    ssh_pool.run(f"mkdir -p {env_dir}")
+                    ssh_pool.run(f"mkdir -p {run_dir}", timeout=60)
+                    ssh_pool.run(f"mkdir -p {env_dir}", timeout=60)
 
                     # Check for cancellation
                     if self._cancellation_requested:
@@ -583,7 +583,8 @@ class SlurmPipesClient(PipesClient):
         # Verify file was uploaded
         try:
             verify_output = ssh_pool.run(
-                f"test -f {script_path} && wc -l {script_path}"
+                f"test -f {script_path} && wc -l {script_path}",
+                timeout=60
             )
             self.logger.debug(f"Job script verified: {verify_output.strip()}")
         except Exception as e:
@@ -613,7 +614,7 @@ class SlurmPipesClient(PipesClient):
 
         # Submit
         self.logger.debug(f"Submitting: {sbatch_cmd}")
-        output = ssh_pool.run(sbatch_cmd)
+        output = ssh_pool.run(sbatch_cmd, timeout=60)
 
         # Parse job ID
         match = re.search(r"Submitted batch job (\d+)", output)

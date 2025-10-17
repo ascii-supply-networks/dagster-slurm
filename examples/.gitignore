@@ -1,0 +1,44 @@
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.pixi/
+.venv/
+venv/
+ENV/
+
+# Dagster
+.dagster_home/
+.tmp_dagster_home_*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Packaging
+dist/
+build/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.bak

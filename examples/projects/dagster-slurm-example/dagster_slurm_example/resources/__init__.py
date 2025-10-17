@@ -73,13 +73,13 @@ PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
-        "host": dg.EnvVar("SLURM_EDGE_NODE"),
-        "port": dg.EnvVar("SLURM_EDGE_NODE_PORT"),
-        "user": dg.EnvVar("SLURM_EDGE_NODE_USER"),
-        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
+        "host": os.environ.get("SLURM_EDGE_NODE", ""),
+        "port": int(os.environ.get("SLURM_EDGE_NODE_PORT", "")),
+        "user": os.environ.get("SLURM_EDGE_NODE_USER", ""),
+        "password": os.environ.get("SLURM_EDGE_NODE_PASSWORD", ""),
     },
     "slurm_queue_config": {
-        "partition": "batch",
+        "partition": "zen3_0512",
         "num_nodes": 2,
         "time_limit": "04:00:00",
         "cpus": 4,
@@ -89,7 +89,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "slurm_session_config": {
         "num_nodes": 2,
         "time_limit": "08:00:00",
-        "partition": "batch",
+        "partition": "zen3_0512",
     },
     "compute_config": {
         "auto_detect_platform": False,
