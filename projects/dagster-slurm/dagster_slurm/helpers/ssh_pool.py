@@ -21,8 +21,10 @@ class SSHConnectionPool:
 
     def __init__(self, ssh_config: "SSHConnectionResource"):
         self.config = ssh_config
-        self.control_path = f"/tmp/dagster-ssh-{uuid.uuid4().hex}"
+        self.control_path: Optional[str] = f"/tmp/dagster-ssh-{uuid.uuid4().hex}"
         self._master_started = False
+        self._fallback_mode = False
+        self._fallback_reason: Optional[str] = None
         self.logger = get_dagster_logger()
 
     def __enter__(self):
@@ -43,70 +45,88 @@ class SSHConnectionPool:
             "LogLevel=ERROR",
         ]
 
-        if self.config.uses_key_auth:
-            # Key-based auth
-            cmd = [
-                "ssh",
-                "-M",
-                "-N",
-                "-f",
-                "-p",
-                str(self.config.port),
-                "-i",
-                self.config.key_path,
-                "-o",
-                "IdentitiesOnly=yes",
-                "-o",
-                "BatchMode=yes",
-                *base_opts,
-                *self.config.extra_opts,
-                f"{self.config.user}@{self.config.host}",
-            ]
+        try:
+            if self.config.uses_key_auth:
+                # Key-based auth
+                cmd = [
+                    "ssh",
+                    "-M",
+                    "-N",
+                    "-f",
+                    "-p",
+                    str(self.config.port),
+                    "-i",
+                    self.config.key_path,
+                    "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "BatchMode=yes",
+                    *base_opts,
+                    *self.config.extra_opts,
+                    f"{self.config.user}@{self.config.host}",
+                ]
 
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)  # type: ignore
-            except FileNotFoundError as e:
-                raise RuntimeError(
-                    "SSH command not found. Please ensure OpenSSH client is installed."
-                ) from e
+                try:
+                    result = subprocess.run(  # type: ignore
+                        cmd, capture_output=True, text=True, timeout=30
+                    )
+                except FileNotFoundError as e:
+                    raise RuntimeError(
+                        "SSH command not found. Please ensure OpenSSH client is installed."
+                    ) from e
 
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to start SSH master:\n{result.stderr}")
-        else:
-            # Password-based auth using SSH_ASKPASS
-            cmd = [
-                "ssh",
-                "-M",
-                "-N",
-                "-f",
-                "-p",
-                str(self.config.port),
-                "-o",
-                "NumberOfPasswordPrompts=1",
-                "-o",
-                "PreferredAuthentications=password,keyboard-interactive",
-                *base_opts,
-                *self.config.extra_opts,
-                f"{self.config.user}@{self.config.host}",
-            ]
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to start SSH master (key auth): {result.stderr.strip()}"
+                    )
+            else:
+                # Password-based auth using SSH_ASKPASS
+                cmd = [
+                    "ssh",
+                    "-M",
+                    "-N",
+                    "-f",
+                    "-p",
+                    str(self.config.port),
+                    "-o",
+                    "NumberOfPasswordPrompts=1",
+                    "-o",
+                    "PreferredAuthentications=password,keyboard-interactive",
+                    *base_opts,
+                    *self.config.extra_opts,
+                    f"{self.config.user}@{self.config.host}",
+                ]
 
-            try:
-                # Use pexpect for interactive password prompt
-                result = self._run_with_password(cmd, self.config.password)
-            except FileNotFoundError as e:
-                raise RuntimeError(
-                    "SSH command not found. Please ensure OpenSSH client is installed."
-                ) from e
+                try:
+                    # Use pexpect for interactive password prompt
+                    result = self._run_with_password(cmd, self.config.password)
+                except FileNotFoundError as e:
+                    raise RuntimeError(
+                        "SSH command not found. Please ensure OpenSSH client is installed."
+                    ) from e
 
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to start SSH master (password auth):\n{result.stderr}\n"
-                    f"Note: Ensure password authentication is enabled on the server."
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "Failed to start SSH master (password auth). "
+                        "Note: Ensure password authentication is enabled on the server."
+                    )
+
+            self._master_started = True
+            auth_method = "key" if self.config.uses_key_auth else "password"
+            self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
+        except RuntimeError as exc:
+            if self.config.uses_key_auth:
+                # Fall back to direct SSH connections
+                self._fallback_mode = True
+                self._fallback_reason = str(exc)
+                self.control_path = None
+                self.logger.warning(
+                    "SSH ControlMaster unavailable (%s). Falling back to direct SSH "
+                    "connections; performance may be reduced but functionality remains.",
+                    exc,
                 )
-
-        self._master_started = True
-        auth_method = "key" if self.config.uses_key_auth else "password"
-        self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
+            else:
+                raise
 
         return self
 
@@ -195,21 +215,61 @@ class SSHConnectionPool:
             RuntimeError: If command fails or pool not started
 
         """
-        if not self._master_started:
+        if not self._master_started and not self._fallback_mode:
             raise RuntimeError("SSH pool not started - use context manager")
 
         # Wrap in clean shell
         remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
 
-        ssh_cmd = [
-            "ssh",
-            "-o",
-            f"ControlPath={self.control_path}",
-            "-o",
-            "ControlMaster=no",
-            f"{self.config.user}@{self.config.host}",
-            remote_cmd,
-        ]
+        if self._master_started:
+            ssh_cmd = [
+                "ssh",
+                "-o",
+                f"ControlPath={self.control_path}",
+                "-o",
+                "ControlMaster=no",
+                f"{self.config.user}@{self.config.host}",
+                remote_cmd,
+            ]
+        else:
+            ssh_cmd = [
+                "ssh",
+                "-p",
+                str(self.config.port),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+            ]
+            if self.config.uses_key_auth:
+                ssh_cmd.extend(
+                    [
+                        "-i",
+                        self.config.key_path,
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "BatchMode=yes",
+                    ]
+                )
+            else:
+                ssh_cmd.extend(
+                    [
+                        "-o",
+                        "NumberOfPasswordPrompts=1",
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                    ]
+                )
+            ssh_cmd.extend(self.config.extra_opts)
+            ssh_cmd.extend(
+                [
+                    f"{self.config.user}@{self.config.host}",
+                    remote_cmd,
+                ]
+            )
 
         result = subprocess.run(
             ssh_cmd,
@@ -246,7 +306,7 @@ class SSHConnectionPool:
 
     def upload_file(self, local_path: str, remote_path: str):
         """Upload file via SCP using pooled connection."""
-        if not self._master_started:
+        if not self._master_started and not self._fallback_mode:
             raise RuntimeError("SSH pool not started")
 
         # Ensure remote directory exists
@@ -254,15 +314,54 @@ class SSHConnectionPool:
         self.run(f"mkdir -p {shlex.quote(remote_dir)}")
 
         # Build SCP command
-        scp_cmd = [
-            "scp",
-            "-o",
-            f"ControlPath={self.control_path}",
-            "-P",
-            str(self.config.port),
-            local_path,
-            f"{self.config.user}@{self.config.host}:{remote_path}",
-        ]
+        if self._master_started:
+            scp_cmd = [
+                "scp",
+                "-o",
+                f"ControlPath={self.control_path}",
+                "-P",
+                str(self.config.port),
+            ]
+        else:
+            scp_cmd = [
+                "scp",
+                "-P",
+                str(self.config.port),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+            ]
+            if self.config.uses_key_auth:
+                scp_cmd.extend(
+                    [
+                        "-i",
+                        self.config.key_path,
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "BatchMode=yes",
+                    ]
+                )
+            else:
+                scp_cmd.extend(
+                    [
+                        "-o",
+                        "NumberOfPasswordPrompts=1",
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                    ]
+                )
+
+        scp_cmd.extend(self.config.extra_opts)
+        scp_cmd.extend(
+            [
+                local_path,
+                f"{self.config.user}@{self.config.host}:{remote_path}",
+            ]
+        )
 
         result = subprocess.run(scp_cmd, capture_output=True, text=True)
 

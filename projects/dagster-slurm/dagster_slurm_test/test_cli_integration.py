@@ -213,54 +213,52 @@ class TestProductionDockerMode:
 # Session Mode Tests
 # ============================================================================
 
-# class TestSessionModes:
-#     """Tests for session-based execution modes."""
 
-#     @pytest.fixture(autouse=True)
-#     def require_slurm(self, slurm_cluster_ready):
-#         """Ensure SLURM cluster is ready for all session tests."""
-#         pass
+class TestSessionModes:
+    """Tests for session-based execution modes."""
 
-#     @pytest.mark.skip(reason="Session mode requires additional setup")
-#     def test_staging_session_mode(self, example_project_dir: Path):
-#         """Test STAGING_DOCKER_SESSION mode."""
-#         result = run_dg_command(
-#             example_project_dir,
-#             deployment="STAGING_DOCKER_SESSION",
-#             assets="process_data,aggregate_results",
-#             timeout=600,
-#         )
+    @pytest.fixture(autouse=True)
+    def require_slurm(self, slurm_cluster_ready):
+        """Ensure SLURM cluster is ready for all session tests."""
+        pass
 
-#         assert_materialization_success(result, "process_data,aggregate_results")
+    def test_staging_session_mode(self, example_project_dir: Path):
+        """Test STAGING_DOCKER_SESSION mode."""
+        result = run_dg_command(
+            example_project_dir,
+            deployment="STAGING_DOCKER_SESSION",
+            assets="process_data,aggregate_results",
+            timeout=600,
+        )
 
-#     @pytest.mark.skip(reason="Cluster reuse requires additional setup")
-#     def test_staging_session_cluster_reuse(self, example_project_dir: Path):
-#         """Test STAGING_DOCKER_SESSION_CLUSTER_REUSE mode."""
-#         result = run_dg_command(
-#             example_project_dir,
-#             deployment="STAGING_DOCKER_SESSION_CLUSTER_REUSE",
-#             assets="distributed_training,distributed_inference",
-#             timeout=600,
-#         )
+        assert_materialization_success(result, "process_data,aggregate_results")
+        assert "Session resource initialized" in result.stderr
 
-#         assert_materialization_success(result, "distributed_training,distributed_inference")
-#         assert "Reusing existing cluster" in result.stderr
+    def test_staging_session_cluster_reuse(self, example_project_dir: Path):
+        """Test STAGING_DOCKER_SESSION_CLUSTER_REUSE mode."""
+        result = run_dg_command(
+            example_project_dir,
+            deployment="STAGING_DOCKER_SESSION_CLUSTER_REUSE",
+            assets="distributed_training,distributed_inference",
+            timeout=600,
+        )
 
-#     @pytest.mark.skip(reason="HetJob mode requires additional setup")
-#     def test_staging_hetjob_mode(self, example_project_dir: Path):
-#         """Test STAGING_DOCKER_HETJOB mode."""
-#         result = run_dg_command(
-#             example_project_dir,
-#             deployment="STAGING_DOCKER_HETJOB",
-#             assets="process_data,aggregate_results,distributed_training",
-#             timeout=600,
-#         )
+        assert_materialization_success(
+            result, "distributed_training,distributed_inference"
+        )
+        assert "Cluster reuse enabled" in result.stderr
 
-#         assert_materialization_success(
-#             result,
-#             "process_data,aggregate_results,distributed_training"
-#         )
-#         assert "heterogeneous job" in result.stderr.lower()
+    def test_staging_hetjob_mode(self, example_project_dir: Path):
+        """Test STAGING_DOCKER_HETJOB mode."""
+        result = run_dg_command(
+            example_project_dir,
+            deployment="STAGING_DOCKER_HETJOB",
+            assets="heterogeneous_pipeline",
+            timeout=600,
+        )
+
+        assert_materialization_success(result, "heterogeneous_pipeline")
+        assert "heterogeneous job" in result.stderr.lower()
 
 
 # ============================================================================
