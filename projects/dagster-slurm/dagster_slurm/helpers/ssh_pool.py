@@ -244,10 +244,15 @@ class SSHConnectionPool:
                 "LogLevel=ERROR",
             ]
             if self.config.uses_key_auth:
+                key_path = self.config.key_path
+                if not key_path:
+                    raise RuntimeError(
+                        "SSH key authentication requires key_path to be set"
+                    )
                 ssh_cmd.extend(
                     [
                         "-i",
-                        self.config.key_path,
+                        key_path,
                         "-o",
                         "IdentitiesOnly=yes",
                         "-o",
@@ -335,10 +340,15 @@ class SSHConnectionPool:
                 "LogLevel=ERROR",
             ]
             if self.config.uses_key_auth:
+                key_path = self.config.key_path
+                if not key_path:
+                    raise RuntimeError(
+                        "SSH key authentication requires key_path to be set"
+                    )
                 scp_cmd.extend(
                     [
                         "-i",
-                        self.config.key_path,
+                        key_path,
                         "-o",
                         "IdentitiesOnly=yes",
                         "-o",
