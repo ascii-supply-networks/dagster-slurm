@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v1.5.0-rc.2 (2025-10-17)
+
+### Bug Fixes
+
+- Ssh controlmaster fallback to plain if permission denied
+  ([#55](https://github.com/ascii-supply-networks/dagster-slurm/pull/55),
+  [`c9c91fe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9c91fe6d365c12af37a4ed96e992ae6fa2ed8e1))
+
+### Features
+
+- Refine 4 ([#55](https://github.com/ascii-supply-networks/dagster-slurm/pull/55),
+  [`c9c91fe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9c91fe6d365c12af37a4ed96e992ae6fa2ed8e1))
+
+- Refine docs ([#55](https://github.com/ascii-supply-networks/dagster-slurm/pull/55),
+  [`c9c91fe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9c91fe6d365c12af37a4ed96e992ae6fa2ed8e1))
+
+
 ## v1.5.0-rc.1 (2025-10-15)
 
 ### Features
