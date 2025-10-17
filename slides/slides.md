@@ -5,10 +5,10 @@ theme: default
 # like them? see https://unsplash.com/collections/94734566/slidev
 background: https://cover.sli.dev
 # some information about your slides (markdown enabled)
-title: Boosting HPC developer experience
+title: Dagster + Slurm = Productive HPC
 info: |
-  ## Slurm integration for dagster
-  bringing dagster developer productivity to HPC supercomputers
+  ## Bringing modern data orchestration to supercomputers
+  Make your Dagster assets run unchanged on laptops, staging clusters, and Tier‑0 HPC systems.
 
   Learn more at [dagster-slurm](https://github.com/ascii-supply-networks/dagster-slurm/)
 # apply unocss classes to the current slide
@@ -31,10 +31,10 @@ seoMeta:
 routerMode: hash
 ---
 
-# Boosting HPC developer experience
+# Dagster + Slurm = Productive HPC
 
 <div @click="$slidev.nav.next" class="mt-12 py-1" hover:bg="white op-10">
-graph-based orchestration for HPC <carbon:arrow-right />
+bridge the gap between orchestration and HPC schedulers <carbon:arrow-right />
 </div>
 
 
@@ -59,6 +59,50 @@ class: bg-white text-black
 
 
 ![](/img/ascii_overview.svg)
+
+
+---
+transition: slide-left
+---
+
+# The gap today
+
+- HPC users juggle Slurm scripts, modules, and long queues with limited observability.
+- Modern data teams enjoy polyglot orchestrators and fast iteration and observability but lack dedicated HPC cluster integration.
+- Moving the same asset from laptop prototyping → supercomputer often means rewriting
+
+<br>
+
+> We set out to keep **Dagster’s developer experience** while honouring **Slurm’s HPC scheduling model**.
+
+---
+transition: fade-out
+layout: statement
+---
+
+# A supercomputer that few can use is just an expensive heater.
+
+status quo
+
+<!--
+- Hard to use
+- Waiting for queue submission
+- Non-standard Interfaces
+-->
+
+---
+#title: More than a single engine
+layout: image-right
+image: /img/engine-only.jpeg
+backgroundSize: contain
+transition: fade-out
+---
+
+# Why orchestration matters
+
+- A raw “engine” (script, notebook, or binary) is not enough once you depend on sensors, ETL, or ML training.
+- Orchestrators provide dependency tracking, retries, metrics, and the control plane HPC teams lack.
+- Dagster supplies that missing layer; dagster-slurm connects it to the supercomputer’s scheduler.
 
 
 ---
@@ -136,13 +180,13 @@ layout: intro
 
 # Developer productivity
 
-- rapid exploration
-- maintainability
-  - autoformatting
-  - linting
-  - testing
-  - library packaging
-- observability (single pane of glass)  
+- Rapid exploration
+- Maintainability
+  - Autoformatting
+  - Linting
+  - Testing
+  - Library packaging
+- Observability (single pane of glass)
 
 <style>
 h1 {
@@ -157,19 +201,68 @@ h1 {
 </style>
 
 ---
-transition: fade-out
-layout: statement
+transition: fade
+layout: two-cols
+class: bg-gray-900 text-white
 ---
 
-# A supercomputer that few can use is just an expensive heater.
+# dagster-slurm
 
-status quo
+- **Same assets everywhere** — `ExecutionMode` toggles between local, Slurm
+- **Automatic environment packaging** — pixi-pack bundles or reuses pre-built envs per run.
+- **Launchers** — Script, Ray, or custom runtime plugged into Dagster Pipes.
+- **Observability** — Slurm metrics + Ray logs stream back into the Dagster UI.
 
-<!--
-- Hard to use
-- Waiting for queue submission
-- Non-standard Interfaces
--->
+::right::
+![](/img/arch-detail-dark.svg)
+
+---
+transition: fade
+---
+
+# Minimal workflow demo
+
+```bash
+git clone https://github.com/ascii-supply-networks/dagster-slurm.git
+cd dagster-slurm
+docker compose up -d       # spins up Slurm edge + compute nodes
+```
+Develop locally
+```bash
+cd examples
+pixi run start             # Dagster UI on http://localhost:3000
+```
+Submit through Slurm
+```bash
+pixi run start-staging     # same assets, now via sbatch
+```
+
+
+---
+transition: slide-left
+layout: center
+---
+
+# Asset code stays the same
+
+```python
+import dagster as dg
+from dagster_slurm import ComputeResource, RayLauncher
+
+@dg.asset
+def training_job(context: dg.AssetExecutionContext, compute: ComputeResource):
+    payload = dg.file_relative_path(__file__, "../workloads/train.py")
+
+    completed = compute.run(
+        context=context,
+        payload_path=payload,
+        launcher=RayLauncher(num_gpus_per_node=2),
+        resource_requirements={"framework": "ray", "cpus": 32, "gpus": 2, "memory_gb": 120},
+        extra_env={"EXP_NAME": context.run.run_id},
+    )
+    yield from completed.get_results()
+```
+
 
 ---
 transition: fade-out
@@ -183,6 +276,7 @@ class: bg-white text-black
 From the (public) cloud we expect so much more.
 -->
 
+
 ---
 transition: fade-out
 # layout: two-cols
@@ -190,13 +284,15 @@ layout: image-right
 image: /img/lineage-dark2.png
 ---
 
-# Dagster & Asset
+# Dagster asset graph
 
 <img src="https://dagster-website.vercel.app/images/brand/logos/dagster-primary-mark.png"
      class="fixed top-4 right-4 w-12 h-12 object-contain z-50 pointer-events-none drop-shadow" />
 
-- like a calculator for crunching numbers
-- graph allows computer to reason about data dependencies
+- Like a calculator for crunching numbers
+- Graph allows computer to reason about data dependencies
+- Rapid iteration: Just edit code. No need to wait for XYZ SaaS service
+- Break down tool and department silos
 
 ```python {3-5|7|all}
 import dagster as dg
@@ -369,10 +465,3 @@ class: bg-white text-black
 <div class="grid place-items-center h-full">
 <img src="/img/pipes-architecture.svg" />
 </div>
-
----
-layout: image-right
-# image: https://cover.sli.dev
-image: https://dagster-website.vercel.app/images/brand/logos/dagster-primary-mark.png
----
-
