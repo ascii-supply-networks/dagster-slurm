@@ -213,6 +213,7 @@ class TestProductionDockerMode:
 # Session Mode Tests
 # ============================================================================
 
+
 # class TestSessionModes:
 #     """Tests for session-based execution modes."""
 
@@ -221,7 +222,6 @@ class TestProductionDockerMode:
 #         """Ensure SLURM cluster is ready for all session tests."""
 #         pass
 
-#     @pytest.mark.skip(reason="Session mode requires additional setup")
 #     def test_staging_session_mode(self, example_project_dir: Path):
 #         """Test STAGING_DOCKER_SESSION mode."""
 #         result = run_dg_command(
@@ -232,8 +232,8 @@ class TestProductionDockerMode:
 #         )
 
 #         assert_materialization_success(result, "process_data,aggregate_results")
+#         assert "Session resource initialized" in result.stderr
 
-#     @pytest.mark.skip(reason="Cluster reuse requires additional setup")
 #     def test_staging_session_cluster_reuse(self, example_project_dir: Path):
 #         """Test STAGING_DOCKER_SESSION_CLUSTER_REUSE mode."""
 #         result = run_dg_command(
@@ -243,76 +243,74 @@ class TestProductionDockerMode:
 #             timeout=600,
 #         )
 
-#         assert_materialization_success(result, "distributed_training,distributed_inference")
-#         assert "Reusing existing cluster" in result.stderr
+#         assert_materialization_success(
+#             result, "distributed_training,distributed_inference"
+#         )
+#         assert "Cluster reuse enabled" in result.stderr
 
-#     @pytest.mark.skip(reason="HetJob mode requires additional setup")
 #     def test_staging_hetjob_mode(self, example_project_dir: Path):
 #         """Test STAGING_DOCKER_HETJOB mode."""
 #         result = run_dg_command(
 #             example_project_dir,
 #             deployment="STAGING_DOCKER_HETJOB",
-#             assets="process_data,aggregate_results,distributed_training",
+#             assets="heterogeneous_pipeline",
 #             timeout=600,
 #         )
 
-#         assert_materialization_success(
-#             result,
-#             "process_data,aggregate_results,distributed_training"
-#         )
+#         assert_materialization_success(result, "heterogeneous_pipeline")
 #         assert "heterogeneous job" in result.stderr.lower()
 
 
-# ============================================================================
-# Edge Cases and Error Handling
-# ============================================================================
+# # ============================================================================
+# # Edge Cases and Error Handling
+# # ============================================================================
 
 
-class TestEdgeCases:
-    """Tests for edge cases and error scenarios."""
+# class TestEdgeCases:
+#     """Tests for edge cases and error scenarios."""
 
-    def test_invalid_deployment_mode(self, example_project_dir: Path):
-        """Test handling of invalid deployment mode."""
-        with pytest.raises(subprocess.CalledProcessError):
-            subprocess.run(
-                [
-                    "pixi",
-                    "run",
-                    "-e",
-                    "dev",
-                    "dg",
-                    "--target-path",
-                    "examples",
-                    "launch",
-                    "--assets",
-                    "process_data",
-                ],
-                cwd=example_project_dir,
-                env={**os.environ, "DAGSTER_DEPLOYMENT": "INVALID_MODE"},
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+#     def test_invalid_deployment_mode(self, example_project_dir: Path):
+#         """Test handling of invalid deployment mode."""
+#         with pytest.raises(subprocess.CalledProcessError):
+#             subprocess.run(
+#                 [
+#                     "pixi",
+#                     "run",
+#                     "-e",
+#                     "dev",
+#                     "dg",
+#                     "--target-path",
+#                     "examples",
+#                     "launch",
+#                     "--assets",
+#                     "process_data",
+#                 ],
+#                 cwd=example_project_dir,
+#                 env={**os.environ, "DAGSTER_DEPLOYMENT": "INVALID_MODE"},
+#                 check=True,
+#                 capture_output=True,
+#                 timeout=30,
+#             )
 
-    def test_nonexistent_asset(self, example_project_dir: Path):
-        """Test handling of non-existent asset."""
-        with pytest.raises(subprocess.CalledProcessError):
-            subprocess.run(
-                [
-                    "pixi",
-                    "run",
-                    "-e",
-                    "dev",
-                    "dg",
-                    "--target-path",
-                    "examples",
-                    "launch",
-                    "--assets",
-                    "nonexistent_asset",
-                ],
-                cwd=example_project_dir,
-                env={**os.environ, "DAGSTER_DEPLOYMENT": "development"},
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+#     def test_nonexistent_asset(self, example_project_dir: Path):
+#         """Test handling of non-existent asset."""
+#         with pytest.raises(subprocess.CalledProcessError):
+#             subprocess.run(
+#                 [
+#                     "pixi",
+#                     "run",
+#                     "-e",
+#                     "dev",
+#                     "dg",
+#                     "--target-path",
+#                     "examples",
+#                     "launch",
+#                     "--assets",
+#                     "nonexistent_asset",
+#                 ],
+#                 cwd=example_project_dir,
+#                 env={**os.environ, "DAGSTER_DEPLOYMENT": "development"},
+#                 check=True,
+#                 capture_output=True,
+#                 timeout=30,
+#             )

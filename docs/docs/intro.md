@@ -100,6 +100,8 @@ Jobs now skip environment packaging and launch noticeably faster.
 
 Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
 
+> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically falls back to plain SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower.
+
 ### Sample configuration: Vienna Scientific Cluster (VSC-5)
 
 ```dotenv title=".env.vsc5"
