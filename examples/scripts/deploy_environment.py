@@ -9,7 +9,8 @@ from dagster_slurm import SSHConnectionResource
 from dagster_slurm.helpers.env_packaging import pack_environment_with_pixi
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from pathlib import Path
-
+import dotenv
+ 
 def get_git_commit_hash() -> str:
     """Retrieves the current git commit hash."""
     try:
@@ -39,8 +40,13 @@ def main():
         type=Path,
         default="deployment_metadata.json",
     )
-    args = parser.parse_args()
-
+    args = parser.parse_args()  
+    env_path = ".env" 
+    if os.path.exists(env_path):
+        dotenv.load_dotenv(env_path)
+        print(f"Environment loaded from {env_path}")
+    else:
+        print(f"No .env file found at {env_path}")
     try:
         base_path = os.environ["SLURM_DEPLOYMENT_BASE_PATH"]
         ssh_host = os.environ["SLURM_EDGE_NODE_HOST"]

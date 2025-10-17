@@ -208,7 +208,7 @@ description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes 'projects/*/.pixi' --python-interpreter $PIXI_PROJECT_ROOT/.pixi/envs/dev/bin/python3.12"
+cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes 'projects/*/.pixi' --python-interpreter-path $PIXI_PROJECT_ROOT/.pixi/envs/dev/bin/python3.12"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]

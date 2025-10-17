@@ -2,102 +2,164 @@
 sidebar_position: 1
 ---
 
-# Tutorial
+# Getting started
 
-## prerequisites
+`dagster-slurm` lets you take the same Dagster assets from a laptop to a Slurm-backed supercomputer with minimal configuration changes. This page walks through the demo environment bundled with the repository and highlights the key concepts you will reuse on your own cluster.
 
-- installation of pixi: https://pixi.sh/latest/installation/ `curl -fsSL https://pixi.sh/install.sh | sh`
+## Prerequisites
+
+- [pixi](https://pixi.sh/latest/installation/) (`curl -fsSL https://pixi.sh/install.sh | sh`)
 - `pixi global install git`
-- a container runtime like docker or podman; for now we assume `docker compose` is available to you. You could absolutely also use `nerdctl` or something similar.
+- Docker (or compatible runtime) with the `docker compose` plugin available
 
-## usage
-
-Example
+## Fetch the repository
 
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
-cd dagster-slurm/examples
+cd dagster-slurm
+docker compose up -d
+cd examples
 ```
 
-### local execution
+The Docker compose stack starts a local Dagster control plane, a Slurm edge node, and a compute partition to mirror a typical HPC setup.
 
-Execute without slurm.
-- Small data
-- Rapid local prototyping
+## 1. Develop locally (no Slurm)
+
+For rapid iteration, execute assets directly on your workstation:
 
 ```bash
 pixi run start
 ```
 
-go to http://localhost:3000 and you should see the dagster webserver running.
+Navigate to [http://localhost:3000](http://localhost:3000) to view the Dagster UI with assets running in-process.
 
-### docker local execution
+## 2. Exercise the bundled Slurm cluster
 
-- Test everything works on SLURM
-- Still small data
-- Mainly used for developing this integration
+Switching to Slurm-backed execution only requires environment variables that describe the edge node. Create an `.env` file with:
 
-Ensure you have a `.env` file with the following content:
-
-```
+```dotenv
 SLURM_EDGE_NODE_HOST=localhost
 SLURM_EDGE_NODE_PORT=2223
 SLURM_EDGE_NODE_USER=submitter
 SLURM_EDGE_NODE_PASSWORD=submitter
 SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 ```
+
+Then run:
 
 ```bash
 pixi run start-staging
 ```
 
-go to http://localhost:3000 and you should see the dagster webserver running.
+Assets now submit through Slurm, and Dagster displays job logs, status, and resource metadata collected from the cluster.
 
-### prod docker local execution
+## 3. Prepare production-style runs
 
-- Test everything works on SLURM
-- Still small data
-- Mainly used for developing this integration
-- This target instead supports a faster startup of the job
-
-Ensure you have a `.env` file with the following content:
-
-```
-SLURM_EDGE_NODE_HOST=localhost
-SLURM_EDGE_NODE_PORT=2223
-SLURM_EDGE_NODE_USER=submitter
-SLURM_EDGE_NODE_PASSWORD=submitter
-SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
-
-# see the jq command below for dynamically setting this
-# DAGSTER_PROD_ENV_PATH=/home/submitter/pipelines/deployments/<<<your deployment >>>
-```
+Production environments typically reuse pre-built runtimes to avoid the startup cost of packaging dependencies on each run. The demo shows this by pre-deploying the pixi environment and pointing the resource configuration at it.
 
 ```bash
-# we assume your CI-CD pipelines would out of band perform the deployment of the environment
-# this allows your jobs to start up faster
-pixi run deploy-prod-docker
+pixi run deploy-prod-docker  # builds and uploads the pixi environment
+```
 
-cat deplyyment_metadata.json
-export DAGSTER_PROD_ENV_PATH="$(jq -er '.deployment_path' foo.json)"
+Inspect the generated metadata and persist the target path:
 
+```bash
+deployment_path="$(jq -er '.deployment_path' deployment_metadata.json)"
+echo "DAGSTER_PROD_ENV_PATH=${deployment_path}" > .env.prod
+export DAGSTER_PROD_ENV_PATH="${deployment_path}"
+```
+
+Then start Dagster in production mode:
+
+```bash
 pixi run start-prod-docker
 ```
 
-go to http://localhost:3000 and you should see the dagster webserver running.
+Jobs now skip environment packaging and launch noticeably faster.
 
-### real HPC supercomputer execution
+## 4. Point to your own HPC cluster
 
-- large data
-- you have to adapt the configuration to target your specific HPC deployment
+1. Update the SSH and Slurm configuration in
+   [`examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py`](https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py)
+   (or your own equivalent module).
+2. Provide the connection details via environment variables—`dagster-slurm` reads them at runtime so you can keep secrets out of the repository.
 
+### Required environment variables
+
+| Variable | Purpose | Notes |
+| --- | --- | --- |
+| `SLURM_EDGE_NODE_HOST` | SSH hostname of the login/edge node. | Use the public login node for your site. |
+| `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22` on most clusters. |
+| `SLURM_EDGE_NODE_USER` | Username used for SSH and job submission. | Often tied to an LDAP or project account. |
+| `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH` | Authentication method. | Prefer key-based auth; set whichever your site supports. |
+| `SLURM_DEPLOYMENT_BASE_PATH` | Remote directory where dagster-slurm uploads job bundles. | Should be writable and have sufficient quota. |
+| `SLURM_PARTITION` | Default partition/queue name. | Override per asset for specialised queues. |
+| `SLURM_GPU_PARTITION` (optional) | GPU-enabled partition. | Useful when mixing CPU and GPU jobs. |
+| `SLURM_QOS` (optional) | QoS or account string. | Required on clusters that enforce QoS selection. |
+| `DAGSTER_DEPLOYMENT` | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project. |
+
+Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
+
+> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically falls back to plain SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower.
+
+### Sample configuration: Vienna Scientific Cluster (VSC-5)
+
+```dotenv title=".env.vsc5"
+# SSH / edge node access
+SLURM_EDGE_NODE_HOST=login.vsc5.tuwien.ac.at
+SLURM_EDGE_NODE_PORT=22
+SLURM_EDGE_NODE_USER=your_vsc_username
+SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
+
+# Deployment settings
+SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
+SLURM_PARTITION=main       # cpu partition
+SLURM_GPU_PARTITION=gpu    # optional: GPU jobs
+SLURM_QOS=normal
+
+# Dagster deployment selector
+DAGSTER_DEPLOYMENT=production_supercomputer
+```
+
+VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the partition values (`main`, `gpu`) with the ones aligned to your project allocation (e.g. `short` for quick jobs).
+
+### Sample configuration: Leonardo (CINECA)
+
+```dotenv title=".env.leonardo"
+SLURM_EDGE_NODE_HOST=login.leonardo.cineca.it
+SLURM_EDGE_NODE_PORT=2222          # Leonardo exposes a dedicated SSH port
+SLURM_EDGE_NODE_USER=your_cineca_id
+SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
+
+SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/your_cineca_id/dagster-slurm
+SLURM_PARTITION=batch              # CPU login partition
+SLURM_GPU_PARTITION=dcgpusr        # NVIDIA A100 (change to boost if applicable)
+SLURM_QOS=normal
+DAGSTER_DEPLOYMENT=production_supercomputer
+```
+
+Leonardo requires you to have an active project allocation; ensure the partition (`dcgpusr`, `boost`, or `cm`) matches your access level. If your site enforces Kerberos or OTP, rely on `ProxyCommand` in your SSH configuration or wrap dagster-slurm with a jump host.
+
+With the variables defined, restart your Dagster code location. The same assets now submit through your HPC scheduler.
+
+## Execution modes
+
+`ComputeResource` adapts to four execution modes controlled by the `ExecutionMode` enum:
+
+| Mode | Description | Typical use |
+| --- | --- | --- |
+| `local` | Runs assets without SSH or Slurm. | Developer laptops and CI smoke tests. |
+| `slurm` | Submits one Slurm job per asset execution. | Staging clusters and simple production setups. |
+| `slurm-session` | Reuses Slurm allocations and (optionally) Ray/Spark clusters. | Long-running production deployments. |
+| `slurm-hetjob` | Builds heterogeneous job submissions for mixed resource requirements. | Optimising GPU/CPU mixes in a single submission. |
+
+Launchers (Bash, Ray, Spark, or custom) can be chosen globally or per asset to fit your workload.
 
 ## API examples
 
-### controlplane
+### Control plane (Dagster asset)
 
-This is part of your [dagster](https://dagster.io/) deployment.
-Possibly you might be using an instance of the [local-data-stack](https://github.com/l-mds/local-data-stack/).
+This code lives in your Dagster deployment (e.g. [local-data-stack](https://github.com/l-mds/local-data-stack/)):
 
 ```python
 import dagster as dg
@@ -109,7 +171,7 @@ def process_data(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
 ):
-    """Some mini example of dagster-slurm"""
+    """Simple dagster-slurm example asset."""
     script_path = dg.file_relative_path(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/myfile.py",
@@ -117,33 +179,27 @@ def process_data(
     completed_run = compute.run(
         context=context,
         payload_path=script_path,
-        extra_env={
-            "KEY_ENV": "value",
-        },
-        extras={
-            "foo": "bar",
-        },
+        extra_env={"KEY_ENV": "value"},
+        extras={"foo": "bar"},
     )
     yield from completed_run.get_results()
 ```
 
-### userplane
+### User plane (remote workload)
 
 ```python
 import os
 from dagster_pipes import PipesContext, open_dagster_pipes
 
 
-def main():
+def main() -> None:
     context = PipesContext.get()
     context.log.info("Starting data processing...")
     context.log.debug(context.extras)
     key_env = os.environ.get("KEY_ENV")
     context.log.info(f"KEY_ENV: {key_env}")
     context.log.info(f"foo: {context.extras['foo']}")
-    
-    # Your processing logic here
-    
+
     result = {"rows_processed": 1000}
     context.report_asset_materialization(
         metadata={
@@ -159,6 +215,6 @@ if __name__ == "__main__":
         main()
 ```
 
-### resource configuration
+### Resource configuration
 
-Take a look here to understand how to set up the resource configuration to interact with the local, docker-slurm or real HPC slurm runners https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py
+Configuration snippets for local, Docker-backed Slurm, and real HPC clusters are maintained in the [example project resources module](https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py). Adapt those templates to match your SSH endpoint, partitions, and queue limits.

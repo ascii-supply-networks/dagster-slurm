@@ -40,7 +40,7 @@ Visible in Dagster UI metadata.
 - Your server coordinating HPC and non HPC jobs
 - The HPC compute resource
 
-![](./docs/static/img/arch-overview.png)
+![](./docs/static/img/arch-detail-dark.svg)
 
 #### Layers of dagster-slurm
 

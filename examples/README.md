@@ -124,5 +124,5 @@ scancel 6
 
 ## contributing
 
-See Details here: [docs](docs) for how to contribute!
+See Details here: [docs](https://ascii-supply-networks.github.io/dagster-slurm/docs/contributing/) for how to contribute!
 Help building and maintaining this project is welcome.
