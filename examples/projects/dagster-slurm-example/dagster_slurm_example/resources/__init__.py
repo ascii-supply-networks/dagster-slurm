@@ -73,10 +73,10 @@ PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
-        "host": dg.EnvVar("SLURM_EDGE_NODE"),
-        "port": dg.EnvVar("SLURM_EDGE_NODE_PORT"),
-        "user": dg.EnvVar("SLURM_EDGE_NODE_USER"),
-        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
+        "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(),
+        "port": dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22"),
+        "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(),
+        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
     },
     "slurm_queue_config": {
         "partition": "batch",
@@ -104,6 +104,31 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
             "head_startup_timeout": 120,
         },
         "spark": {"driver_memory": "8g", "executor_memory": "16g"},
+    },
+}
+
+SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    # Vienna Scientific Cluster (VSC-5) requires a TTY and a post-login hop.
+    "vsc5": {
+        "ssh_config": {
+            "force_tty": True,
+            "post_login_command": "vsc5",
+        },
+        "slurm_queue_config": {
+            "partition": "main",
+        },
+        "slurm_session_config": {
+            "partition": "main",
+        },
+    },
+    # Leonardo (CINECA) runs directly on the edge node without an extra hop.
+    "leonardo": {
+        "slurm_queue_config": {
+            "partition": "batch",
+        },
+        "slurm_session_config": {
+            "partition": "batch",
+        },
     },
 }
 
@@ -236,6 +261,16 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
             _deep_merge(config, PRODUCTION_DOCKER_OVERRIDES)
     elif _is_supercomputer_based(deployment):
         config = copy.deepcopy(SUPERCOMPUTER_SLURM_BASE_CONFIG)
+        site_key = os.environ.get("SLURM_SUPERCOMPUTER_SITE", "").strip().lower()
+        if site_key:
+            site_override = SUPERCOMPUTER_SITE_OVERRIDES.get(site_key)
+            if not site_override:
+                available_sites = ", ".join(sorted(SUPERCOMPUTER_SITE_OVERRIDES.keys()))
+                raise ValueError(
+                    f"Unknown SLURM_SUPERCOMPUTER_SITE '{site_key}'. "
+                    f"Available options: {available_sites}"
+                )
+            _deep_merge(config, copy.deepcopy(site_override))
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
 
