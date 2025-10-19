@@ -100,14 +100,19 @@ Create a `.env` file with the edge-node credentials and select the site profile:
 
 ```dotenv
 # example for VSC-5
-SLURM_EDGE_NODE=vmos.vsc.ac.at
+SLURM_EDGE_NODE=vsc5.vsc.ac.at
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=<<your_user>>
 SLURM_EDGE_NODE_PASSWORD=<<your_password>>
+SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at
+SLURM_EDGE_NODE_JUMP_USER=<<your_user>>
+SLURM_EDGE_NODE_JUMP_PASSWORD=<<your_password>>
 SLURM_DEPLOYMENT_BASE_PATH=/home/<<your_user>>/pipelines/deployments
 SLURM_SUPERCOMPUTER_SITE=vsc5
 DAGSTER_DEPLOYMENT=staging_supercomputer
 ```
+
+If your account relies on passwords (or passwords + OTP), provide them for both the jump host and the final login node. The automation will answer the password prompts for you; any time-based OTP still has to be supplied interactively once per validity window.
 
 With the variables in place, validate connectivity and job submission using the staging supercomputer profile:
 

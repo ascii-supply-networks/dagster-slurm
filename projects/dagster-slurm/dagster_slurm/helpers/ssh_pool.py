@@ -27,6 +27,14 @@ class SSHConnectionPool:
         self._fallback_reason: Optional[str] = None
         self.logger = get_dagster_logger()
 
+    def _collect_passwords(self) -> list[str]:
+        passwords: list[str] = []
+        if self.config.jump_host and self.config.jump_host.password:
+            passwords.append(self.config.jump_host.password)
+        if self.config.password:
+            passwords.append(self.config.password)
+        return passwords
+
     def __enter__(self):
         """Start SSH ControlMaster."""
         self.logger.debug("Starting SSH ControlMaster...")
@@ -61,10 +69,13 @@ class SSHConnectionPool:
                     "IdentitiesOnly=yes",
                     "-o",
                     "BatchMode=yes",
-                    *base_opts,
-                    *self.config.extra_opts,
-                    f"{self.config.user}@{self.config.host}",
                 ]
+                if self.config.force_tty:
+                    cmd.append("-tt")
+                cmd.extend(base_opts)
+                cmd.extend(self.config.get_proxy_command_opts())
+                cmd.extend(self.config.extra_opts)
+                cmd.append(f"{self.config.user}@{self.config.host}")
 
                 try:
                     result = subprocess.run(  # type: ignore
@@ -88,18 +99,30 @@ class SSHConnectionPool:
                     "-f",
                     "-p",
                     str(self.config.port),
-                    "-o",
-                    "NumberOfPasswordPrompts=1",
-                    "-o",
-                    "PreferredAuthentications=password,keyboard-interactive",
-                    *base_opts,
-                    *self.config.extra_opts,
-                    f"{self.config.user}@{self.config.host}",
                 ]
+                if self.config.force_tty:
+                    cmd.append("-tt")
+                cmd.extend(
+                    [
+                        "-o",
+                        "NumberOfPasswordPrompts=1",
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                    ]
+                )
+                cmd.extend(base_opts)
+                cmd.extend(self.config.get_proxy_command_opts())
+                cmd.extend(self.config.extra_opts)
+                cmd.append(f"{self.config.user}@{self.config.host}")
 
+                passwords = self._collect_passwords()
+                if not passwords:
+                    raise RuntimeError(
+                        "Password authentication requested but no password provided."
+                    )
                 try:
-                    # Use pexpect for interactive password prompt
-                    result = self._run_with_password(cmd, self.config.password)
+                    # Use pexpect for interactive password prompt(s)
+                    result = self._run_with_password(cmd, passwords)
                 except FileNotFoundError as e:
                     raise RuntimeError(
                         "SSH command not found. Please ensure OpenSSH client is installed."
@@ -144,23 +167,37 @@ class SSHConnectionPool:
         # Join command for pexpect
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
 
+        if isinstance(password, (list, tuple)):
+            passwords = list(password)
+        else:
+            passwords = [password]
+        if not passwords:
+            raise RuntimeError("No password provided for SSH authentication.")
+
+        pw_index = 0
+        last_password = passwords[-1]
+
         try:
             child = pexpect.spawn(cmd_str, timeout=timeout, encoding="utf-8")
 
-            # Wait for password prompt
-            index = child.expect(
-                [r"(?i)password:", r"(?i)passphrase", pexpect.EOF, pexpect.TIMEOUT],
-                timeout=10,
-            )
+            while True:
+                index = child.expect(
+                    [r"(?i)password:", r"(?i)passphrase", pexpect.EOF, pexpect.TIMEOUT],
+                    timeout=10,
+                )
 
-            if index == 0 or index == 1:
-                # Send password
-                child.sendline(password)
-                child.expect(pexpect.EOF, timeout=timeout)
-            elif index == 2:
-                # EOF - command finished (might be success or failure)
-                pass
-            else:
+                if index in (0, 1):
+                    if pw_index < len(passwords):
+                        pw_value = passwords[pw_index]
+                        pw_index += 1
+                    else:
+                        pw_value = last_password
+                    child.sendline(pw_value)
+                    continue
+                if index == 2:
+                    # EOF - command finished (might be success or failure)
+                    break
+
                 # Timeout
                 child.close(force=True)
                 raise TimeoutError("Timeout waiting for password prompt")
@@ -220,6 +257,12 @@ class SSHConnectionPool:
 
         # Wrap in clean shell
         remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
+        if self.config.post_login_command:
+            template = self.config.post_login_command
+            if "{cmd}" in template:
+                remote_cmd = template.format(cmd=remote_cmd)
+            else:
+                remote_cmd = f"{template} && {remote_cmd}"
 
         if self._master_started:
             ssh_cmd = [
@@ -228,9 +271,16 @@ class SSHConnectionPool:
                 f"ControlPath={self.control_path}",
                 "-o",
                 "ControlMaster=no",
-                f"{self.config.user}@{self.config.host}",
-                remote_cmd,
             ]
+            if self.config.force_tty:
+                ssh_cmd.append("-tt")
+            ssh_cmd.extend(self.config.get_proxy_command_opts())
+            ssh_cmd.extend(
+                [
+                    f"{self.config.user}@{self.config.host}",
+                    remote_cmd,
+                ]
+            )
         else:
             ssh_cmd = [
                 "ssh",
@@ -268,6 +318,9 @@ class SSHConnectionPool:
                         "PreferredAuthentications=password,keyboard-interactive",
                     ]
                 )
+            if self.config.force_tty:
+                ssh_cmd.append("-tt")
+            ssh_cmd.extend(self.config.get_proxy_command_opts())
             ssh_cmd.extend(self.config.extra_opts)
             ssh_cmd.extend(
                 [

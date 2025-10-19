@@ -92,6 +92,9 @@ Jobs now skip environment packaging and launch noticeably faster.
 | `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22` on most clusters. |
 | `SLURM_EDGE_NODE_USER` | Username used for SSH and job submission. | Often tied to an LDAP or project account. |
 | `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH` | Authentication method. | Prefer key-based auth; set whichever your site supports. |
+| `SLURM_EDGE_NODE_FORCE_TTY` (optional) | Request a pseudo-terminal (`-tt`). | Set to `true` on clusters that insist on interactive sessions. Leave `false` when using a jump host. |
+| `SLURM_EDGE_NODE_POST_LOGIN_COMMAND` (optional) | Command prefix run immediately after login. | Supports `{cmd}` placeholder; useful when you cannot use `ProxyJump`. |
+| `SLURM_EDGE_NODE_JUMP_HOST` / `_USER` / `_PORT` / `_PASSWORD` (optional) | Configure an SSH jump host (uses `ssh -J`). | Lets you hop via `vmos`/bastion nodes; password-based auth is supported. |
 | `SLURM_DEPLOYMENT_BASE_PATH` | Remote directory where dagster-slurm uploads job bundles. | Should be writable and have sufficient quota. |
 | `SLURM_PARTITION` | Default partition/queue name. | Override per asset for specialised queues. |
 | `SLURM_GPU_PARTITION` (optional) | GPU-enabled partition. | Useful when mixing CPU and GPU jobs. |
@@ -112,6 +115,10 @@ SLURM_EDGE_NODE=vmos.vsc.ac.at          # falls back to *_HOST if you prefer
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=your_vsc_username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
+SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at
+SLURM_EDGE_NODE_JUMP_USER=your_vsc_username
+SLURM_EDGE_NODE_JUMP_PASSWORD=...      # optional: password to reach vmos
+SLURM_EDGE_NODE_FORCE_TTY=false        # leave false when using jump host
 
 # Deployment settings
 SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
@@ -125,6 +132,7 @@ DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
 VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the partition values (`main`, `gpu`) with the ones aligned to your project allocation (e.g. `short` for quick jobs).
+If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation will answer both prompts (you'll still need to handle one-time passcodes manually when they expire).
 
 ### Sample configuration: Leonardo (CINECA)
 
