@@ -277,16 +277,29 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
 
+    # Apply environment overrides for the SSH connection settings.
+    ssh_cfg = config.setdefault("ssh_config", {})
+    ssh_cfg["host"] = os.environ.get(
+        "SLURM_EDGE_NODE_HOST", ssh_cfg.get("host", "127.0.0.1")
+    )
+    ssh_cfg["port"] = int(
+        os.environ.get("SLURM_EDGE_NODE_PORT", str(ssh_cfg.get("port", 2223)))
+    )
+    ssh_cfg["user"] = os.environ.get(
+        "SLURM_EDGE_NODE_USER", ssh_cfg.get("user", "submitter")
+    )
+    ssh_cfg["password"] = os.environ.get(
+        "SLURM_EDGE_NODE_PASSWORD", ssh_cfg.get("password", "submitter")
+    )
+
     # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
-    target_host = config["ssh_config"].get("host")
+    target_host = ssh_cfg.get("host")
     jump_host_env = os.environ.get("SLURM_EDGE_NODE_JUMP_HOST")
     if jump_host_env and target_host not in {"localhost", "127.0.0.1"}:
         jump_config: Dict[str, Any] = {
             "host": jump_host_env,
             "port": int(os.environ.get("SLURM_EDGE_NODE_JUMP_PORT", "22")),
-            "user": os.environ.get(
-                "SLURM_EDGE_NODE_JUMP_USER", config["ssh_config"]["user"]
-            ),
+            "user": os.environ.get("SLURM_EDGE_NODE_JUMP_USER", ssh_cfg["user"]),
         }
         jump_key = os.environ.get("SLURM_EDGE_NODE_JUMP_KEY")
         jump_password = os.environ.get("SLURM_EDGE_NODE_JUMP_PASSWORD")
@@ -305,11 +318,13 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
         if jump_force_tty:
             jump_config["force_tty"] = jump_force_tty.lower() in {"1", "true", "yes"}
 
-        config["ssh_config"]["jump_host"] = jump_config
-        # When a jump host is used, post-login commands/forced TTY on the final host
-        # become redundant.
-        config["ssh_config"].pop("post_login_command", None)
-        config["ssh_config"].pop("force_tty", None)
+        ssh_cfg["jump_host"] = jump_config
+    else:
+        ssh_cfg.pop("jump_host", None)
+
+    # Jump host obviates any post-login command/forced TTY.
+    ssh_cfg.pop("post_login_command", None)
+    ssh_cfg.pop("force_tty", None)
 
     # Step 2.2: Handle pre_deployed_env_path requirement for production
     if _is_production(deployment):
