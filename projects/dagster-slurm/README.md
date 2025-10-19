@@ -100,7 +100,7 @@ Create a `.env` file with the edge-node credentials and select the site profile:
 
 ```dotenv
 # example for VSC-5
-SLURM_EDGE_NODE=vsc5.vsc.ac.at
+SLURM_EDGE_NODE_HOST=vsc5.vsc.ac.at
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=<<your_user>>
 SLURM_EDGE_NODE_PASSWORD=<<your_password>>
@@ -108,6 +108,9 @@ SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at
 SLURM_EDGE_NODE_JUMP_USER=<<your_user>>
 SLURM_EDGE_NODE_JUMP_PASSWORD=<<your_password>>
 SLURM_DEPLOYMENT_BASE_PATH=/home/<<your_user>>/pipelines/deployments
+SLURM_PARTITION=zen3_0512
+SLURM_QOS=zen3_0512_devel
+SLURM_RESERVATION=dagster-slurm_21
 SLURM_SUPERCOMPUTER_SITE=vsc5
 DAGSTER_DEPLOYMENT=staging_supercomputer
 ```
@@ -136,6 +139,15 @@ pixi run start-production-supercomputer
 ```
 
 If `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, the production profile will refuse to start to prevent accidental live builds on the cluster.
+
+To confirm a submission landed on the expected queue, run:
+
+```bash
+ssh -J <<your_user>>@vmos.vsc.ac.at <<your_user>>@vsc5.vsc.ac.at \
+  "squeue -j <jobid> -o '%i %P %q %R %T'"
+```
+
+The `Partition`, `QOS`, and `Reservation` columns should match your `.env`.
 
 
 ## contributing

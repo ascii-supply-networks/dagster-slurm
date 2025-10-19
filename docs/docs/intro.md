@@ -111,30 +111,27 @@ Set the variables in a `.env` file or your orchestrator’s secret store. Passwo
 
 ```dotenv title=".env.vsc5"
 # SSH / edge node access
-SLURM_EDGE_NODE=vmos.vsc.ac.at          # falls back to *_HOST if you prefer
+SLURM_EDGE_NODE_HOST=vsc5.vsc.ac.at
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=your_vsc_username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
-SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at
+SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at        # optional, but recommended
 SLURM_EDGE_NODE_JUMP_USER=your_vsc_username
-SLURM_EDGE_NODE_JUMP_PASSWORD=...      # optional: password to reach vmos
-SLURM_EDGE_NODE_FORCE_TTY=false        # leave false when using jump host
+SLURM_EDGE_NODE_JUMP_PASSWORD=...              # only if vmos requires a password
 
 # Deployment settings
 SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
-SLURM_PARTITION=main       # cpu partition
-SLURM_GPU_PARTITION=gpu    # optional: GPU jobs
-SLURM_QOS=normal
+SLURM_PARTITION=zen3_0512                      # pick a queue you can access
+SLURM_QOS=zen3_0512_devel                      # optional QoS/account string
+SLURM_RESERVATION=dagster-slurm_21             # optional reservation (if active)
 SLURM_SUPERCOMPUTER_SITE=vsc5
 
 # Dagster deployment selector
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the partition values (`main`, `gpu`) with the ones aligned to your project allocation (e.g. `short` for quick jobs).
-If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation answers both prompts (you'll still need to handle one-time passcodes manually when they expire). Dagster will print `Enter ... for <host>:` on your controlling terminal; type the OTP there to resume.
-
-Password-based sessions automatically request a pseudo-TTY, so you only need to set `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
+VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).  
+If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation answers both prompts (you'll still need to handle one-time passcodes manually when they expire). Dagster prints `Enter … for vsc5.vsc.ac.at:` on your terminal—type the OTP there to continue. Password-based sessions automatically request a pseudo-TTY, so you only need `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
 
 ### Sample configuration: Leonardo (CINECA)
 
@@ -167,6 +164,8 @@ pixi run start-production-supercomputer
 ```
 
 The production preset refuses to start if `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, ensuring clusters never build environments during business-critical runs.
+
+To confirm the job landed on the expected queue, open an interactive shell on the cluster and run `squeue -j <jobid> -o '%i %P %q %R %T'`. The `Partition`, `QoS`, and `Reservation` columns should match your `.env` overrides.
 
 ## Execution modes
 
