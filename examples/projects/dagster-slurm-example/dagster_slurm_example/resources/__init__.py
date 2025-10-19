@@ -74,9 +74,9 @@ PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
-        "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(default="127.0.0.1"),
-        "port": int(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="2223")),
-        "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter"),
+        "host": str(dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(default="127.0.0.1")),
+        "port": int(str(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="2223"))),
+        "user": str(dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter")),
         "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
         "key_path": dg.EnvVar("SLURM_EDGE_NODE_KEY_PATH").get_value(default=None),
     },
