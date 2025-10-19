@@ -1,8 +1,6 @@
 import os
 import subprocess
 
-import pytest
-
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.ssh import SSHConnectionResource
 
@@ -64,8 +62,8 @@ def test_control_master_fallback_key_auth(monkeypatch, tmp_path):
     assert not any("ControlPath" in " ".join(cmd) for cmd in fallback_calls)
 
 
-def test_control_master_failure_password_raises(monkeypatch):
-    """Password authentication must still raise if ControlMaster is unavailable."""
+def test_control_master_failure_password_fallback(monkeypatch, tmp_path):
+    """Password auth now falls back gracefully when ControlMaster is skipped."""
 
     ssh_resource = SSHConnectionResource(
         host="example.com",
@@ -74,15 +72,32 @@ def test_control_master_failure_password_raises(monkeypatch):
         password="secret",
     )
 
-    def fake_run_with_password(*args, **kwargs):
-        return DummyResult(returncode=1, stderr="password auth disabled")
+    commands = []
+
+    def fake_run_with_password(cmd, *_, **__):
+        commands.append(cmd)
+        # Return stdout for ssh commands, empty for scp
+        if cmd[0] == "ssh":
+            return DummyResult(returncode=0, stdout="ok\n")
+        return DummyResult(returncode=0)
 
     monkeypatch.setattr(
-        SSHConnectionPool, "_run_with_password", staticmethod(fake_run_with_password)
+        SSHConnectionPool,
+        "_run_with_password",
+        staticmethod(fake_run_with_password),
     )
 
     pool = SSHConnectionPool(ssh_resource)
 
-    with pytest.raises(RuntimeError):
-        with pool:
-            pass
+    with pool:
+        assert pool._fallback_mode is True
+        output = pool.run("echo hi")
+        assert output == "ok\n"
+
+        local_file = tmp_path / "data.txt"
+        local_file.write_text("payload")
+        pool.upload_file(str(local_file), "/tmp/remote.txt")
+
+    # Ensure all commands were executed without ControlPath
+    assert commands, "No password-based commands executed"
+    assert all("ControlPath" not in " ".join(cmd) for cmd in commands)
