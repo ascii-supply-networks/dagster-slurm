@@ -13,6 +13,17 @@ import pytest
 from .test_utils import run_dg_command, assert_materialization_success
 
 
+DOCKER_SLURM_ENV = {
+    "SLURM_EDGE_NODE_HOST": "127.0.0.1",
+    "SLURM_EDGE_NODE_PORT": "2223",
+    "SLURM_EDGE_NODE_USER": "submitter",
+    "SLURM_EDGE_NODE_PASSWORD": "submitter",
+    "SLURM_EDGE_NODE_JUMP_HOST": "",
+    "SLURM_EDGE_NODE_JUMP_USER": "",
+    "SLURM_EDGE_NODE_JUMP_PASSWORD": "",
+}
+
+
 pytestmark = pytest.mark.needs_slurm_docker
 
 
@@ -113,7 +124,11 @@ class TestStagingDockerMode:
                 "defs",
             ],
             cwd=example_project_dir,
-            env={**os.environ, "DAGSTER_DEPLOYMENT": "STAGING_DOCKER"},
+            env={
+                **os.environ,
+                **DOCKER_SLURM_ENV,
+                "DAGSTER_DEPLOYMENT": "STAGING_DOCKER",
+            },
             capture_output=True,
             text=True,
             timeout=30,
@@ -127,6 +142,7 @@ class TestStagingDockerMode:
             example_project_dir,
             deployment="STAGING_DOCKER",
             assets="process_data,aggregate_results",
+            env_overrides=DOCKER_SLURM_ENV,
             timeout=600,  # Longer timeout for environment packing
         )
 
@@ -142,6 +158,7 @@ class TestStagingDockerMode:
             example_project_dir,
             deployment="STAGING_DOCKER",
             assets="distributed_training,distributed_inference",
+            env_overrides=DOCKER_SLURM_ENV,
             timeout=600,
         )
 
@@ -175,7 +192,8 @@ class TestProductionDockerMode:
             deployment="PRODUCTION_DOCKER",
             assets="process_data,aggregate_results",
             env_overrides={
-                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"]
+                **DOCKER_SLURM_ENV,
+                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"],
             },
             timeout=300,
         )
@@ -195,7 +213,8 @@ class TestProductionDockerMode:
             deployment="PRODUCTION_DOCKER",
             assets="distributed_training,distributed_inference",
             env_overrides={
-                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"]
+                **DOCKER_SLURM_ENV,
+                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"],
             },
             timeout=300,
         )

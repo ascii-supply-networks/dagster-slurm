@@ -375,15 +375,27 @@ class SlurmPipesClient(PipesClient):
 
     def _get_remote_base(self, run_id: str, ssh_pool: SSHConnectionPool) -> str:
         """Get remote base directory with proper expansion of $HOME."""
+
+        def _sanitize_home(raw: str) -> str:
+            for line in reversed(raw.splitlines()):
+                line = line.strip()
+                if line:
+                    return line
+            raise RuntimeError(
+                f"Could not determine remote home directory from output: {raw!r}"
+            )
+
         if hasattr(self.slurm, "remote_base") and self.slurm.remote_base:
             remote_base = self.slurm.remote_base
         else:
-            home_dir = ssh_pool.run("echo $HOME").strip()
+            home_raw = ssh_pool.run("echo $HOME").strip()
+            home_dir = _sanitize_home(home_raw)
             remote_base = f"{home_dir}/pipelines"
             self.logger.info(f"No remote_base configured, using: {remote_base}")
 
         if "$HOME" in remote_base:
-            home_dir = ssh_pool.run("echo $HOME").strip()
+            home_raw = ssh_pool.run("echo $HOME").strip()
+            home_dir = _sanitize_home(home_raw)
             remote_base = remote_base.replace("$HOME", home_dir)
 
         return remote_base

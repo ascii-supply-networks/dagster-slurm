@@ -74,12 +74,12 @@ PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
-        "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(),
-        "port": int(
-            dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22")  # type: ignore[arg-type]
+        "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(default="127.0.0.1"),
+        "port": int(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22")),
+        "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter"),
+        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(
+            default="submitter"
         ),
-        "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(),
-        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
     },
     "slurm_queue_config": {
         "partition": "batch",
@@ -278,8 +278,9 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
         raise ValueError(f"Unexpected environment: {deployment_name}")
 
     # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
+    target_host = config["ssh_config"].get("host")
     jump_host_env = os.environ.get("SLURM_EDGE_NODE_JUMP_HOST")
-    if jump_host_env:
+    if jump_host_env and target_host not in {"localhost", "127.0.0.1"}:
         jump_config: Dict[str, Any] = {
             "host": jump_host_env,
             "port": int(os.environ.get("SLURM_EDGE_NODE_JUMP_PORT", "22")),
