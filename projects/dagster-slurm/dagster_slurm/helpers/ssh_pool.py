@@ -2,6 +2,7 @@
 
 import shlex
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -53,103 +54,68 @@ class SSHConnectionPool:
             "LogLevel=ERROR",
         ]
 
+        needs_tty = self.config.requires_tty
+
+        if needs_tty or self.config.uses_password_auth:
+            # ControlMaster interferes with TTY/password flows; use fallback mode.
+            self.logger.debug(
+                "TTY/password-auth detected; skipping SSH ControlMaster for %s",
+                self.config.host,
+            )
+            self._fallback_mode = True
+            self.control_path = None
+            return self
+
         try:
+            cmd = [
+                "ssh",
+                "-M",
+                "-N",
+                "-f",
+                "-p",
+                str(self.config.port),
+            ]
+            cmd.extend(base_opts)
+            cmd.extend(self.config.get_proxy_command_opts())
             if self.config.uses_key_auth:
-                # Key-based auth
-                cmd = [
-                    "ssh",
-                    "-M",
-                    "-N",
-                    "-f",
-                    "-p",
-                    str(self.config.port),
-                    "-i",
-                    self.config.key_path,
-                    "-o",
-                    "IdentitiesOnly=yes",
-                    "-o",
-                    "BatchMode=yes",
-                ]
-                if self.config.force_tty:
-                    cmd.append("-tt")
-                cmd.extend(base_opts)
-                cmd.extend(self.config.get_proxy_command_opts())
-                cmd.extend(self.config.extra_opts)
-                cmd.append(f"{self.config.user}@{self.config.host}")
-
-                try:
-                    result = subprocess.run(  # type: ignore
-                        cmd, capture_output=True, text=True, timeout=30
-                    )
-                except FileNotFoundError as e:
+                key_path = self.config.key_path
+                if not key_path:
                     raise RuntimeError(
-                        "SSH command not found. Please ensure OpenSSH client is installed."
-                    ) from e
-
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"Failed to start SSH master (key auth): {result.stderr.strip()}"
+                        "SSH key authentication requires key_path to be set"
                     )
-            else:
-                # Password-based auth using SSH_ASKPASS
-                cmd = [
-                    "ssh",
-                    "-M",
-                    "-N",
-                    "-f",
-                    "-p",
-                    str(self.config.port),
-                ]
-                if self.config.force_tty:
-                    cmd.append("-tt")
                 cmd.extend(
                     [
+                        "-i",
+                        key_path,
                         "-o",
-                        "NumberOfPasswordPrompts=1",
+                        "IdentitiesOnly=yes",
                         "-o",
-                        "PreferredAuthentications=password,keyboard-interactive",
+                        "BatchMode=yes",
                     ]
                 )
-                cmd.extend(base_opts)
-                cmd.extend(self.config.get_proxy_command_opts())
-                cmd.extend(self.config.extra_opts)
-                cmd.append(f"{self.config.user}@{self.config.host}")
+            cmd.extend(self.config.extra_opts)
+            cmd.append(f"{self.config.user}@{self.config.host}")
 
-                passwords = self._collect_passwords()
-                if not passwords:
-                    raise RuntimeError(
-                        "Password authentication requested but no password provided."
-                    )
-                try:
-                    # Use pexpect for interactive password prompt(s)
-                    result = self._run_with_password(cmd, passwords)
-                except FileNotFoundError as e:
-                    raise RuntimeError(
-                        "SSH command not found. Please ensure OpenSSH client is installed."
-                    ) from e
-
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        "Failed to start SSH master (password auth). "
-                        "Note: Ensure password authentication is enabled on the server."
-                    )
+            result = subprocess.run(  # type: ignore
+                cmd, capture_output=True, text=True, timeout=30
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to start SSH master: {result.stderr.strip()}"
+                )
 
             self._master_started = True
             auth_method = "key" if self.config.uses_key_auth else "password"
             self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
         except RuntimeError as exc:
-            if self.config.uses_key_auth:
-                # Fall back to direct SSH connections
-                self._fallback_mode = True
-                self._fallback_reason = str(exc)
-                self.control_path = None
-                self.logger.warning(
-                    "SSH ControlMaster unavailable (%s). Falling back to direct SSH "
-                    "connections; performance may be reduced but functionality remains.",
-                    exc,
-                )
-            else:
-                raise
+            self._fallback_mode = True
+            self._fallback_reason = str(exc)
+            self.control_path = None
+            self.logger.warning(
+                "SSH ControlMaster unavailable (%s). Falling back to direct SSH "
+                "connections; performance may be reduced but functionality remains.",
+                exc,
+            )
 
         return self
 
@@ -175,32 +141,96 @@ class SSHConnectionPool:
             raise RuntimeError("No password provided for SSH authentication.")
 
         pw_index = 0
-        last_password = passwords[-1]
+        fallback_password = passwords[-1]
+        fallback_attempts = 0
 
         try:
             child = pexpect.spawn(cmd_str, timeout=timeout, encoding="utf-8")
 
+            # Derive per-prompt timeout (allow more time on slow clusters).
+            prompt_timeout = max(10, min(timeout if timeout else 30, 60))
+
             while True:
                 index = child.expect(
                     [r"(?i)password:", r"(?i)passphrase", pexpect.EOF, pexpect.TIMEOUT],
-                    timeout=10,
+                    timeout=prompt_timeout,
                 )
 
                 if index in (0, 1):
                     if pw_index < len(passwords):
                         pw_value = passwords[pw_index]
                         pw_index += 1
-                    else:
-                        pw_value = last_password
-                    child.sendline(pw_value)
+                        child.sendline(pw_value)
+                        continue
+
+                    if fallback_password and fallback_attempts < 3:
+                        child.sendline(fallback_password)
+                        fallback_attempts += 1
+                        continue
+
+                    # We ran out of stored secrets (likely OTP). Prompt the user if possible.
+                    prompt_text = (
+                        child.after.strip()
+                        if child.after
+                        else "additional authentication"
+                    )
+                    prompt_label = prompt_text or "authentication code"
+                    try:
+                        if sys.stdin and sys.stdin.isatty():
+                            output_stream = sys.stdout or sys.__stdout__
+                            if output_stream:
+                                output_stream.write(
+                                    f"Enter {prompt_label} for {self.config.host}: "
+                                )
+                                output_stream.flush()
+                            user_input = sys.stdin.readline().strip()
+                        else:
+                            try:
+                                with (
+                                    open(
+                                        "/dev/tty", "w", encoding="utf-8", buffering=1
+                                    ) as tty_out,
+                                    open(
+                                        "/dev/tty", "r", encoding="utf-8", buffering=1
+                                    ) as tty_in,
+                                ):
+                                    tty_out.write(
+                                        f"Enter {prompt_label} for {self.config.host}: "
+                                    )
+                                    tty_out.flush()
+                                    user_input = tty_in.readline().strip()
+                            except OSError:
+                                raise
+                        if not user_input:
+                            child.close(force=True)
+                            raise RuntimeError(
+                                "Empty response provided for OTP/password prompt."
+                            )
+                    except OSError:
+                        child.close(force=True)
+                        raise RuntimeError(
+                            f"Received {prompt_text} prompt but no interactive TTY is available.\n"
+                            "Provide the OTP/password via configuration or switch to key-based auth."
+                        )
+                    except Exception as exc:  # pragma: no cover - interactive failure
+                        child.close(force=True)
+                        raise RuntimeError(
+                            "Failed to read interactive input for OTP/password"
+                        ) from exc
+
+                    child.sendline(user_input)
                     continue
                 if index == 2:
                     # EOF - command finished (might be success or failure)
                     break
 
                 # Timeout
+                last_output = (child.before or "").strip()
                 child.close(force=True)
-                raise TimeoutError("Timeout waiting for password prompt")
+                raise TimeoutError(
+                    "Timeout waiting for password prompt"
+                    + (f": {last_output}" if last_output else "")
+                )
 
             child.close()
 
@@ -264,7 +294,9 @@ class SSHConnectionPool:
             else:
                 remote_cmd = f"{template} && {remote_cmd}"
 
-        if self._master_started:
+        needs_tty = self.config.requires_tty
+
+        if self._master_started and not self._fallback_mode:
             ssh_cmd = [
                 "ssh",
                 "-o",
@@ -272,7 +304,7 @@ class SSHConnectionPool:
                 "-o",
                 "ControlMaster=no",
             ]
-            if self.config.force_tty:
+            if needs_tty:
                 ssh_cmd.append("-tt")
             ssh_cmd.extend(self.config.get_proxy_command_opts())
             ssh_cmd.extend(
@@ -313,12 +345,12 @@ class SSHConnectionPool:
                 ssh_cmd.extend(
                     [
                         "-o",
-                        "NumberOfPasswordPrompts=1",
+                        "NumberOfPasswordPrompts=3",
                         "-o",
                         "PreferredAuthentications=password,keyboard-interactive",
                     ]
                 )
-            if self.config.force_tty:
+            if needs_tty:
                 ssh_cmd.append("-tt")
             ssh_cmd.extend(self.config.get_proxy_command_opts())
             ssh_cmd.extend(self.config.extra_opts)
@@ -329,21 +361,40 @@ class SSHConnectionPool:
                 ]
             )
 
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        self.logger.debug(
+            "Executing SSH command: %s",
+            " ".join(shlex.quote(part) for part in ssh_cmd),
         )
 
-        if result.returncode != 0:
+        if self.config.uses_password_auth or (
+            self.config.jump_host and self.config.jump_host.uses_password_auth
+        ):
+            effective_timeout = timeout if timeout is not None else 300
+            result = self._run_with_password(
+                ssh_cmd, self._collect_passwords(), timeout=effective_timeout
+            )
+            returncode = result.returncode
+            stdout = result.stdout
+            stderr = result.stderr
+        else:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            returncode = result.returncode
+            stdout = result.stdout
+            stderr = result.stderr
+
+        if returncode != 0:
             raise RuntimeError(
-                f"SSH command failed (exit {result.returncode}): {cmd}\n"
-                f"stdout: {result.stdout}\n"
-                f"stderr: {result.stderr}"
+                f"SSH command failed (exit {returncode}): {cmd}\n"
+                f"stdout: {stdout}\n"
+                f"stderr: {stderr}"
             )
 
-        return result.stdout
+        return stdout
 
     def write_file(self, content: str, remote_path: str):
         """Write content to remote file via heredoc."""
@@ -372,7 +423,7 @@ class SSHConnectionPool:
         self.run(f"mkdir -p {shlex.quote(remote_dir)}")
 
         # Build SCP command
-        if self._master_started:
+        if self._master_started and not self._fallback_mode:
             scp_cmd = [
                 "scp",
                 "-o",
@@ -412,12 +463,13 @@ class SSHConnectionPool:
                 scp_cmd.extend(
                     [
                         "-o",
-                        "NumberOfPasswordPrompts=1",
-                        "-o",
                         "PreferredAuthentications=password,keyboard-interactive",
+                        "-o",
+                        "NumberOfPasswordPrompts=3",
                     ]
                 )
 
+        scp_cmd.extend(self.config.get_proxy_command_opts())
         scp_cmd.extend(self.config.extra_opts)
         scp_cmd.extend(
             [
@@ -426,10 +478,25 @@ class SSHConnectionPool:
             ]
         )
 
-        result = subprocess.run(scp_cmd, capture_output=True, text=True)
+        self.logger.debug(
+            "Executing SCP command: %s",
+            " ".join(shlex.quote(part) for part in scp_cmd),
+        )
 
-        if result.returncode != 0:
+        if self.config.uses_password_auth or (
+            self.config.jump_host and self.config.jump_host.uses_password_auth
+        ):
+            result = self._run_with_password(
+                scp_cmd, self._collect_passwords(), timeout=300
+            )
+            returncode = result.returncode
+            stderr = result.stderr
+        else:
+            proc = subprocess.run(scp_cmd, capture_output=True, text=True)
+            returncode = proc.returncode
+            stderr = proc.stderr
+
+        if returncode != 0:
             raise RuntimeError(
-                f"SCP upload failed: {local_path} -> {remote_path}\n"
-                f"stderr: {result.stderr}"
+                f"SCP upload failed: {local_path} -> {remote_path}\nstderr: {stderr}"
             )

@@ -132,7 +132,9 @@ DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
 VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the partition values (`main`, `gpu`) with the ones aligned to your project allocation (e.g. `short` for quick jobs).
-If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation will answer both prompts (you'll still need to handle one-time passcodes manually when they expire).
+If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation answers both prompts (you'll still need to handle one-time passcodes manually when they expire). Dagster will print `Enter ... for <host>:` on your controlling terminal; type the OTP there to resume.
+
+Password-based sessions automatically request a pseudo-TTY, so you only need to set `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
 
 ### Sample configuration: Leonardo (CINECA)
 

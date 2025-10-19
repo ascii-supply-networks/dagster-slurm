@@ -112,7 +112,9 @@ SLURM_SUPERCOMPUTER_SITE=vsc5
 DAGSTER_DEPLOYMENT=staging_supercomputer
 ```
 
-If your account relies on passwords (or passwords + OTP), provide them for both the jump host and the final login node. The automation will answer the password prompts for you; any time-based OTP still has to be supplied interactively once per validity window.
+If your account relies on passwords (or passwords + OTP), provide them for both the jump host and the final login node. The automation will answer the standard prompts; any time-based OTP still has to be supplied interactively once per validity window. When an extra prompt appears, Dagster writes `Enter ... for <host>:` to your terminal (via `/dev/tty`). Enter the code there to continue.
+
+TTY allocation is handled automatically for password-based sessions, so you do not need to set `SLURM_EDGE_NODE_FORCE_TTY` unless your centre requires it explicitly.
 
 With the variables in place, validate connectivity and job submission using the staging supercomputer profile:
 

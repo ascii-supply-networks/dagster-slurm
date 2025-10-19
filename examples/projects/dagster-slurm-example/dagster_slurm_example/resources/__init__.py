@@ -1,5 +1,6 @@
 import copy
 import os
+import shlex
 from typing import Any, Dict
 
 import dagster as dg
@@ -74,7 +75,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
         "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(),
-        "port": dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22"),
+        "port": int(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22")),
         "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(),
         "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
     },
@@ -108,17 +109,17 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
 }
 
 SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    # Vienna Scientific Cluster (VSC-5) requires a TTY and a post-login hop.
+    # Vienna Scientific Cluster (VSC-5) queue defaults.
     "vsc5": {
-        "ssh_config": {
-            "force_tty": True,
-            "post_login_command": "vsc5",
-        },
         "slurm_queue_config": {
-            "partition": "main",
+            "partition": "zen3_0512",
+            "qos": "zen3_0512_devel",
+            "reservation": "dagster-slurm_21",
         },
         "slurm_session_config": {
-            "partition": "main",
+            "partition": "zen3_0512",
+            "qos": "zen3_0512_devel",
+            "reservation": "dagster-slurm_21",
         },
     },
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
@@ -273,6 +274,39 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
             _deep_merge(config, copy.deepcopy(site_override))
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
+
+    # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
+    jump_host_env = os.environ.get("SLURM_EDGE_NODE_JUMP_HOST")
+    if jump_host_env:
+        jump_config: Dict[str, Any] = {
+            "host": jump_host_env,
+            "port": int(os.environ.get("SLURM_EDGE_NODE_JUMP_PORT", "22")),
+            "user": os.environ.get(
+                "SLURM_EDGE_NODE_JUMP_USER", config["ssh_config"]["user"]
+            ),
+        }
+        jump_key = os.environ.get("SLURM_EDGE_NODE_JUMP_KEY")
+        jump_password = os.environ.get("SLURM_EDGE_NODE_JUMP_PASSWORD")
+        if jump_key and jump_password:
+            raise ValueError(
+                "SLURM_EDGE_NODE_JUMP_KEY and SLURM_EDGE_NODE_JUMP_PASSWORD cannot both be set."
+            )
+        if jump_key:
+            jump_config["key_path"] = jump_key
+        if jump_password:
+            jump_config["password"] = jump_password
+        extra_opts = shlex.split(os.environ.get("SLURM_EDGE_NODE_JUMP_OPTS_EXTRA", ""))
+        if extra_opts:
+            jump_config["extra_opts"] = extra_opts
+        jump_force_tty = os.environ.get("SLURM_EDGE_NODE_JUMP_FORCE_TTY")
+        if jump_force_tty:
+            jump_config["force_tty"] = jump_force_tty.lower() in {"1", "true", "yes"}
+
+        config["ssh_config"]["jump_host"] = jump_config
+        # When a jump host is used, post-login commands/forced TTY on the final host
+        # become redundant.
+        config["ssh_config"].pop("post_login_command", None)
+        config["ssh_config"].pop("force_tty", None)
 
     # Step 2.2: Handle pre_deployed_env_path requirement for production
     if _is_production(deployment):

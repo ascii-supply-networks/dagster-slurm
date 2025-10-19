@@ -33,7 +33,7 @@ class SSHConnectionResource(ConfigurableResource):
 
             # With a proxy jump host
             jump_box = SSHConnectionResource(
-                host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
+                host="jump.example.com", user="jumpuser", password="jump_password"
             )
             ssh_via_jump = SSHConnectionResource(
                 host="private-cluster",
@@ -83,7 +83,7 @@ class SSHConnectionResource(ConfigurableResource):
     jump_host: Optional["SSHConnectionResource"] = Field(
         default=None,
         description="An optional SSH connection to use as a proxy jump host (-J equivalent). "
-        "The jump host must use key-based authentication.",
+        "The jump host may use key- or password-based authentication.",
     )
     extra_opts: List[str] = Field(
         default_factory=list,
@@ -128,6 +128,11 @@ class SSHConnectionResource(ConfigurableResource):
     def uses_password_auth(self) -> bool:
         """Returns True if using password-based authentication."""
         return self.password is not None
+
+    @property
+    def requires_tty(self) -> bool:
+        """Many clusters demand a TTY for password/OTP prompts."""
+        return self.force_tty or self.uses_password_auth
 
     @classmethod
     def from_env(
@@ -242,7 +247,7 @@ class SSHConnectionResource(ConfigurableResource):
                 "-o",
                 "PubkeyAuthentication=no",
                 "-o",
-                "NumberOfPasswordPrompts=1",
+                "NumberOfPasswordPrompts=3",
             ]
 
         return [

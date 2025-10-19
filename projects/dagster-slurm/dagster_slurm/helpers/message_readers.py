@@ -6,7 +6,9 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, Optional, cast
+
+import shlex
 
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
@@ -157,6 +159,7 @@ class SSHMessageReader(PipesMessageReader):
         self.max_reconnect_attempts = max_reconnect_attempts
         self.logger = get_dagster_logger()
         self._proc: Optional[subprocess.Popen[str]] = None
+        self._pexpect_child: Optional[Any] = None
         self._stop_flag = threading.Event()
         self._reader_thread: Optional[threading.Thread] = None
 
@@ -205,6 +208,13 @@ class SSHMessageReader(PipesMessageReader):
                         self._proc.kill()
                     except:  # noqa: E722
                         pass
+            if self._pexpect_child is not None:
+                try:
+                    self._pexpect_child.close(force=True)
+                except Exception as e:  # pragma: no cover - best effort cleanup
+                    self.logger.debug(f"Error closing tail session: {e}")
+                finally:
+                    self._pexpect_child = None
 
             # Wait for reader thread to finish
             if self._reader_thread and self._reader_thread.is_alive():
@@ -221,6 +231,7 @@ class SSHMessageReader(PipesMessageReader):
         """
         reconnect_count = 0
         total_message_count = 0
+        return_code: int = 0
 
         while not self._stop_flag.is_set():
             try:
@@ -236,53 +247,83 @@ class SSHMessageReader(PipesMessageReader):
                     f"{' '.join(str(x) for x in ssh_cmd)}"
                 )
 
-                self._proc = subprocess.Popen(
-                    ssh_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,
-                )
+                self._proc = None
+                if self._requires_password_auth() and not self.control_path:
+                    child = self._spawn_tail_with_password(ssh_cmd)
+                    self._pexpect_child = child
+                    reconnect_count = 0
+                    message_count = 0
+
+                    for line in self._iter_pexpect_lines(child):
+                        if self._stop_flag.is_set():
+                            break
+
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        try:
+                            message = json.loads(line)
+                            handler.handle_message(message)
+                            message_count += 1
+                            total_message_count += 1
+                        except json.JSONDecodeError as je:
+                            self.logger.warning(
+                                f"Malformed JSON message: {line[:100]}... Error: {je}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
+
+                    if child.isalive():
+                        child.close(force=True)
+
+                    self._pexpect_child = None
+                    return_code = (
+                        child.exitstatus if child.exitstatus is not None else 0
+                    )
+                    stderr = ""
+                else:
+                    self._proc = subprocess.Popen(
+                        ssh_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                    )
 
                 # Reset reconnect counter on successful start
                 reconnect_count = 0
                 message_count = 0
 
-                # Read messages from tail
-                for line in self._proc.stdout:  # type: ignore
-                    if self._stop_flag.is_set():
-                        break
+                if self._proc:
+                    for line in self._proc.stdout:  # type: ignore
+                        if self._stop_flag.is_set():
+                            break
 
-                    line = line.strip()
-                    if not line:
-                        continue
+                        line = line.strip()
+                        if not line:
+                            continue
 
-                    try:
-                        # Parse JSON message
-                        message = json.loads(line)
+                        try:
+                            message = json.loads(line)
+                            handler.handle_message(message)
+                            message_count += 1
+                            total_message_count += 1
+                        except json.JSONDecodeError as je:
+                            self.logger.warning(
+                                f"Malformed JSON message: {line[:100]}... Error: {je}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
 
-                        # Pass parsed dict to handler
-                        handler.handle_message(message)
-                        message_count += 1
-                        total_message_count += 1
-
-                        # self.logger.debug(
-                        #     f"Received message {total_message_count}: "
-                        #     f"{message.get('method', 'unknown')}"
-                        # )
-
-                    except json.JSONDecodeError as je:
-                        # Log malformed JSON but continue
-                        self.logger.warning(
-                            f"Malformed JSON message: {line[:100]}... Error: {je}"
-                        )
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Error handling message: {e}", exc_info=True
-                        )
-
-                # Process exited
-                return_code = self._proc.wait()
+                    return_code = self._proc.wait()
+                    stderr = self._proc.stderr.read() if self._proc.stderr else ""
+                else:
+                    stderr = ""
 
                 if self._stop_flag.is_set():
                     # Normal shutdown
@@ -294,8 +335,6 @@ class SSHMessageReader(PipesMessageReader):
                     break
 
                 # Unexpected exit - try to reconnect
-                stderr = self._proc.stderr.read() if self._proc.stderr else ""
-
                 if message_count > 0:
                     # We received messages, so connection was working
                     self.logger.info(
@@ -391,11 +430,38 @@ class SSHMessageReader(PipesMessageReader):
                 ]
             )
         else:
-            # Password auth without ControlMaster won't work
-            raise RuntimeError(
-                "Password authentication requires ControlMaster. "
-                "Pass control_path to SSHMessageReader constructor."
-            )
+            if self._requires_password_auth():
+                # Will be handled via pexpect; command remains usable.
+                base_cmd.extend(
+                    [
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                        "-o",
+                        "NumberOfPasswordPrompts=3",
+                    ]
+                )
+            elif self.ssh_config.uses_key_auth:
+                key_path_opt = self.ssh_config.key_path
+                if not key_path_opt:
+                    raise RuntimeError(
+                        "SSH key authentication requires key_path to be set"
+                    )
+                key_path = cast(str, key_path_opt)
+                base_cmd.extend(
+                    [
+                        "-i",
+                        key_path,
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "BatchMode=yes",
+                    ]
+                )
+            else:
+                raise RuntimeError(
+                    "Password authentication requires ControlMaster. "
+                    "Pass control_path to SSHMessageReader constructor."
+                )
 
         # Add extra options
         base_cmd.extend(self.ssh_config.extra_opts)
@@ -423,3 +489,110 @@ class SSHMessageReader(PipesMessageReader):
             f"  ssh {self.ssh_config.user}@{self.ssh_config.host} -p {self.ssh_config.port} "
             f"'cat {self.remote_path}'"
         )
+
+    def _requires_password_auth(self) -> bool:
+        if self.ssh_config.uses_password_auth:
+            return True
+        if self.ssh_config.jump_host and self.ssh_config.jump_host.uses_password_auth:
+            return True
+        return False
+
+    def _collect_passwords(self) -> list[str]:
+        passwords: list[str] = []
+        if self.ssh_config.jump_host and self.ssh_config.jump_host.password:
+            passwords.append(self.ssh_config.jump_host.password)
+        if self.ssh_config.password:
+            passwords.append(self.ssh_config.password)
+        return passwords
+
+    def _spawn_tail_with_password(self, ssh_cmd: list[str]):
+        try:
+            import pexpect  # type: ignore
+        except ImportError as exc:  # pragma: no cover - dependency guard
+            raise RuntimeError(
+                "Password-based log tailing requires the 'pexpect' package. "
+                "Install it with 'pip install pexpect'."
+            ) from exc
+
+        cmd_str = " ".join(shlex.quote(part) for part in ssh_cmd)
+        self.logger.debug(f"Spawning password-based tail: {cmd_str}")
+        child = pexpect.spawn(cmd_str, timeout=30, encoding="utf-8")
+        passwords = self._collect_passwords()
+        if not passwords:
+            child.close(force=True)
+            raise RuntimeError(
+                "Password authentication requested but no password provided."
+            )
+
+        pw_index = 0
+        fallback_password = passwords[-1]
+        fallback_attempts = 0
+        prompt_timeout = 30
+
+        while True:
+            index = child.expect(
+                [
+                    r"(?i)password:",
+                    r"(?i)passphrase",
+                    r"(?i)verification code",
+                    r"(?i)otp",
+                    pexpect.EOF,
+                    pexpect.TIMEOUT,
+                ],
+                timeout=prompt_timeout,
+            )
+
+            if index in (0, 1):
+                if pw_index < len(passwords):
+                    child.sendline(passwords[pw_index])
+                    pw_index += 1
+                    continue
+                if fallback_password and fallback_attempts < 3:
+                    child.sendline(fallback_password)
+                    fallback_attempts += 1
+                    continue
+                child.close(force=True)
+                raise RuntimeError("Authentication failed: no password remaining")
+            if index in (2, 3):  # OTP or verification code
+                # Prompt user interactively via /dev/tty if possible.
+                try:
+                    with (
+                        open("/dev/tty", "w", encoding="utf-8", buffering=1) as tty_out,
+                        open("/dev/tty", "r", encoding="utf-8", buffering=1) as tty_in,
+                    ):
+                        tty_out.write(
+                            f"Enter verification code for {self.ssh_config.host}: "
+                        )
+                        tty_out.flush()
+                        code = tty_in.readline().strip()
+                except OSError:
+                    child.close(force=True)
+                    raise RuntimeError(
+                        "OTP required but no interactive TTY is available."
+                    )
+                if not code:
+                    child.close(force=True)
+                    raise RuntimeError("Empty OTP provided; aborting tail session")
+                child.sendline(code)
+                continue
+            if index == 4:  # EOF
+                break
+            if index == 5:  # TIMEOUT
+                break
+
+        child.timeout = 5
+        return child
+
+    def _iter_pexpect_lines(self, child):
+        import pexpect  # type: ignore
+
+        while not self._stop_flag.is_set():
+            try:
+                chunk = child.readline()
+                if not chunk:
+                    continue
+                yield chunk
+            except pexpect.TIMEOUT:
+                continue
+            except pexpect.EOF:
+                break
