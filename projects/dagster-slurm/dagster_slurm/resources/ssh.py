@@ -131,8 +131,12 @@ class SSHConnectionResource(ConfigurableResource):
 
     @property
     def requires_tty(self) -> bool:
-        """Many clusters demand a TTY for password/OTP prompts."""
-        return self.force_tty or self.uses_password_auth
+        """Return True when the resource explicitly requires a TTY."""
+        if self.force_tty:
+            return True
+        if self.jump_host and self.jump_host.requires_tty:
+            return True
+        return False
 
     @classmethod
     def from_env(
