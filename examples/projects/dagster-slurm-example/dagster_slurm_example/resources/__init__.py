@@ -75,7 +75,9 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
         "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(),
-        "port": int(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22")),
+        "port": int(
+            dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="22")  # type: ignore[arg-type]
+        ),
         "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(),
         "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
     },
