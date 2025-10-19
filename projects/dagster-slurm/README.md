@@ -93,8 +93,42 @@ go to http://localhost:3000 and you should see the dagster webserver running.
 
 #### real HPC supercomputer execution
 
-- large data
-- you have to adapt the configuration to target your specific HPC deployment
+- Targets clusters like VSC-5 (Vienna Scientific Cluster) and Leonardo (CINECA).
+- Assets run against the real scheduler, so ensure the account has queue access and quotas.
+
+Create a `.env` file with the edge-node credentials and select the site profile:
+
+```dotenv
+# example for VSC-5
+SLURM_EDGE_NODE=vmos.vsc.ac.at
+SLURM_EDGE_NODE_PORT=22
+SLURM_EDGE_NODE_USER=<<your_user>>
+SLURM_EDGE_NODE_PASSWORD=<<your_password>>
+SLURM_DEPLOYMENT_BASE_PATH=/home/<<your_user>>/pipelines/deployments
+SLURM_SUPERCOMPUTER_SITE=vsc5
+DAGSTER_DEPLOYMENT=staging_supercomputer
+```
+
+With the variables in place, validate connectivity and job submission using the staging supercomputer profile:
+
+```bash
+pixi run start-staging-supercomputer
+```
+
+> Staging mode packages dependencies on demand. Expect the first asset run to upload a new environment bundle before dispatching the Slurm job.
+
+For production you should pre-build and upload the execution environment via your CI/CD pipeline (see `examples/scripts/deploy_environment.py`). Capture the output path and expose it to Dagster as `CI_DEPLOYED_ENVIRONMENT_PATH`:
+
+```bash
+python scripts/deploy_environment.py --platform linux-64  # run from CI
+# -> produces deployment_metadata.json with "deployment_path"
+
+export CI_DEPLOYED_ENVIRONMENT_PATH=/home/submitter/pipelines/deployments/prod-env-20251018
+export DAGSTER_DEPLOYMENT=production_supercomputer
+pixi run start-production-supercomputer
+```
+
+If `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, the production profile will refuse to start to prevent accidental live builds on the cluster.
 
 
 ## contributing

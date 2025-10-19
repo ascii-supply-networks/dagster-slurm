@@ -88,7 +88,7 @@ Jobs now skip environment packaging and launch noticeably faster.
 
 | Variable | Purpose | Notes |
 | --- | --- | --- |
-| `SLURM_EDGE_NODE_HOST` | SSH hostname of the login/edge node. | Use the public login node for your site. |
+| `SLURM_EDGE_NODE_HOST` | SSH hostname of the login/edge node. | - |
 | `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22` on most clusters. |
 | `SLURM_EDGE_NODE_USER` | Username used for SSH and job submission. | Often tied to an LDAP or project account. |
 | `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH` | Authentication method. | Prefer key-based auth; set whichever your site supports. |
@@ -96,7 +96,9 @@ Jobs now skip environment packaging and launch noticeably faster.
 | `SLURM_PARTITION` | Default partition/queue name. | Override per asset for specialised queues. |
 | `SLURM_GPU_PARTITION` (optional) | GPU-enabled partition. | Useful when mixing CPU and GPU jobs. |
 | `SLURM_QOS` (optional) | QoS or account string. | Required on clusters that enforce QoS selection. |
+| `SLURM_SUPERCOMPUTER_SITE` (optional) | Enables site-specific overrides (`vsc5`, `leonardo`, …). | Adds TTY/post-login hops or queue defaults. |
 | `DAGSTER_DEPLOYMENT` | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project. |
+| `CI_DEPLOYED_ENVIRONMENT_PATH` (production only) | Path to a pre-built environment bundle on the cluster. | Required when using `production_supercomputer`. |
 
 Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
 
@@ -106,7 +108,7 @@ Set the variables in a `.env` file or your orchestrator’s secret store. Passwo
 
 ```dotenv title=".env.vsc5"
 # SSH / edge node access
-SLURM_EDGE_NODE_HOST=login.vsc5.tuwien.ac.at
+SLURM_EDGE_NODE=vmos.vsc.ac.at          # falls back to *_HOST if you prefer
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=your_vsc_username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
@@ -116,6 +118,7 @@ SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
 SLURM_PARTITION=main       # cpu partition
 SLURM_GPU_PARTITION=gpu    # optional: GPU jobs
 SLURM_QOS=normal
+SLURM_SUPERCOMPUTER_SITE=vsc5
 
 # Dagster deployment selector
 DAGSTER_DEPLOYMENT=production_supercomputer
@@ -126,7 +129,7 @@ VSC-5 prefers key-based authentication; ensure your SSH config allows agent forw
 ### Sample configuration: Leonardo (CINECA)
 
 ```dotenv title=".env.leonardo"
-SLURM_EDGE_NODE_HOST=login.leonardo.cineca.it
+SLURM_EDGE_NODE=login.leonardo.cineca.it
 SLURM_EDGE_NODE_PORT=2222          # Leonardo exposes a dedicated SSH port
 SLURM_EDGE_NODE_USER=your_cineca_id
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
@@ -135,12 +138,25 @@ SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/your_cineca_id/dagster-sl
 SLURM_PARTITION=batch              # CPU login partition
 SLURM_GPU_PARTITION=dcgpusr        # NVIDIA A100 (change to boost if applicable)
 SLURM_QOS=normal
+SLURM_SUPERCOMPUTER_SITE=leonardo
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
 Leonardo requires you to have an active project allocation; ensure the partition (`dcgpusr`, `boost`, or `cm`) matches your access level. If your site enforces Kerberos or OTP, rely on `ProxyCommand` in your SSH configuration or wrap dagster-slurm with a jump host.
 
-With the variables defined, restart your Dagster code location. The same assets now submit through your HPC scheduler.
+With the variables defined, restart your Dagster code location. To dry-run against the real scheduler while still allowing on-the-fly environment packaging, point `DAGSTER_DEPLOYMENT=staging_supercomputer` and run:
+
+```bash
+pixi run start-staging-supercomputer
+```
+
+For production workloads you should publish the environment bundle ahead of time (e.g. via CI using `python scripts/deploy_environment.py`). Once you export the uploaded path as `CI_DEPLOYED_ENVIRONMENT_PATH`, switch to `DAGSTER_DEPLOYMENT=production_supercomputer` and start Dagster:
+
+```bash
+pixi run start-production-supercomputer
+```
+
+The production preset refuses to start if `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, ensuring clusters never build environments during business-critical runs.
 
 ## Execution modes
 
