@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 from typing import Type
+import base64
 
 
 import pytest
@@ -187,6 +188,39 @@ def slurm_cluster_ready():
             time.sleep(5)
 
     pytest.fail("❌ SLURM cluster is not ready")
+
+
+@pytest.fixture(scope="session")
+def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
+    """Provision a temporary SSH key for the Docker SLURM cluster."""
+
+    key_dir = tmp_path_factory.mktemp("slurm_ssh")
+    key_path = key_dir / "id_ed25519"
+
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+        check=True,
+    )
+    key_path.chmod(0o600)
+
+    pub_key = key_path.with_suffix(".pub").read_text().strip()
+    encoded_key = base64.b64encode(pub_key.encode()).decode()
+
+    command = (
+        "mkdir -p /home/submitter/.ssh && "
+        f"echo {encoded_key} | base64 -d >> /home/submitter/.ssh/authorized_keys && "
+        "chown -R submitter:submitter /home/submitter/.ssh && "
+        "chmod 700 /home/submitter/.ssh && chmod 600 /home/submitter/.ssh/authorized_keys"
+    )
+
+    subprocess.run(
+        ["docker", "exec", "slurmctld", "bash", "-lc", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    return key_path
 
 
 @pytest.fixture(scope="session")

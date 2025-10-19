@@ -74,12 +74,11 @@ PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
-        "host": str(dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(default="127.0.0.1")),
-        "port": int(str(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="2223"))),
-        "user": str(dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter")),
-        "password": str(
-            dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default="submitter")
-        ),
+        "host": dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(default="127.0.0.1"),
+        "port": int(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="2223")),
+        "user": dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter"),
+        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
+        "key_path": dg.EnvVar("SLURM_EDGE_NODE_KEY_PATH").get_value(default=None),
     },
     "slurm_queue_config": {
         "partition": "batch",
@@ -288,9 +287,18 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     ssh_cfg["user"] = os.environ.get(
         "SLURM_EDGE_NODE_USER", ssh_cfg.get("user", "submitter")
     )
-    ssh_cfg["password"] = os.environ.get(
-        "SLURM_EDGE_NODE_PASSWORD", ssh_cfg.get("password", "submitter")
-    )
+    password_value = os.environ.get("SLURM_EDGE_NODE_PASSWORD")
+    if password_value:
+        ssh_cfg["password"] = password_value
+    else:
+        ssh_cfg["password"] = None
+
+    key_value = os.environ.get("SLURM_EDGE_NODE_KEY_PATH")
+    if key_value:
+        ssh_cfg["key_path"] = key_value
+        ssh_cfg["password"] = None
+    else:
+        ssh_cfg["key_path"] = ssh_cfg.get("key_path")
 
     # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
     target_host = ssh_cfg.get("host")
