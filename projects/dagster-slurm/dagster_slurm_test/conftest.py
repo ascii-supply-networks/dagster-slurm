@@ -1,5 +1,6 @@
 """Pytest configuration and fixtures."""
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Type
@@ -203,22 +204,37 @@ def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
     )
     key_path.chmod(0o600)
 
-    pub_key = key_path.with_suffix(".pub").read_text().strip()
+    pub_key = key_path.with_suffix(".pub").read_text().strip() + "\n"
     encoded_key = base64.b64encode(pub_key.encode()).decode()
 
     command = (
-        "mkdir -p /home/submitter/.ssh && "
-        f"echo {encoded_key} | base64 -d >> /home/submitter/.ssh/authorized_keys && "
-        "chown -R submitter:submitter /home/submitter/.ssh && "
-        "chmod 700 /home/submitter/.ssh && chmod 600 /home/submitter/.ssh/authorized_keys"
+        "set -euo pipefail; "
+        "mkdir -p /home/submitter/.ssh; "
+        "chmod 700 /home/submitter/.ssh; "
+        "touch /home/submitter/.ssh/authorized_keys; "
+        "chmod 600 /home/submitter/.ssh/authorized_keys; "
+        "tmp=$(mktemp); "
+        f"echo {encoded_key} | base64 -d > $tmp; "
+        "grep -qxF -f $tmp /home/submitter/.ssh/authorized_keys || cat $tmp >> /home/submitter/.ssh/authorized_keys; "
+        "rm -f $tmp; "
+        "chown -R submitter:submitter /home/submitter/.ssh"
     )
 
-    subprocess.run(
-        ["docker", "exec", "slurmctld", "bash", "-lc", command],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    key_installed = False
+    for container in ("slurm-login", "slurmctld"):
+        try:
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-lc", command],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            key_installed = True
+        except subprocess.CalledProcessError:
+            continue
+
+    if not key_installed:
+        pytest.fail("Failed to install SSH key on SLURM Docker cluster")
 
     return key_path
 
@@ -229,33 +245,116 @@ def deployment_metadata_file(example_project_dir: Path) -> Path:
     return example_project_dir / "deployment_metadata.json"
 
 
+def _detect_deploy_command(example_project_dir: Path) -> list[str]:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+
+    logger.info(f"Auto-detected platform: {system}/{machine}")
+
+    manifest_path = example_project_dir / "pyproject.toml"
+
+    base_cmd = [
+        "pixi",
+        "run",
+        "--manifest-path",
+        str(manifest_path),
+        "-e",
+        "dev",
+        "--frozen",
+        "python",
+        "scripts/deploy_environment.py",
+    ]
+
+    if system == "darwin" and "arm" in machine:
+        return base_cmd + ["--platform", "linux-aarch64"]
+    if system == "linux" and ("aarch64" in machine or "arm" in machine):
+        return base_cmd
+    # default to x86_64 linux build
+    return base_cmd
+
+
+def _ensure_remote_deployment(
+    metadata_file: Path,
+    deployment_path: str,
+    example_project_dir: Path,
+    prep_cmd: list[str],
+) -> str:
+    """Verify the remote environment exists; recreate it if missing."""
+
+    pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
+
+    def _check(path: str) -> bool:
+        check_cmd = [
+            "docker",
+            "exec",
+            "slurmctld",
+            "bash",
+            "-lc",
+            f"test -f {path}/activate.sh && test -d {path}/env",
+        ]
+        return subprocess.run(check_cmd, capture_output=True, text=True).returncode == 0
+
+    if _check(deployment_path):
+        return deployment_path
+
+    logger.info(
+        "Remote deployment at %s missing expected files. Recreating via %s",
+        deployment_path,
+        " ".join(prep_cmd),
+    )
+
+    subprocess.run(
+        prep_cmd,
+        cwd=example_project_dir,
+        check=True,
+        capture_output=True,
+        env=pixi_env,
+    )
+
+    with open(metadata_file) as f:
+        updated_metadata = json.load(f)
+
+    new_path = updated_metadata.get("deployment_path", deployment_path)
+
+    if _check(new_path):
+        return new_path
+
+    logger.error("Remote deployment verification failed for path %s", new_path)
+    pytest.fail("Production deployment could not be validated even after rebuild")
+
+    return new_path  # pragma: no cover
+
+
 @pytest.fixture
 def deployment_metadata(example_project_dir: Path) -> Dict[str, Any]:
     """Read deployment metadata for PRODUCTION_DOCKER mode."""
+
     metadata_file = example_project_dir / "deployment_metadata.json"
+    prep_cmd = _detect_deploy_command(example_project_dir)
+    pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
 
     if not metadata_file.exists():
-        system = platform.system().lower()
-        machine = platform.machine().lower()
-
-        logger.info(f"Auto-detected platform: {system}/{machine}")
-
-        if system == "darwin" and "arm" in machine:
-            prep_cmd = ["pixi", "run", "deploy-prod-docker-aarch"]
-        elif system == "linux" and ("aarch64" in machine or "arm" in machine):
-            prep_cmd = ["pixi", "run", "deploy-prod-docker"]
-        else:
-            # assuming default of x86_64 linux
-            prep_cmd = ["pixi", "run", "deploy-prod-docker"]
         subprocess.run(
             prep_cmd,
             cwd=example_project_dir,
             check=True,
             capture_output=True,
+            env=pixi_env,
         )
 
     with open(metadata_file) as f:
-        return json.load(f)
+        metadata = json.load(f)
+
+    deployment_path = metadata.get("deployment_path")
+    if deployment_path:
+        new_path = _ensure_remote_deployment(
+            metadata_file, deployment_path, example_project_dir, prep_cmd
+        )
+        if new_path != deployment_path:
+            with open(metadata_file) as f:
+                metadata = json.load(f)
+
+    return metadata
 
 
 # @pytest.fixture(scope="session")

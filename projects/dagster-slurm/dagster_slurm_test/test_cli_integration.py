@@ -16,14 +16,18 @@ from .test_utils import run_dg_command, assert_materialization_success
 @pytest.fixture(scope="module")
 def docker_slurm_env(docker_ssh_key: Path) -> Dict[str, str]:
     return {
-        "SLURM_EDGE_NODE_HOST": "127.0.0.1",
-        "SLURM_EDGE_NODE_PORT": "2223",
-        "SLURM_EDGE_NODE_USER": "submitter",
+        "SLURM_EDGE_NODE_HOST": os.environ.get("SLURM_EDGE_NODE_HOST", "127.0.0.1"),
+        "SLURM_EDGE_NODE_PORT": os.environ.get("SLURM_EDGE_NODE_PORT", "2223"),
+        "SLURM_EDGE_NODE_USER": os.environ.get("SLURM_EDGE_NODE_USER", "submitter"),
+        "SLURM_EDGE_NODE_PASSWORD": os.environ.get(
+            "SLURM_EDGE_NODE_PASSWORD", "submitter"
+        ),
         "SLURM_EDGE_NODE_KEY_PATH": str(docker_ssh_key),
-        "SLURM_EDGE_NODE_PASSWORD": "",
-        "SLURM_EDGE_NODE_JUMP_HOST": "",
-        "SLURM_EDGE_NODE_JUMP_USER": "",
-        "SLURM_EDGE_NODE_JUMP_PASSWORD": "",
+        "SLURM_EDGE_NODE_JUMP_HOST": os.environ.get("SLURM_EDGE_NODE_JUMP_HOST", ""),
+        "SLURM_EDGE_NODE_JUMP_USER": os.environ.get("SLURM_EDGE_NODE_JUMP_USER", ""),
+        "SLURM_EDGE_NODE_JUMP_PASSWORD": os.environ.get(
+            "SLURM_EDGE_NODE_JUMP_PASSWORD", ""
+        ),
     }
 
 
