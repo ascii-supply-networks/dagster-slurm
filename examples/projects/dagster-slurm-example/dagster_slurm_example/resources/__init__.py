@@ -111,18 +111,30 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
 
 SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Vienna Scientific Cluster (VSC-5) queue defaults.
+    # Off-hackathon CPU slots (active)
     "vsc5": {
         "slurm_queue_config": {
             "partition": "zen3_0512",
             "qos": "zen3_0512_devel",
-            "reservation": "dagster-slurm_21",
         },
         "slurm_session_config": {
             "partition": "zen3_0512",
             "qos": "zen3_0512_devel",
-            "reservation": "dagster-slurm_21",
         },
     },
+    # Hackathon GPU reservation (toggle manually when the reservation is active)
+    # "vsc5": {
+    #     "slurm_queue_config": {
+    #         "partition": "zen3_0512_a100x2",
+    #         "qos": "zen3_0512_a100x2",
+    #         "reservation": "dagster-slurm_21",  # use _22 / _23 on later days
+    #     },
+    #     "slurm_session_config": {
+    #         "partition": "zen3_0512_a100x2",
+    #         "qos": "zen3_0512_a100x2",
+    #         "reservation": "dagster-slurm_21",
+    #     },
+    # },
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
         "slurm_queue_config": {
@@ -275,6 +287,27 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
             _deep_merge(config, copy.deepcopy(site_override))
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
+
+    # Allow explicit env overrides for partition / QoS / reservation so they can be matched
+    # to whatever window is currently available on the supercomputer (e.g. hackathon slots).
+    queue_cfg = config.setdefault("slurm_queue_config", {})
+    session_cfg = config.setdefault("slurm_session_config", {})
+
+    def _apply_queue_field(env_var: str, field: str):
+        value = os.environ.get(env_var)
+        if value is None:
+            return
+        value = value.strip()
+        if value:
+            queue_cfg[field] = value
+            session_cfg[field] = value
+        else:
+            queue_cfg.pop(field, None)
+            session_cfg.pop(field, None)
+
+    _apply_queue_field("SLURM_SUPERCOMPUTER_PARTITION", "partition")
+    _apply_queue_field("SLURM_SUPERCOMPUTER_QOS", "qos")
+    _apply_queue_field("SLURM_SUPERCOMPUTER_RESERVATION", "reservation")
 
     # Apply environment overrides for the SSH connection settings.
     ssh_cfg = config.setdefault("ssh_config", {})
