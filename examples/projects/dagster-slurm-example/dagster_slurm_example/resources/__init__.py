@@ -152,10 +152,12 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
         "slurm_queue_config": {
-            "partition": "batch",
+            "partition": "boost_usr_dbg",
+            "qos": "boost_qos_bdbg",
         },
         "slurm_session_config": {
-            "partition": "batch",
+            "partition": "boost_usr_dbg",
+            "qos": "boost_qos_bdbg",
         },
     },
 }

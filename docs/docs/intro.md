@@ -145,13 +145,20 @@ SLURM_EDGE_NODE_USER=a08trb02               # replace with your CINECA username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
 
 SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/a08trb02/dagster-slurm
-SLURM_PARTITION=batch                        # default CPU queue
+SLURM_PARTITION=cpu_usr_dbg                 # replace with a partition your project can access
 SLURM_QOS=normal
 SLURM_SUPERCOMPUTER_SITE=leonardo
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-Leonardo requires you to have an active project allocation; ensure the partition (`batch`, `cm`, `dcgpusr`, or `boost`) matches your access level. GPU queues also need the matching QoS (e.g. `dcgpuqos`). If your site enforces OTP/Kerberos, configure a local `~/.ssh/config` entry or a bastion jump host—`dagster-slurm` will reuse that setup automatically.
+Leonardo requires you to have an active project allocation; the permitted partitions depend on your account type (`cpu_usr_prod`, `cpu_usr_dbg`, `dcgpu_usr_prod`, `cm_usr_dbg`, training queues, etc.). Verify your entitlements on the cluster:
+
+```bash
+sacctmgr show assoc where user=$USER format=Cluster,Account,Partition,QOS%20
+sinfo -s
+```
+
+If the output does not list `batch`, pick one of the partitions above that appears in both commands. GPU queues also need the matching QoS (e.g. `dcgpuqos`). Training accounts typically use `/leonardo/home/usertrain/<user>/…` for storage—adjust `SLURM_DEPLOYMENT_BASE_PATH` accordingly. If your site enforces OTP/Kerberos, configure a local `~/.ssh/config` entry or a bastion jump host—`dagster-slurm` will reuse that setup automatically.
 
 With the variables defined, restart your Dagster code location. To dry-run against the real scheduler while still allowing on-the-fly environment packaging, point `DAGSTER_DEPLOYMENT=staging_supercomputer` and run:
 
