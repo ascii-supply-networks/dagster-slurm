@@ -116,12 +116,16 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "slurm_queue_config": {
             "partition": "zen3_0512",
             "qos": "zen3_0512_devel",
-            "gpus_per_node": 1,
+            "time_limit": "01:00:00",
+            "num_nodes": 1,
+            "gpus_per_node": 0,
         },
         "slurm_session_config": {
             "partition": "zen3_0512",
             "qos": "zen3_0512_devel",
-            "gpus_per_node": 1,
+            "time_limit": "01:00:00",
+            "num_nodes": 1,
+            "gpus_per_node": 0,
         },
     },
     # Hackathon GPU reservation (toggle manually when the reservation is active)
