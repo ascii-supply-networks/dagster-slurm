@@ -116,10 +116,12 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "slurm_queue_config": {
             "partition": "zen3_0512",
             "qos": "zen3_0512_devel",
+            "gpus_per_node": 1,
         },
         "slurm_session_config": {
             "partition": "zen3_0512",
             "qos": "zen3_0512_devel",
+            "gpus_per_node": 1,
         },
     },
     # Hackathon GPU reservation (toggle manually when the reservation is active)
@@ -127,12 +129,17 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     #     "slurm_queue_config": {
     #         "partition": "zen3_0512_a100x2",
     #         "qos": "zen3_0512_a100x2",
-    #         "reservation": "dagster-slurm_21",  # use _22 / _23 on later days
+    #         "reservation": "dagster-slurm_22", # _23 on later days
+    #         "gpus_per_node": 1,
+    #         "num_nodes": 1,
+    #         "mem": None,
     #     },
     #     "slurm_session_config": {
     #         "partition": "zen3_0512_a100x2",
     #         "qos": "zen3_0512_a100x2",
     #         "reservation": "dagster-slurm_21",
+    #         "gpus_per_node": 1,
+    #         "num_nodes": 1,
     #     },
     # },
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.

@@ -41,6 +41,15 @@ class SlurmSessionResource(ConfigurableResource):
     enable_session: bool = Field(
         default=True, description="Enable session mode for operator fusion"
     )
+    gpus_per_node: int = Field(
+        default=0, description="GPUs per node requested for the allocation"
+    )
+    qos: Optional[str] = Field(
+        default=None, description="QoS override for the session allocation"
+    )
+    reservation: Optional[str] = Field(
+        default=None, description="Reservation override for the session allocation"
+    )
 
     # Private attributes for state management
     _allocation: Optional["SlurmAllocation"] = PrivateAttr(default=None)
@@ -160,6 +169,43 @@ class SlurmSessionResource(ConfigurableResource):
 
         if partition:
             script_lines.append(f"#SBATCH --partition={partition}")
+
+        def _normalize_optional(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                cleaned = value.strip()
+                return cleaned or None
+            return str(value)
+
+        qos = _normalize_optional(self.qos) or _normalize_optional(
+            getattr(self.slurm.queue, "qos", None)
+        )
+        if qos:
+            script_lines.append(f"#SBATCH --qos={qos}")
+
+        reservation = _normalize_optional(self.reservation) or _normalize_optional(
+            getattr(self.slurm.queue, "reservation", None)
+        )
+        if reservation:
+            script_lines.append(f"#SBATCH --reservation={reservation}")
+
+        gpus_per_node = self.gpus_per_node or getattr(
+            self.slurm.queue, "gpus_per_node", 0
+        )
+
+        final_num_nodes: Optional[int] = None
+        if self.num_nodes and self.num_nodes > 0:
+            final_num_nodes = self.num_nodes
+
+        if gpus_per_node and final_num_nodes == 1 and gpus_per_node == 1:
+            final_num_nodes = None
+
+        if final_num_nodes:
+            script_lines.append(f"#SBATCH --nodes={final_num_nodes}")
+
+        if gpus_per_node:
+            script_lines.append(f"#SBATCH --gres=gpu:{gpus_per_node}")
 
         script_lines.extend(
             [

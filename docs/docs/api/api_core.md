@@ -198,6 +198,8 @@ Execute asset with optional resource overrides.
   * **\*\*kwargs** – Passed to client.run()
 * **Yields:**
   Dagster events
+* **Return type:**
+  `PipesClientCompletedInvocation`
 
 ### Examples
 
@@ -270,7 +272,7 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#id42)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id43)]*
 
 #### slurm *: `Optional`[[`SlurmResource`](#id19)]*
 
@@ -319,7 +321,7 @@ Execute payload locally.
 * **Yields:**
   Dagster events (materializations, logs, etc.)
 * **Return type:**
-  `Iterator`
+  `PipesClientCompletedInvocation`
 
 ### *class* dagster_slurm.RayLauncher(\*\*data)
 
@@ -402,7 +404,7 @@ ssh = SSHConnectionResource(
 
 # With a proxy jump host
 jump_box = SSHConnectionResource(
-    host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
+    host="jump.example.com", user="jumpuser", password="jump_password"
 )
 ssh_via_jump = SSHConnectionResource(
     host="private-cluster",
@@ -502,6 +504,10 @@ Build base SSH command, including proxy and auth options.
 
 #### post_login_command *: `Optional`[`str`]*
 
+#### *property* requires_tty *: bool*
+
+Return True when the resource explicitly requires a TTY.
+
 #### user *: `str`*
 
 #### *property* uses_key_auth *: bool*
@@ -522,7 +528,7 @@ Represents a running Slurm allocation.
   * **slurm_job_id** (`int`)
   * **nodes** (`List`[`str`])
   * **working_dir** (`str`)
-  * **config** ([`SlurmSessionResource`](#id42))
+  * **config** ([`SlurmSessionResource`](#id43))
 
 #### cancel(ssh_pool)
 
@@ -578,7 +584,7 @@ Works in two modes:
 * **Parameters:**
   * **slurm_resource** ([`SlurmResource`](#id19))
   * **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
-  * **session_resource** (`Optional`[[`SlurmSessionResource`](#id42)])
+  * **session_resource** (`Optional`[[`SlurmSessionResource`](#id43)])
   * **cleanup_on_failure** (`bool`)
   * **debug_mode** (`bool`)
   * **auto_detect_platform** (`bool`)
@@ -601,7 +607,7 @@ Execute payload on Slurm cluster with real-time log streaming.
 * **Yields:**
   Dagster events
 * **Return type:**
-  `Iterator`
+  `PipesClientCompletedInvocation`
 
 ### *class* dagster_slurm.SlurmQueueConfig(\*\*data)
 
@@ -654,7 +660,7 @@ but requires an explicit, pre-configured SSHConnectionResource to be provided.
 * **Return type:**
   [`SlurmResource`](#id19)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id54), `PartialResource`]]*
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id55), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
@@ -721,7 +727,7 @@ This is the proper Dagster resource lifecycle hook.
 * **Parameters:**
   **context** (`InitResourceContext`)
 * **Return type:**
-  [`SlurmSessionResource`](#id42)
+  [`SlurmSessionResource`](#id43)
 
 #### slurm *: SlurmResource*
 
@@ -903,6 +909,8 @@ Execute asset with optional resource overrides.
   * **\*\*kwargs** – Passed to client.run()
 * **Yields:**
   Dagster events
+* **Return type:**
+  `PipesClientCompletedInvocation`
 
 ### Examples
 
@@ -975,7 +983,7 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#id42)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id43)]*
 
 #### slurm *: `Optional`[[`SlurmResource`](#id19)]*
 
@@ -1021,7 +1029,7 @@ but requires an explicit, pre-configured SSHConnectionResource to be provided.
 * **Return type:**
   [`SlurmResource`](#id19)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id54), `PartialResource`]]*
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id55), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
@@ -1054,7 +1062,7 @@ ssh = SSHConnectionResource(
 
 # With a proxy jump host
 jump_box = SSHConnectionResource(
-    host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
+    host="jump.example.com", user="jumpuser", password="jump_password"
 )
 ssh_via_jump = SSHConnectionResource(
     host="private-cluster",
@@ -1154,6 +1162,10 @@ Build base SSH command, including proxy and auth options.
 
 #### post_login_command *: `Optional`[`str`]*
 
+#### *property* requires_tty *: bool*
+
+Return True when the resource explicitly requires a TTY.
+
 #### user *: `str`*
 
 #### *property* uses_key_auth *: bool*
@@ -1225,7 +1237,7 @@ This is the proper Dagster resource lifecycle hook.
 * **Parameters:**
   **context** (`InitResourceContext`)
 * **Return type:**
-  [`SlurmSessionResource`](#id42)
+  [`SlurmSessionResource`](#id43)
 
 #### slurm *: SlurmResource*
 
