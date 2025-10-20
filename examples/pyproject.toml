@@ -121,6 +121,12 @@ cwd = "."
 env = { DAGSTER_DEPLOYMENT = "staging_docker" }
 description = "Start dagster webserver in staging mode"
 
+[tool.pixi.tasks.start-staging-hpc]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
+description = "Start dagster webserver in staging mode connected to supercomputer using SSH"
+
 [tool.pixi.tasks.deploy-prod-docker]
 cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py"
 cwd = "."
