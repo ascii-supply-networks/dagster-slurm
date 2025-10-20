@@ -585,8 +585,8 @@ Works in two modes:
   * **slurm_resource** ([`SlurmResource`](#id19))
   * **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
   * **session_resource** (`Optional`[[`SlurmSessionResource`](#id43)])
-  * **cleanup_on_failure** (`bool`)
-  * **debug_mode** (`bool`)
+  * **cleanup_on_failure** (`bool`) – Delete run artefacts even when the run fails. The removal happens asynchronously so Dagster does not block on large directories.
+  * **debug_mode** (`bool`) – Keep uploaded bundles and logs on the edge node (disables the asynchronous cleanup). Useful while debugging remote runs.
   * **auto_detect_platform** (`bool`)
   * **pack_platform** (`Optional`[`str`])
   * **pre_deployed_env_path** (`Optional`[`str`])

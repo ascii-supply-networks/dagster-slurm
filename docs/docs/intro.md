@@ -102,10 +102,11 @@ Jobs now skip environment packaging and launch noticeably faster.
 | `SLURM_SUPERCOMPUTER_SITE` (optional) | Enables site-specific overrides (`vsc5`, `leonardo`, …). | Adds TTY/post-login hops or queue defaults. |
 | `DAGSTER_DEPLOYMENT` | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project. |
 | `CI_DEPLOYED_ENVIRONMENT_PATH` (production only) | Path to a pre-built environment bundle on the cluster. | Required when using `production_supercomputer`. |
+| `DAGSTER_SLURM_SSH_CONTROL_DIR` (optional) | Directory for SSH ControlMaster sockets. | Override when `/tmp` is not writable; defaults to `~/.ssh/dagster-slurm`. |
 
 Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
 
-> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically falls back to plain SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower.
+> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically switches to one-off SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your security policy restricts where control sockets can live.
 
 ### Sample configuration: Vienna Scientific Cluster (VSC-5)
 
@@ -133,23 +134,24 @@ DAGSTER_DEPLOYMENT=production_supercomputer
 VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).  
 If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation answers both prompts (you'll still need to handle one-time passcodes manually when they expire). Dagster prints `Enter … for vsc5.vsc.ac.at:` on your terminal—type the OTP there to continue. Password-based sessions automatically request a pseudo-TTY, so you only need `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
 
+> **Cleanup behaviour:** Completed runs trigger an asynchronous `rm -rf` of the run directory on the edge node. This keeps quotas tidy without delaying Dagster shutdown. Set `debug_mode=True` on the relevant `ComputeResource` while debugging to keep run folders around for manual inspection.
+
 ### Sample configuration: Leonardo (CINECA)
 
 ```dotenv title=".env.leonardo"
-SLURM_EDGE_NODE=login.leonardo.cineca.it
-SLURM_EDGE_NODE_PORT=2222          # Leonardo exposes a dedicated SSH port
-SLURM_EDGE_NODE_USER=your_cineca_id
+SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it
+SLURM_EDGE_NODE_PORT=2222
+SLURM_EDGE_NODE_USER=a08trb02               # replace with your CINECA username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
 
-SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/your_cineca_id/dagster-slurm
-SLURM_PARTITION=batch              # CPU login partition
-SLURM_GPU_PARTITION=dcgpusr        # NVIDIA A100 (change to boost if applicable)
+SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/a08trb02/dagster-slurm
+SLURM_PARTITION=batch                        # default CPU queue
 SLURM_QOS=normal
 SLURM_SUPERCOMPUTER_SITE=leonardo
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-Leonardo requires you to have an active project allocation; ensure the partition (`dcgpusr`, `boost`, or `cm`) matches your access level. If your site enforces Kerberos or OTP, rely on `ProxyCommand` in your SSH configuration or wrap dagster-slurm with a jump host.
+Leonardo requires you to have an active project allocation; ensure the partition (`batch`, `cm`, `dcgpusr`, or `boost`) matches your access level. GPU queues also need the matching QoS (e.g. `dcgpuqos`). If your site enforces OTP/Kerberos, configure a local `~/.ssh/config` entry or a bastion jump host—`dagster-slurm` will reuse that setup automatically.
 
 With the variables defined, restart your Dagster code location. To dry-run against the real scheduler while still allowing on-the-fly environment packaging, point `DAGSTER_DEPLOYMENT=staging_supercomputer` and run:
 
