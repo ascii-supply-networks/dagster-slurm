@@ -8,6 +8,22 @@ from pydantic import Field
 from .ssh import SSHConnectionResource
 
 
+def _optional_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
+    """Return an optional string from the environment.
+
+    Treat blank strings as unset so callers can clear defaults by exporting an empty value.
+    """
+    raw_value = os.getenv(var_name)
+    if raw_value is None:
+        return default
+
+    cleaned = raw_value.strip()
+    if not cleaned:
+        return None
+
+    return cleaned
+
+
 class SlurmQueueConfig(dg.ConfigurableResource):
     """Default Slurm job submission parameters.
     These can be overridden per-asset via metadata or function arguments.
@@ -20,10 +36,19 @@ class SlurmQueueConfig(dg.ConfigurableResource):
     time_limit: str = Field(default="00:30:00", description="Job time limit (HH:MM:SS)")
     cpus: int = Field(default=2, description="CPUs per task")
     gpus_per_node: int = Field(default=0, description="GPUs per node")
-    mem: str = Field(default="4096M", description="Memory allocation")
-    mem_per_cpu: str = Field(
-        default="",
+    mem: Optional[str] = Field(
+        default="4096M",
+        description="Memory allocation (omit to use partition defaults)",
+    )
+    mem_per_cpu: Optional[str] = Field(
+        default=None,
         description="Memory per CPU (alternative to mem, usually leave empty)",
+    )
+    qos: Optional[str] = Field(
+        default=None, description="Quality of service / service level"
+    )
+    reservation: Optional[str] = Field(
+        default=None, description="Reservation name for scheduled windows"
     )
 
 
@@ -53,15 +78,15 @@ class SlurmResource(ConfigurableResource):
             ssh=ssh,
             # The rest of the configuration is still loaded from the environment
             queue=SlurmQueueConfig(
-                partition=os.getenv(
-                    "SLURM_PARTITION", "interactive"
-                ),  # Sensible default
+                partition=os.getenv("SLURM_PARTITION", "interactive"),
                 time_limit=os.getenv("SLURM_TIME", "00:30:00"),
                 cpus=int(os.getenv("SLURM_CPUS", "2")),
-                mem=os.getenv("SLURM_MEM", "4096M"),
-                mem_per_cpu=os.getenv("SLURM_MEM_PER_CPU", ""),
+                mem=_optional_env("SLURM_MEM", "4096M"),
+                mem_per_cpu=_optional_env("SLURM_MEM_PER_CPU"),
                 num_nodes=int(os.getenv("SLURM_NUM_NODES", "1")),
                 gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
+                qos=_optional_env("SLURM_QOS"),
+                reservation=_optional_env("SLURM_RESERVATION"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
         )
@@ -75,10 +100,12 @@ class SlurmResource(ConfigurableResource):
                 partition=os.getenv("SLURM_PARTITION", ""),
                 time_limit=os.getenv("SLURM_TIME", "00:10:00"),
                 cpus=int(os.getenv("SLURM_CPUS", "1")),
-                mem=os.getenv("SLURM_MEM", "256M"),
-                mem_per_cpu=os.getenv("SLURM_MEM_PER_CPU", ""),
+                mem=_optional_env("SLURM_MEM", "256M"),
+                mem_per_cpu=_optional_env("SLURM_MEM_PER_CPU"),
                 num_nodes=int(os.getenv("SLURM_NUM_NODES", "1")),
                 gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
+                qos=_optional_env("SLURM_QOS"),
+                reservation=_optional_env("SLURM_RESERVATION"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
         )

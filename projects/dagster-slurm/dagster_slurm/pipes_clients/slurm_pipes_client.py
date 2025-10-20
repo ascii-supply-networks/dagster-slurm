@@ -664,9 +664,12 @@ class SlurmPipesClient(PipesClient):
                 - nodes: int
                 - cpus_per_task: int
                 - mem: str (e.g., "32G")
+                - mem_per_cpu: str (e.g., "8G")
                 - time_limit: str (e.g., "02:00:00")
                 - gpus_per_node: int
                 - partition: str
+                - qos: str
+                - reservation: str
 
         Returns:
             Complete sbatch command string
@@ -684,17 +687,47 @@ class SlurmPipesClient(PipesClient):
         time_limit = self.slurm.queue.time_limit
         cpus = self.slurm.queue.cpus
         mem = self.slurm.queue.mem
+        mem_per_cpu = getattr(self.slurm.queue, "mem_per_cpu", None)
+        qos = getattr(self.slurm.queue, "qos", None)
+        reservation = getattr(self.slurm.queue, "reservation", None)
         num_nodes = self.slurm.queue.num_nodes
-        gpus_per_node = None
+        gpus_per_node = self.slurm.queue.gpus_per_node
+        mem_override = False
 
         # Override with extra_opts if provided
         if extra_opts:
             partition = extra_opts.get("partition", partition)
             time_limit = extra_opts.get("time_limit", time_limit)
             cpus = extra_opts.get("cpus_per_task", cpus)
-            mem = extra_opts.get("mem", mem)
+            if "mem" in extra_opts:
+                mem = extra_opts.get("mem")
+                mem_override = True
+            mem_per_cpu = extra_opts.get("mem_per_cpu", mem_per_cpu)
             num_nodes = extra_opts.get("nodes", num_nodes)
-            gpus_per_node = extra_opts.get("gpus_per_node")
+            gpus_per_node = extra_opts.get("gpus_per_node", gpus_per_node)
+            qos = extra_opts.get("qos", qos)
+            reservation = extra_opts.get("reservation", reservation)
+
+        def _normalize_optional(value: Optional[Any]) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                cleaned = value.strip()
+                return cleaned or None
+            return str(value)
+
+        partition = _normalize_optional(partition)
+        mem = _normalize_optional(mem)
+        mem_per_cpu = _normalize_optional(mem_per_cpu)
+        qos = _normalize_optional(qos)
+        reservation = _normalize_optional(reservation)
+
+        if gpus_per_node and not mem_override and not mem_per_cpu:
+            # GPU partitions usually enforce fixed memory per GPU and reject explicit --mem.
+            mem = None
+        if mem_per_cpu and mem:
+            # Avoid passing both directives simultaneously.
+            mem = None
 
         # Build command with final values
         if partition:
@@ -702,15 +735,33 @@ class SlurmPipesClient(PipesClient):
 
         sbatch_opts.append(f"-t {time_limit}")
         sbatch_opts.append(f"-c {cpus}")
-        sbatch_opts.append(f"--mem={mem}")
+        if mem_per_cpu:
+            sbatch_opts.append(f"--mem-per-cpu={mem_per_cpu}")
+        elif mem:
+            sbatch_opts.append(f"--mem={mem}")
 
         # Add node count (important for multi-node jobs)
-        if num_nodes:
-            sbatch_opts.append(f"-N {num_nodes}")
+        final_num_nodes: Optional[int] = None
+        if num_nodes and num_nodes > 0:
+            final_num_nodes = num_nodes
 
-        # Add GPUs if requested
+        if gpus_per_node and final_num_nodes == 1 and gpus_per_node == 1:
+            # VSC-5 GPU partition treats --nodes=1 as requesting a full node (2 GPUs).
+            # Dropping -N lets Slurm allocate the half-node slot implicitly.
+            final_num_nodes = None
+
+        if final_num_nodes:
+            sbatch_opts.append(f"-N {final_num_nodes}")
+
+        # Add GPUs if requested. Many clusters expect --gres rather than --gpus-per-node
+        # when combined with explicit --nodes requests.
         if gpus_per_node:
-            sbatch_opts.append(f"--gpus-per-node={gpus_per_node}")
+            sbatch_opts.append(f"--gres=gpu:{gpus_per_node}")
+
+        if qos:
+            sbatch_opts.append(f"--qos={qos}")
+        if reservation:
+            sbatch_opts.append(f"--reservation={reservation}")
 
         sbatch_opts.append(script_path)
 
