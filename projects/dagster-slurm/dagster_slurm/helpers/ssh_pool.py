@@ -2,7 +2,6 @@
 
 import shlex
 import subprocess
-import sys
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -55,12 +54,9 @@ class SSHConnectionPool:
         ]
 
         needs_tty = self.config.requires_tty
-
-        if needs_tty or self.config.uses_password_auth:
-            # ControlMaster interferes with TTY/password flows; use fallback mode.
+        if needs_tty:
             self.logger.debug(
-                "TTY/password-auth detected; skipping SSH ControlMaster for %s",
-                self.config.host,
+                "TTY requested; skipping SSH ControlMaster for %s", self.config.host
             )
             self._fallback_mode = True
             self.control_path = None
@@ -96,18 +92,26 @@ class SSHConnectionPool:
             cmd.extend(self.config.extra_opts)
             cmd.append(f"{self.config.user}@{self.config.host}")
 
-            result = subprocess.run(  # type: ignore
-                cmd, capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to start SSH master: {result.stderr.strip()}"
+            if self.config.uses_password_auth or (
+                self.config.jump_host and self.config.jump_host.uses_password_auth
+            ):
+                result = self._run_with_password(cmd, self._collect_passwords(), 30)
+                returncode = result.returncode
+                stderr = result.stderr
+            else:
+                completed = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=30
                 )
+                returncode = completed.returncode
+                stderr = completed.stderr
+
+            if returncode != 0:
+                raise RuntimeError(f"Failed to start SSH master: {stderr.strip()}")
 
             self._master_started = True
             auth_method = "key" if self.config.uses_key_auth else "password"
             self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
-        except RuntimeError as exc:
+        except Exception as exc:
             self._fallback_mode = True
             self._fallback_reason = str(exc)
             self.control_path = None
@@ -134,97 +138,50 @@ class SSHConnectionPool:
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
 
         if isinstance(password, (list, tuple)):
-            passwords = list(password)
-        else:
+            passwords = [p for p in password if p]
+        elif password:
             passwords = [password]
+        else:
+            passwords = []
+
         if not passwords:
             raise RuntimeError("No password provided for SSH authentication.")
 
-        pw_index = 0
         fallback_password = passwords[-1]
-        fallback_attempts = 0
+        pw_index = 0
 
         try:
             child = pexpect.spawn(cmd_str, timeout=timeout, encoding="utf-8")
+            prompt_timeout = max(10, min(timeout or 30, 60))
+            stdout_chunks: list[str] = []
 
-            # Derive per-prompt timeout (allow more time on slow clusters).
-            prompt_timeout = max(10, min(timeout if timeout else 30, 60))
+            prompts = [
+                r"(?i)password:",
+                r"(?i)passphrase",
+                r"(?i)verification code",
+                r"(?i)otp",
+                pexpect.EOF,
+                pexpect.TIMEOUT,
+            ]
 
             while True:
-                index = child.expect(
-                    [r"(?i)password:", r"(?i)passphrase", pexpect.EOF, pexpect.TIMEOUT],
-                    timeout=prompt_timeout,
-                )
+                index = child.expect(prompts, timeout=prompt_timeout)
 
-                if index in (0, 1):
+                # Password / passphrase prompts
+                if index in (0, 1, 2, 3):
                     if pw_index < len(passwords):
-                        pw_value = passwords[pw_index]
+                        child.sendline(passwords[pw_index])
                         pw_index += 1
-                        child.sendline(pw_value)
-                        continue
-
-                    if fallback_password and fallback_attempts < 3:
+                    else:
                         child.sendline(fallback_password)
-                        fallback_attempts += 1
-                        continue
-
-                    # We ran out of stored secrets (likely OTP). Prompt the user if possible.
-                    prompt_text = (
-                        child.after.strip()
-                        if child.after
-                        else "additional authentication"
-                    )
-                    prompt_label = prompt_text or "authentication code"
-                    try:
-                        if sys.stdin and sys.stdin.isatty():
-                            output_stream = sys.stdout or sys.__stdout__
-                            if output_stream:
-                                output_stream.write(
-                                    f"Enter {prompt_label} for {self.config.host}: "
-                                )
-                                output_stream.flush()
-                            user_input = sys.stdin.readline().strip()
-                        else:
-                            try:
-                                with (
-                                    open(
-                                        "/dev/tty", "w", encoding="utf-8", buffering=1
-                                    ) as tty_out,
-                                    open(
-                                        "/dev/tty", "r", encoding="utf-8", buffering=1
-                                    ) as tty_in,
-                                ):
-                                    tty_out.write(
-                                        f"Enter {prompt_label} for {self.config.host}: "
-                                    )
-                                    tty_out.flush()
-                                    user_input = tty_in.readline().strip()
-                            except OSError:
-                                raise
-                        if not user_input:
-                            child.close(force=True)
-                            raise RuntimeError(
-                                "Empty response provided for OTP/password prompt."
-                            )
-                    except OSError:
-                        child.close(force=True)
-                        raise RuntimeError(
-                            f"Received {prompt_text} prompt but no interactive TTY is available.\n"
-                            "Provide the OTP/password via configuration or switch to key-based auth."
-                        )
-                    except Exception as exc:  # pragma: no cover - interactive failure
-                        child.close(force=True)
-                        raise RuntimeError(
-                            "Failed to read interactive input for OTP/password"
-                        ) from exc
-
-                    child.sendline(user_input)
                     continue
-                if index == 2:
-                    # EOF - command finished (might be success or failure)
+
+                # EOF -> command finished
+                if index == len(prompts) - 2:
+                    stdout_chunks.append(child.before or "")
                     break
 
-                # Timeout
+                # TIMEOUT
                 last_output = (child.before or "").strip()
                 child.close(force=True)
                 raise TimeoutError(
@@ -234,7 +191,6 @@ class SSHConnectionPool:
 
             child.close()
 
-            # Create a result object similar to subprocess.run
             class Result:
                 def __init__(self, returncode, stdout, stderr):
                     self.returncode = returncode
@@ -242,7 +198,9 @@ class SSHConnectionPool:
                     self.stderr = stderr
 
             return Result(
-                returncode=child.exitstatus or 0, stdout=child.before or "", stderr=""
+                returncode=child.exitstatus or 0,
+                stdout="".join(stdout_chunks),
+                stderr="",
             )
 
         except pexpect.exceptions.ExceptionPexpect as e:
@@ -250,7 +208,7 @@ class SSHConnectionPool:
 
     def __exit__(self, *args):
         """Close master connection."""
-        if self._master_started:
+        if self._master_started and not self._fallback_mode:
             try:
                 subprocess.run(
                     [
@@ -307,6 +265,7 @@ class SSHConnectionPool:
             if needs_tty:
                 ssh_cmd.append("-tt")
             ssh_cmd.extend(self.config.get_proxy_command_opts())
+            ssh_cmd.extend(self.config.extra_opts)
             ssh_cmd.extend(
                 [
                     f"{self.config.user}@{self.config.host}",
@@ -366,17 +325,7 @@ class SSHConnectionPool:
             " ".join(shlex.quote(part) for part in ssh_cmd),
         )
 
-        if self.config.uses_password_auth or (
-            self.config.jump_host and self.config.jump_host.uses_password_auth
-        ):
-            effective_timeout = timeout if timeout is not None else 300
-            result = self._run_with_password(
-                ssh_cmd, self._collect_passwords(), timeout=effective_timeout
-            )
-            returncode = result.returncode
-            stdout = result.stdout
-            stderr = result.stderr
-        else:
+        if self._master_started and not self._fallback_mode:
             result = subprocess.run(
                 ssh_cmd,
                 capture_output=True,
@@ -386,6 +335,27 @@ class SSHConnectionPool:
             returncode = result.returncode
             stdout = result.stdout
             stderr = result.stderr
+        else:
+            if self.config.uses_password_auth or (
+                self.config.jump_host and self.config.jump_host.uses_password_auth
+            ):
+                effective_timeout = timeout if timeout is not None else 300
+                result = self._run_with_password(
+                    ssh_cmd, self._collect_passwords(), timeout=effective_timeout
+                )
+                returncode = result.returncode
+                stdout = result.stdout
+                stderr = result.stderr
+            else:
+                result = subprocess.run(
+                    ssh_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                returncode = result.returncode
+                stdout = result.stdout
+                stderr = result.stderr
 
         if returncode != 0:
             raise RuntimeError(
@@ -483,18 +453,23 @@ class SSHConnectionPool:
             " ".join(shlex.quote(part) for part in scp_cmd),
         )
 
-        if self.config.uses_password_auth or (
-            self.config.jump_host and self.config.jump_host.uses_password_auth
-        ):
-            result = self._run_with_password(
-                scp_cmd, self._collect_passwords(), timeout=300
-            )
-            returncode = result.returncode
-            stderr = result.stderr
-        else:
+        if self._master_started and not self._fallback_mode:
             proc = subprocess.run(scp_cmd, capture_output=True, text=True)
             returncode = proc.returncode
             stderr = proc.stderr
+        else:
+            if self.config.uses_password_auth or (
+                self.config.jump_host and self.config.jump_host.uses_password_auth
+            ):
+                result = self._run_with_password(
+                    scp_cmd, self._collect_passwords(), timeout=300
+                )
+                returncode = result.returncode
+                stderr = result.stderr
+            else:
+                proc = subprocess.run(scp_cmd, capture_output=True, text=True)
+                returncode = proc.returncode
+                stderr = proc.stderr
 
         if returncode != 0:
             raise RuntimeError(
