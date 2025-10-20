@@ -1,7 +1,9 @@
 """SSH connection pooling via ControlMaster."""
 
+import os
 import shlex
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -19,13 +21,17 @@ class SSHConnectionPool:
     Password-based auth uses SSH_ASKPASS for secure password handling.
     """
 
+    _CONTROL_DIR_ENV = "DAGSTER_SLURM_SSH_CONTROL_DIR"
+    _DEFAULT_CONTROL_DIR = Path("~/.ssh/dagster-slurm").expanduser()
+
     def __init__(self, ssh_config: "SSHConnectionResource"):
         self.config = ssh_config
-        self.control_path: Optional[str] = f"/tmp/dagster-ssh-{uuid.uuid4().hex}"
+        self.control_path: Optional[str] = self._prepare_control_path()
         self._master_started = False
         self._fallback_mode = False
         self._fallback_reason: Optional[str] = None
         self.logger = get_dagster_logger()
+        self._lock = threading.RLock()
 
     def _collect_passwords(self) -> list[str]:
         passwords: list[str] = []
@@ -35,9 +41,57 @@ class SSHConnectionPool:
             passwords.append(self.config.password)
         return passwords
 
+    def _prepare_control_path(self) -> Optional[str]:
+        """Return a secure path for the ControlMaster socket or None on failure."""
+        base_dir = os.getenv(self._CONTROL_DIR_ENV)
+        if base_dir:
+            control_dir = Path(base_dir).expanduser()
+        else:
+            control_dir = self._DEFAULT_CONTROL_DIR
+
+        try:
+            control_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(control_dir, 0o700)
+        except Exception as exc:  # pragma: no cover - best effort
+            self.logger.warning(
+                "Could not prepare SSH control directory %s (%s). "
+                "Falling back to non-pooled SSH connections.",
+                control_dir,
+                exc,
+            )
+            return None
+
+        socket_name = f"cm-{uuid.uuid4().hex[:12]}"
+        control_path = control_dir / socket_name
+
+        if len(str(control_path)) >= 100:
+            control_path = control_dir / socket_name[:8]
+
+        return str(control_path)
+
     def __enter__(self):
         """Start SSH ControlMaster."""
         self.logger.debug("Starting SSH ControlMaster...")
+
+        if not self.control_path:
+            self.logger.debug(
+                "Control path unavailable; using direct SSH connections for %s",
+                self.config.host,
+            )
+            self._fallback_mode = True
+            return self
+
+        if self.config.uses_password_auth or (
+            self.config.jump_host and self.config.jump_host.uses_password_auth
+        ):
+            self.logger.debug(
+                "ControlMaster disabled for %s because password-based or jump-host "
+                "authentication is in use.",
+                self.config.host,
+            )
+            self._fallback_mode = True
+            self.control_path = None
+            return self
 
         # Build master connection command
         base_opts = [
@@ -52,15 +106,6 @@ class SSHConnectionPool:
             "-o",
             "LogLevel=ERROR",
         ]
-
-        needs_tty = self.config.requires_tty
-        if needs_tty:
-            self.logger.debug(
-                "TTY requested; skipping SSH ControlMaster for %s", self.config.host
-            )
-            self._fallback_mode = True
-            self.control_path = None
-            return self
 
         try:
             cmd = [
@@ -151,8 +196,10 @@ class SSHConnectionPool:
         pw_index = 0
 
         try:
-            child = pexpect.spawn(cmd_str, timeout=timeout, encoding="utf-8")
-            prompt_timeout = max(10, min(timeout or 30, 60))
+            effective_timeout = timeout or 60
+            child = pexpect.spawn(cmd_str, timeout=effective_timeout, encoding="utf-8")
+            child.delaybeforesend = 0
+            prompt_timeout = max(30, min(effective_timeout, 180))
             stdout_chunks: list[str] = []
 
             prompts = [
@@ -181,13 +228,9 @@ class SSHConnectionPool:
                     stdout_chunks.append(child.before or "")
                     break
 
-                # TIMEOUT
-                last_output = (child.before or "").strip()
-                child.close(force=True)
-                raise TimeoutError(
-                    "Timeout waiting for password prompt"
-                    + (f": {last_output}" if last_output else "")
-                )
+                # TIMEOUT -> assume authentication finished and command running
+                stdout_chunks.append(child.before or "")
+                break
 
             child.close()
 
@@ -240,113 +283,91 @@ class SSHConnectionPool:
             RuntimeError: If command fails or pool not started
 
         """
-        if not self._master_started and not self._fallback_mode:
-            raise RuntimeError("SSH pool not started - use context manager")
+        with self._lock:
+            if not self._master_started and not self._fallback_mode:
+                raise RuntimeError("SSH pool not started - use context manager")
 
-        # Wrap in clean shell
-        remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
-        if self.config.post_login_command:
-            template = self.config.post_login_command
-            if "{cmd}" in template:
-                remote_cmd = template.format(cmd=remote_cmd)
-            else:
-                remote_cmd = f"{template} && {remote_cmd}"
+            # Wrap in clean shell
+            remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
+            if self.config.post_login_command:
+                template = self.config.post_login_command
+                if "{cmd}" in template:
+                    remote_cmd = template.format(cmd=remote_cmd)
+                else:
+                    remote_cmd = f"{template} && {remote_cmd}"
 
-        needs_tty = self.config.requires_tty
+            needs_tty = self.config.requires_tty
 
-        if self._master_started and not self._fallback_mode:
-            ssh_cmd = [
-                "ssh",
-                "-o",
-                f"ControlPath={self.control_path}",
-                "-o",
-                "ControlMaster=no",
-            ]
-            if needs_tty:
-                ssh_cmd.append("-tt")
-            ssh_cmd.extend(self.config.get_proxy_command_opts())
-            ssh_cmd.extend(self.config.extra_opts)
-            ssh_cmd.extend(
-                [
-                    f"{self.config.user}@{self.config.host}",
-                    remote_cmd,
+            if self._master_started and not self._fallback_mode:
+                ssh_cmd = [
+                    "ssh",
+                    "-o",
+                    f"ControlPath={self.control_path}",
+                    "-o",
+                    "ControlMaster=no",
                 ]
-            )
-        else:
-            ssh_cmd = [
-                "ssh",
-                "-p",
-                str(self.config.port),
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-            ]
-            if self.config.uses_key_auth:
-                key_path = self.config.key_path
-                if not key_path:
-                    raise RuntimeError(
-                        "SSH key authentication requires key_path to be set"
+                if needs_tty:
+                    ssh_cmd.append("-tt")
+                ssh_cmd.extend(
+                    [
+                        f"{self.config.user}@{self.config.host}",
+                        remote_cmd,
+                    ]
+                )
+            else:
+                ssh_cmd = [
+                    "ssh",
+                    "-p",
+                    str(self.config.port),
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "LogLevel=ERROR",
+                ]
+                if self.config.uses_key_auth:
+                    key_path = self.config.key_path
+                    if not key_path:
+                        raise RuntimeError(
+                            "SSH key authentication requires key_path to be set"
+                        )
+                    ssh_cmd.extend(
+                        [
+                            "-i",
+                            key_path,
+                            "-o",
+                            "IdentitiesOnly=yes",
+                            "-o",
+                            "BatchMode=yes",
+                        ]
                     )
+                else:
+                    ssh_cmd.extend(
+                        [
+                            "-o",
+                            "NumberOfPasswordPrompts=3",
+                            "-o",
+                            "PreferredAuthentications=password,keyboard-interactive",
+                        ]
+                    )
+                if needs_tty:
+                    ssh_cmd.append("-tt")
+                ssh_cmd.extend(self.config.get_proxy_command_opts())
+                ssh_cmd.extend(self.config.extra_opts)
                 ssh_cmd.extend(
                     [
-                        "-i",
-                        key_path,
-                        "-o",
-                        "IdentitiesOnly=yes",
-                        "-o",
-                        "BatchMode=yes",
+                        f"{self.config.user}@{self.config.host}",
+                        remote_cmd,
                     ]
                 )
-            else:
-                ssh_cmd.extend(
-                    [
-                        "-o",
-                        "NumberOfPasswordPrompts=3",
-                        "-o",
-                        "PreferredAuthentications=password,keyboard-interactive",
-                    ]
-                )
-            if needs_tty:
-                ssh_cmd.append("-tt")
-            ssh_cmd.extend(self.config.get_proxy_command_opts())
-            ssh_cmd.extend(self.config.extra_opts)
-            ssh_cmd.extend(
-                [
-                    f"{self.config.user}@{self.config.host}",
-                    remote_cmd,
-                ]
+
+            self.logger.debug(
+                "Executing SSH command: %s",
+                " ".join(shlex.quote(part) for part in ssh_cmd),
             )
 
-        self.logger.debug(
-            "Executing SSH command: %s",
-            " ".join(shlex.quote(part) for part in ssh_cmd),
-        )
-
-        if self._master_started and not self._fallback_mode:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            returncode = result.returncode
-            stdout = result.stdout
-            stderr = result.stderr
-        else:
-            if self.config.uses_password_auth or (
-                self.config.jump_host and self.config.jump_host.uses_password_auth
-            ):
-                effective_timeout = timeout if timeout is not None else 300
-                result = self._run_with_password(
-                    ssh_cmd, self._collect_passwords(), timeout=effective_timeout
-                )
-                returncode = result.returncode
-                stdout = result.stdout
-                stderr = result.stderr
-            else:
+            if self._master_started and not self._fallback_mode:
                 result = subprocess.run(
                     ssh_cmd,
                     capture_output=True,
@@ -356,15 +377,36 @@ class SSHConnectionPool:
                 returncode = result.returncode
                 stdout = result.stdout
                 stderr = result.stderr
+            else:
+                if self.config.uses_password_auth or (
+                    self.config.jump_host and self.config.jump_host.uses_password_auth
+                ):
+                    effective_timeout = timeout if timeout is not None else 300
+                    result = self._run_with_password(
+                        ssh_cmd, self._collect_passwords(), timeout=effective_timeout
+                    )
+                    returncode = result.returncode
+                    stdout = result.stdout
+                    stderr = result.stderr
+                else:
+                    result = subprocess.run(
+                        ssh_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+                    returncode = result.returncode
+                    stdout = result.stdout
+                    stderr = result.stderr
 
-        if returncode != 0:
-            raise RuntimeError(
-                f"SSH command failed (exit {returncode}): {cmd}\n"
-                f"stdout: {stdout}\n"
-                f"stderr: {stderr}"
-            )
+            if returncode != 0:
+                raise RuntimeError(
+                    f"SSH command failed (exit {returncode}): {cmd}\n"
+                    f"stdout: {stdout}\n"
+                    f"stderr: {stderr}"
+                )
 
-        return stdout
+            return stdout
 
     def write_file(self, content: str, remote_path: str):
         """Write content to remote file via heredoc."""
@@ -393,83 +435,84 @@ class SSHConnectionPool:
         self.run(f"mkdir -p {shlex.quote(remote_dir)}")
 
         # Build SCP command
-        if self._master_started and not self._fallback_mode:
-            scp_cmd = [
-                "scp",
-                "-o",
-                f"ControlPath={self.control_path}",
-                "-P",
-                str(self.config.port),
-            ]
-        else:
-            scp_cmd = [
-                "scp",
-                "-P",
-                str(self.config.port),
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-            ]
-            if self.config.uses_key_auth:
-                key_path = self.config.key_path
-                if not key_path:
-                    raise RuntimeError(
-                        "SSH key authentication requires key_path to be set"
+        with self._lock:
+            if self._master_started and not self._fallback_mode:
+                scp_cmd = [
+                    "scp",
+                    "-o",
+                    f"ControlPath={self.control_path}",
+                    "-P",
+                    str(self.config.port),
+                ]
+            else:
+                scp_cmd = [
+                    "scp",
+                    "-P",
+                    str(self.config.port),
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "LogLevel=ERROR",
+                ]
+                if self.config.uses_key_auth:
+                    key_path = self.config.key_path
+                    if not key_path:
+                        raise RuntimeError(
+                            "SSH key authentication requires key_path to be set"
+                        )
+                    scp_cmd.extend(
+                        [
+                            "-i",
+                            key_path,
+                            "-o",
+                            "IdentitiesOnly=yes",
+                            "-o",
+                            "BatchMode=yes",
+                        ]
                     )
-                scp_cmd.extend(
-                    [
-                        "-i",
-                        key_path,
-                        "-o",
-                        "IdentitiesOnly=yes",
-                        "-o",
-                        "BatchMode=yes",
-                    ]
-                )
-            else:
-                scp_cmd.extend(
-                    [
-                        "-o",
-                        "PreferredAuthentications=password,keyboard-interactive",
-                        "-o",
-                        "NumberOfPasswordPrompts=3",
-                    ]
-                )
+                else:
+                    scp_cmd.extend(
+                        [
+                            "-o",
+                            "PreferredAuthentications=password,keyboard-interactive",
+                            "-o",
+                            "NumberOfPasswordPrompts=3",
+                        ]
+                    )
 
-        scp_cmd.extend(self.config.get_proxy_command_opts())
-        scp_cmd.extend(self.config.extra_opts)
-        scp_cmd.extend(
-            [
-                local_path,
-                f"{self.config.user}@{self.config.host}:{remote_path}",
-            ]
-        )
+            scp_cmd.extend(self.config.get_proxy_command_opts())
+            scp_cmd.extend(self.config.extra_opts)
+            scp_cmd.extend(
+                [
+                    local_path,
+                    f"{self.config.user}@{self.config.host}:{remote_path}",
+                ]
+            )
 
-        self.logger.debug(
-            "Executing SCP command: %s",
-            " ".join(shlex.quote(part) for part in scp_cmd),
-        )
+            self.logger.debug(
+                "Executing SCP command: %s",
+                " ".join(shlex.quote(part) for part in scp_cmd),
+            )
 
-        if self._master_started and not self._fallback_mode:
-            proc = subprocess.run(scp_cmd, capture_output=True, text=True)
-            returncode = proc.returncode
-            stderr = proc.stderr
-        else:
-            if self.config.uses_password_auth or (
-                self.config.jump_host and self.config.jump_host.uses_password_auth
-            ):
-                result = self._run_with_password(
-                    scp_cmd, self._collect_passwords(), timeout=300
-                )
-                returncode = result.returncode
-                stderr = result.stderr
-            else:
+            if self._master_started and not self._fallback_mode:
                 proc = subprocess.run(scp_cmd, capture_output=True, text=True)
                 returncode = proc.returncode
                 stderr = proc.stderr
+            else:
+                if self.config.uses_password_auth or (
+                    self.config.jump_host and self.config.jump_host.uses_password_auth
+                ):
+                    result = self._run_with_password(
+                        scp_cmd, self._collect_passwords(), timeout=300
+                    )
+                    returncode = result.returncode
+                    stderr = result.stderr
+                else:
+                    proc = subprocess.run(scp_cmd, capture_output=True, text=True)
+                    returncode = proc.returncode
+                    stderr = proc.stderr
 
         if returncode != 0:
             raise RuntimeError(
