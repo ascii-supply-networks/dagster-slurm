@@ -140,7 +140,7 @@ If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` an
 
 ```dotenv title=".env.leonardo"
 SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it
-SLURM_EDGE_NODE_PORT=2222
+SLURM_EDGE_NODE_PORT=22                     # Leonardo typically listens on 22; override if your project uses a custom port
 SLURM_EDGE_NODE_USER=a08trb02               # replace with your CINECA username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
 
