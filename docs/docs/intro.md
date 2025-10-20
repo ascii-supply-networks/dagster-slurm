@@ -144,9 +144,9 @@ SLURM_EDGE_NODE_PORT=22                     # Leonardo typically listens on 22; 
 SLURM_EDGE_NODE_USER=a08trb02               # replace with your CINECA username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
 
-SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/a08trb02/dagster-slurm
-SLURM_PARTITION=cpu_usr_dbg                 # replace with a partition your project can access
-SLURM_QOS=normal
+SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/usertrain/a08trb02/dagster-slurm
+SLURM_PARTITION=boost_usr_prod              # or boost_usr_dbg / dcgp_usr_prod depending on your entitlement
+SLURM_QOS=boost_qos_bprod
 SLURM_SUPERCOMPUTER_SITE=leonardo
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
