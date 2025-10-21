@@ -5,7 +5,7 @@ description = "Example project how to use dagster with slurm"
 authors = [{ name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" }]
 requires-python = ">=3.12,<3.13"
 
-[tool.pixi.project]
+[tool.pixi.workspace]
 # not supported  "win-64", due to pip ray
 platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
 channels = ["conda-forge"]
