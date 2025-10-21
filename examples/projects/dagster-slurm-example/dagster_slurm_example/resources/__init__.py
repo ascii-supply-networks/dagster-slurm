@@ -114,8 +114,11 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Off-hackathon CPU slots (active)
     "vsc5": {
         "slurm_queue_config": {
-            "partition": "zen3_0512",
-            "qos": "zen3_0512_devel",
+            # sinfo | grep idle
+            "partition": "zen2_0256_a40x2",
+            "qos": "zen2_0256_a40x2",
+            # "partition": "zen3_0512",
+            # "qos": "zen3_0512_devel",
             "time_limit": "00:10:00",
             "num_nodes": 1,
             "gpus_per_node": 0,
@@ -149,10 +152,14 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
         "slurm_queue_config": {
-            "partition": "batch",
+            # "partition": "boost_usr_prod",
+            # "qos": "boost_qos_bprod",
+            "partition": "boost_fua_dbg",
+            "qos": "boost_qos_bdbg",
         },
         "slurm_session_config": {
-            "partition": "batch",
+            "partition": "boost_usr_sdbg",
+            "qos": "boost_qos_sdbg",
         },
     },
 }

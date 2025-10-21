@@ -6,12 +6,15 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, cast
 
 import shlex
 
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .ssh_pool import SSHConnectionPool
 
 
 class LocalMessageReader(PipesMessageReader):
@@ -143,6 +146,7 @@ class SSHMessageReader(PipesMessageReader):
         control_path: Optional[str] = None,
         reconnect_interval: float = 2.0,
         max_reconnect_attempts: int = 10,
+        ssh_pool: Optional["SSHConnectionPool"] = None,
     ):
         """Args:
         remote_path: Path to messages.jsonl on remote host
@@ -162,6 +166,9 @@ class SSHMessageReader(PipesMessageReader):
         self._pexpect_child: Optional[Any] = None
         self._stop_flag = threading.Event()
         self._reader_thread: Optional[threading.Thread] = None
+        self.total_messages = 0
+        self._ssh_pool = ssh_pool
+        self._fallback_next_line = 1
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
@@ -236,11 +243,23 @@ class SSHMessageReader(PipesMessageReader):
         while not self._stop_flag.is_set():
             try:
                 # Start tail process
-                ssh_cmd = self._build_ssh_tail_command()
+                ssh_cmd_optional = self._build_ssh_tail_command()
 
-                if not all(ssh_cmd):
-                    self.logger.error(f"SSH command contains None values: {ssh_cmd}")
-                    return
+                if ssh_cmd_optional is None:
+                    handled, reconnect_count, total_message_count, stop_loop = (
+                        self._poll_messages_with_pool(
+                            handler,
+                            reconnect_count,
+                            total_message_count,
+                        )
+                    )
+                    if stop_loop:
+                        break
+                    if handled:
+                        continue
+
+                assert ssh_cmd_optional is not None
+                ssh_cmd: list[str] = ssh_cmd_optional
 
                 self.logger.debug(
                     f"Starting tail (attempt {reconnect_count + 1}): "
@@ -267,6 +286,7 @@ class SSHMessageReader(PipesMessageReader):
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
+                            self.total_messages = total_message_count
                         except json.JSONDecodeError as je:
                             self.logger.warning(
                                 f"Malformed JSON message: {line[:100]}... Error: {je}"
@@ -311,6 +331,7 @@ class SSHMessageReader(PipesMessageReader):
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
+                            self.total_messages = total_message_count
                         except json.JSONDecodeError as je:
                             self.logger.warning(
                                 f"Malformed JSON message: {line[:100]}... Error: {je}"
@@ -383,7 +404,82 @@ class SSHMessageReader(PipesMessageReader):
         #     f"Message reader finished. Total messages received: {total_message_count}"
         # )
 
-    def _build_ssh_tail_command(self) -> list[str]:
+    def _poll_messages_with_pool(
+        self,
+        handler,
+        reconnect_count: int,
+        total_message_count: int,
+    ) -> tuple[bool, int, int, bool]:
+        """Poll messages.jsonl via SSH pool when ControlMaster is unavailable."""
+        if not self._ssh_pool:
+            self.logger.error(
+                "SSHMessageReader fallback requires an SSHConnectionPool "
+                "when ControlMaster is unavailable."
+            )
+            self._stop_flag.wait(self.reconnect_interval)
+            return True, reconnect_count, total_message_count, self._stop_flag.is_set()
+
+        quoted_path = shlex.quote(self.remote_path)
+        next_line = self._fallback_next_line
+        message_count = 0
+
+        self.logger.debug(
+            "Polling %s for Pipes messages via SSH pool fallback",
+            self.remote_path,
+        )
+
+        while not self._stop_flag.is_set():
+            try:
+                output = self._ssh_pool.run(
+                    f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
+                )
+            except Exception as exc:
+                if not self._stop_flag.is_set():
+                    self.logger.debug("Polling messages file failed: %s", exc)
+                break
+
+            if output:
+                lines = [line.strip() for line in output.splitlines()]
+                lines = [line for line in lines if line]
+                if lines:
+                    for line in lines:
+                        try:
+                            message = json.loads(line)
+                            handler.handle_message(message)
+                            message_count += 1
+                            total_message_count += 1
+                            self.total_messages = total_message_count
+                        except json.JSONDecodeError as je:
+                            self.logger.warning(
+                                f"Malformed JSON message: {line[:100]}... Error: {je}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
+                    next_line += len(lines)
+
+            self._stop_flag.wait(self.reconnect_interval)
+
+        self._fallback_next_line = next_line
+
+        if message_count == 0:
+            reconnect_count += 1
+            if reconnect_count >= self.max_reconnect_attempts:
+                self.logger.error(
+                    f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. "
+                    f"Total messages received: {total_message_count}"
+                )
+                return True, reconnect_count, total_message_count, True
+        else:
+            reconnect_count = 0
+
+        if self._stop_flag.is_set():
+            return True, reconnect_count, total_message_count, True
+
+        return True, reconnect_count, total_message_count, False
+
+    def _build_ssh_tail_command(self) -> Optional[list[str]]:
         """Build SSH command to tail the remote messages file.
 
         Returns:
@@ -431,7 +527,8 @@ class SSHMessageReader(PipesMessageReader):
             )
         else:
             if self._requires_password_auth():
-                # Will be handled via pexpect; command remains usable.
+                if self._ssh_pool:
+                    return None
                 base_cmd.extend(
                     [
                         "-o",
@@ -516,7 +613,8 @@ class SSHMessageReader(PipesMessageReader):
 
         cmd_str = " ".join(shlex.quote(part) for part in ssh_cmd)
         self.logger.debug(f"Spawning password-based tail: {cmd_str}")
-        child = pexpect.spawn(cmd_str, timeout=30, encoding="utf-8")
+        child = pexpect.spawn(cmd_str, timeout=120, encoding="utf-8")
+        child.delaybeforesend = 0
         passwords = self._collect_passwords()
         if not passwords:
             child.close(force=True)
@@ -527,7 +625,7 @@ class SSHMessageReader(PipesMessageReader):
         pw_index = 0
         fallback_password = passwords[-1]
         fallback_attempts = 0
-        prompt_timeout = 30
+        prompt_timeout = 120
 
         while True:
             index = child.expect(
@@ -577,7 +675,7 @@ class SSHMessageReader(PipesMessageReader):
                 continue
             if index == 4:  # EOF
                 break
-            if index == 5:  # TIMEOUT
+            if index == 5:  # TIMEOUT -> assume command started
                 break
 
         child.timeout = 5

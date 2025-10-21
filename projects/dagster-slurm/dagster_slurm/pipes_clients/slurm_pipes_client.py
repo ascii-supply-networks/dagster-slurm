@@ -1,6 +1,7 @@
 """Slurm Pipes client for remote execution."""
 
 import platform
+import shlex
 import re
 import signal
 import subprocess
@@ -203,6 +204,7 @@ class SlurmPipesClient(PipesClient):
                     remote_path=messages_path,
                     ssh_config=self.slurm.ssh,
                     control_path=ssh_pool.control_path,
+                    ssh_pool=ssh_pool,
                 )
 
                 with open_pipes_session(
@@ -259,6 +261,13 @@ class SlurmPipesClient(PipesClient):
                             extra_slurm_opts=extra_slurm_opts,
                         )
 
+                    self._maybe_emit_final_logs(
+                        message_reader=message_reader,
+                        ssh_pool=ssh_pool,
+                        run_dir=run_dir,
+                        job_id=job_id,
+                    )
+
                     self.logger.info(f"Job {job_id} completed successfully")
 
                     # Collect metrics
@@ -283,8 +292,7 @@ class SlurmPipesClient(PipesClient):
                 # Cleanup (unless debug mode)
                 if not self.debug_mode:
                     try:
-                        ssh_pool.run(f"rm -rf {run_dir}")
-                        self.logger.info(f"Cleaned up remote directory: {run_dir}")
+                        self._schedule_async_cleanup(ssh_pool, run_dir)
                     except Exception as e:
                         self.logger.warning(f"Cleanup failed: {e}")
 
@@ -302,8 +310,7 @@ class SlurmPipesClient(PipesClient):
             if self.cleanup_on_failure and not self.debug_mode and run_dir:
                 try:
                     with ssh_pool:
-                        ssh_pool.run(f"rm -rf {run_dir}")
-                        self.logger.info(f"Cleaned up remote directory: {run_dir}")
+                        self._schedule_async_cleanup(ssh_pool, run_dir)
                 except Exception as cleanup_error:
                     self.logger.warning(f"Cleanup failed: {cleanup_error}")
             elif self.debug_mode and run_dir:
@@ -641,6 +648,53 @@ class SlurmPipesClient(PipesClient):
 
         return job_id
 
+    def _maybe_emit_final_logs(
+        self,
+        message_reader,
+        ssh_pool: SSHConnectionPool,
+        run_dir: str,
+        job_id: int,
+    ) -> None:
+        """Emit stdout/stderr once if Pipes streaming produced no messages."""
+
+        if not isinstance(message_reader, SSHMessageReader):
+            return
+
+        if getattr(message_reader, "total_messages", 0):
+            return
+
+        log_paths = [
+            (f"{run_dir}/slurm-{job_id}.out", "stdout"),
+            (f"{run_dir}/slurm-{job_id}.err", "stderr"),
+        ]
+
+        for path, label in log_paths:
+            try:
+                content = ssh_pool.run(f"cat {path} 2>/dev/null || true")
+                if content.strip():
+                    self.logger.warning(
+                        f"Streaming unavailable; final {label} for job {job_id}:\n{content}"
+                    )
+            except Exception as exc:
+                self.logger.debug(
+                    f"Could not fetch final {label} for job {job_id}: {exc}"
+                )
+
+    def _schedule_async_cleanup(
+        self, ssh_pool: SSHConnectionPool, run_dir: str
+    ) -> None:
+        """Trigger remote directory cleanup without waiting for completion."""
+        quoted_dir = shlex.quote(run_dir)
+        try:
+            ssh_pool.run(f"nohup rm -rf {quoted_dir} >/dev/null 2>&1 &")
+            self.logger.info(
+                "Triggered asynchronous cleanup of remote directory: %s", run_dir
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to initiate async cleanup for {run_dir}"
+            ) from exc
+
     def _build_sbatch_command(
         self,
         job_name: str,
@@ -788,6 +842,38 @@ class SlurmPipesClient(PipesClient):
         def stream_file(remote_path: str, output_stream, prefix: str):
             try:
                 tail_cmd = self._build_tail_command(remote_path)
+                if tail_cmd is None:
+                    next_line = 1
+                    quoted_path = shlex.quote(remote_path)
+                    self.logger.debug(
+                        "Streaming %s via polling fallback (ControlMaster unavailable)",
+                        remote_path,
+                    )
+                    while not stop_streaming.is_set():
+                        try:
+                            output = ssh_pool.run(
+                                f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
+                            )
+                        except Exception as exc:
+                            if not stop_streaming.is_set():
+                                self.logger.debug(
+                                    "Polling fallback for %s failed: %s",
+                                    remote_path,
+                                    exc,
+                                )
+                            break
+
+                        if output:
+                            lines = output.splitlines()
+                            if lines:
+                                for line in lines:
+                                    output_stream.write(f"{prefix}{line}\n")
+                                output_stream.flush()
+                                next_line += len(lines)
+
+                        stop_streaming.wait(1.0)
+                    return
+
                 proc = subprocess.Popen(
                     tail_cmd,
                     stdout=subprocess.PIPE,
@@ -864,8 +950,8 @@ class SlurmPipesClient(PipesClient):
                 if not state:
                     state_check_count += 1
 
-                    # If we've seen empty state multiple times, check sacct
-                    if state_check_count >= 3:
+                    if state_check_count >= 2:
+                        resolved_state = None
                         try:
                             detailed_output = ssh_pool.run(
                                 f"sacct -j {job_id} -o JobID,State,ExitCode -P 2>/dev/null || true"
@@ -874,55 +960,78 @@ class SlurmPipesClient(PipesClient):
                                 f"Detailed sacct output:\n{detailed_output}"
                             )
 
-                            # Parse sacct output
                             for line in detailed_output.strip().split("\n"):
                                 if str(job_id) in line and "CANCELLED" in line.upper():
                                     self.logger.warning(
                                         f"Job {job_id} was cancelled externally"
                                     )
                                     self._cancellation_requested = True
-                                    # Give logs time to catch up
                                     time.sleep(2)
                                     raise RuntimeError(
                                         f"Job {job_id} was cancelled externally (detected via sacct). "
                                         f"The job may have been cancelled by scancel or administrator action."
                                     )
+                                if str(job_id) in line:
+                                    parts = line.split("|")
+                                    if len(parts) >= 2:
+                                        resolved_state = parts[1].strip().upper()
                         except RuntimeError:
-                            raise  # Re-raise cancellation detection
+                            raise
                         except Exception as e:
                             self.logger.debug(f"Could not get detailed job info: {e}")
 
-                    # Continue polling
-                    if state_check_count < 12:
-                        self.logger.debug(
-                            f"Job {job_id} state unknown (attempt {state_check_count}/12)"
-                        )
-                        time.sleep(5)
-                        continue
-                    else:
-                        # State unknown for too long
-                        self.logger.warning(
-                            f"Job {job_id} state unknown for {state_check_count * 5}s. "
-                            f"Assuming completion."
-                        )
-                        break
+                        if not resolved_state:
+                            try:
+                                scontrol_output = ssh_pool.run(
+                                    f"scontrol show job {job_id} 2>/dev/null || true"
+                                )
+                                match = re.search(
+                                    r"JobState=([A-Z_]+)", scontrol_output or ""
+                                )
+                                if match:
+                                    resolved_state = match.group(1).upper()
+                            except Exception as e:
+                                self.logger.debug(
+                                    f"Could not get scontrol job info: {e}"
+                                )
 
-                # Check for COMPLETING state (transitional state before terminal)
+                        if resolved_state:
+                            state = resolved_state
+                            last_state = None
+                            state_check_count = 0
+
+                    if state:
+                        self.logger.debug(
+                            f"Resolved job {job_id} state via accounting: {state}"
+                        )
+                        continue
+
+                    if state_check_count < 5:
+                        self.logger.debug(
+                            f"Job {job_id} state unknown (attempt {state_check_count}/5)"
+                        )
+                        time.sleep(1)
+                        continue
+
+                    self.logger.warning(
+                        f"Job {job_id} state unknown for {state_check_count}s. "
+                        f"Assuming completion."
+                    )
+                    break
+
+                # From here on state is non-empty
                 if state == "COMPLETING":
                     self.logger.debug(
                         f"Job {job_id} is completing, waiting for terminal state..."
                     )
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
 
-                # Handle terminal states
                 if state in TERMINAL_STATES:
                     self.logger.info(f"Job {job_id} reached terminal state: {state}")
 
-                    # Give streaming threads time to catch final output
-                    time.sleep(3)
+                    time.sleep(1)
 
-                    # Check if it's a cancellation state
                     if state in {"CANCELLED", "PREEMPTED"}:
                         self.logger.warning(f"Job {job_id} was {state}")
                         self._cancellation_requested = True
@@ -931,19 +1040,17 @@ class SlurmPipesClient(PipesClient):
                             f"This may have been triggered by scancel, administrator action, or resource limits."
                         )
 
-                    # Check for other failure states
                     if state != "COMPLETED":
                         raise RuntimeError(
                             f"Job {job_id} did not complete successfully. Final state: {state}. "
                             f"Check logs for details."
                         )
 
-                    # Success
                     self.logger.info(f"Job {job_id} completed successfully")
                     break
 
-                # Job still running
-                time.sleep(5)
+                time.sleep(1)
+                continue
 
         finally:
             # Stop streaming and clean up
@@ -952,7 +1059,7 @@ class SlurmPipesClient(PipesClient):
             stderr_thread.join(timeout=5)
             self._current_job_id = None
 
-    def _build_tail_command(self, remote_path: str) -> list[str]:
+    def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:
         """Build SSH tail command for streaming logs.
 
         Args:
@@ -962,6 +1069,15 @@ class SlurmPipesClient(PipesClient):
             Command list for subprocess.Popen
 
         """
+        if not self._control_path:
+            requires_password = self.slurm.ssh.uses_password_auth
+            jump_requires_password = bool(
+                getattr(self.slurm.ssh, "jump_host", None)
+                and self.slurm.ssh.jump_host.uses_password_auth  # type: ignore[union-attr]
+            )
+            if requires_password or jump_requires_password:
+                return None
+
         cmd = [
             "ssh",
             "-p",
@@ -973,6 +1089,9 @@ class SlurmPipesClient(PipesClient):
             "-o",
             "LogLevel=ERROR",
         ]
+
+        # Include proxy jump options if configured
+        cmd.extend(self.slurm.ssh.get_proxy_command_opts())
 
         # Use ControlMaster if available
         if self._control_path:
