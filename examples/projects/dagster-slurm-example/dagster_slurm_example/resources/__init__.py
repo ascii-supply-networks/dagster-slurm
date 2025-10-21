@@ -47,7 +47,7 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     },
     "compute_config": {
         "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
-        "debug_mode": True,
+        "debug_mode": False,
     },
     "launchers": {
         "bash": {},
@@ -152,14 +152,14 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
         "slurm_queue_config": {
-            # "partition": "boost_usr_prod",
-            # "qos": "boost_qos_bprod",
-            "partition": "boost_fua_dbg",
-            "qos": "boost_qos_bdbg",
+            "partition": "boost_usr_prod",
+            "qos": "boost_qos_dbg",
+            "account": "EUHPC_D20_063",
         },
         "slurm_session_config": {
-            "partition": "boost_usr_sdbg",
-            "qos": "boost_qos_sdbg",
+            "partition": "boost_usr_prod",
+            "qos": "boost_qos_dbg",
+            "account": "EUHPC_D20_063",
         },
     },
 }

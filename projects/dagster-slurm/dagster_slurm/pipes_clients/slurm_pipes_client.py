@@ -258,6 +258,7 @@ class SlurmPipesClient(PipesClient):
                             execution_plan=execution_plan,
                             run_dir=run_dir,
                             ssh_pool=ssh_pool,
+                            message_reader=message_reader,
                             extra_slurm_opts=extra_slurm_opts,
                         )
 
@@ -486,6 +487,7 @@ class SlurmPipesClient(PipesClient):
         execution_plan,
         run_dir: str,
         ssh_pool: SSHConnectionPool,
+        message_reader,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
     ) -> int:
         """Execute as standalone sbatch job with real-time log streaming.
@@ -644,7 +646,9 @@ class SlurmPipesClient(PipesClient):
         self.logger.info(f"Submitted job {job_id}")
 
         # Wait for completion WITH live log streaming
-        self._wait_for_job_with_streaming(job_id, ssh_pool, run_dir)
+        self._wait_for_job_with_streaming(
+            job_id, ssh_pool, run_dir, message_reader=message_reader
+        )
 
         return job_id
 
@@ -660,21 +664,38 @@ class SlurmPipesClient(PipesClient):
         if not isinstance(message_reader, SSHMessageReader):
             return
 
-        if getattr(message_reader, "total_messages", 0):
-            return
+        forwarded_lines = getattr(message_reader, "_forwarded_lines", {})
+        if not isinstance(forwarded_lines, dict):
+            forwarded_lines = {}
+        streamed_lines = getattr(message_reader, "_streamed_lines", {})
+        if not isinstance(streamed_lines, dict):
+            streamed_lines = {}
 
         log_paths = [
-            (f"{run_dir}/slurm-{job_id}.out", "stdout"),
-            (f"{run_dir}/slurm-{job_id}.err", "stderr"),
+            (f"{run_dir}/slurm-{job_id}.out", sys.stdout, "stdout"),
+            (f"{run_dir}/slurm-{job_id}.err", sys.stderr, "stderr"),
         ]
 
-        for path, label in log_paths:
+        for path, stream, label in log_paths:
             try:
                 content = ssh_pool.run(f"cat {path} 2>/dev/null || true")
                 if content.strip():
-                    self.logger.warning(
-                        f"Streaming unavailable; final {label} for job {job_id}:\n{content}"
-                    )
+                    lines = content.splitlines()
+                    forwarded = forwarded_lines.get(label, 0)
+                    streamed = streamed_lines.get(label, 0)
+                    offset = max(forwarded, streamed)
+                    if offset > len(lines):
+                        offset = len(lines)
+                    remainder_lines = lines[offset:]
+                    remainder_lines = [line for line in remainder_lines if line.strip()]
+                    if not remainder_lines:
+                        continue
+                    prefix = f"[SLURM {label.upper()} fallback] "
+                    for line in remainder_lines:
+                        if not line.strip():
+                            continue
+                        stream.write(f"{prefix}{line}\n")
+                    stream.flush()
             except Exception as exc:
                 self.logger.debug(
                     f"Could not fetch final {label} for job {job_id}: {exc}"
@@ -826,6 +847,7 @@ class SlurmPipesClient(PipesClient):
         job_id: int,
         ssh_pool: SSHConnectionPool,
         run_dir: str,
+        message_reader,
         poll_timeout: int = 3600,
     ):
         """Wait for job completion while streaming stdout/stderr and robustly
@@ -838,8 +860,10 @@ class SlurmPipesClient(PipesClient):
         time.sleep(2)  # Wait for job to start and create log files
 
         stop_streaming = threading.Event()
+        streamed_lines = {"stdout": 0, "stderr": 0}
+        streamed_lock = threading.Lock()
 
-        def stream_file(remote_path: str, output_stream, prefix: str):
+        def stream_file(remote_path: str, output_stream, prefix: str, stream_key: str):
             try:
                 tail_cmd = self._build_tail_command(remote_path)
                 if tail_cmd is None:
@@ -867,8 +891,14 @@ class SlurmPipesClient(PipesClient):
                             lines = output.splitlines()
                             if lines:
                                 for line in lines:
+                                    if not line.strip():
+                                        continue
                                     output_stream.write(f"{prefix}{line}\n")
                                 output_stream.flush()
+                                with streamed_lock:
+                                    streamed_lines[stream_key] += sum(
+                                        1 for l in lines if l.strip()
+                                    )
                                 next_line += len(lines)
 
                         stop_streaming.wait(1.0)
@@ -889,8 +919,12 @@ class SlurmPipesClient(PipesClient):
                                 break
                             time.sleep(0.1)
                             continue
+                        if not line.strip():
+                            continue
                         output_stream.write(f"{prefix}{line}")
                         output_stream.flush()
+                        with streamed_lock:
+                            streamed_lines[stream_key] += 1
                 finally:
                     proc.terminate()
                     try:
@@ -902,14 +936,14 @@ class SlurmPipesClient(PipesClient):
 
         stdout_thread = threading.Thread(
             target=stream_file,
-            args=(stdout_path, sys.stdout, "[SLURM] "),
+            args=(stdout_path, sys.stdout, "[SLURM] ", "stdout"),
             daemon=True,
         )
         stdout_thread.start()
 
         stderr_thread = threading.Thread(
             target=stream_file,
-            args=(stderr_path, sys.stderr, "[SLURM ERR] "),
+            args=(stderr_path, sys.stderr, "[SLURM ERR] ", "stderr"),
             daemon=True,
         )
         stderr_thread.start()
@@ -1057,6 +1091,15 @@ class SlurmPipesClient(PipesClient):
             stop_streaming.set()
             stdout_thread.join(timeout=5)
             stderr_thread.join(timeout=5)
+            try:
+                existing = getattr(message_reader, "_streamed_lines", {})
+                if not isinstance(existing, dict):
+                    existing = {}
+                for key, value in streamed_lines.items():
+                    existing[key] = existing.get(key, 0) + value
+                setattr(message_reader, "_streamed_lines", existing)
+            except Exception as exc:  # pragma: no cover - best effort bookkeeping
+                self.logger.debug(f"Failed to record streamed bytes: {exc}")
             self._current_job_id = None
 
     def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:

@@ -17,6 +17,33 @@ if TYPE_CHECKING:  # pragma: no cover
     from .ssh_pool import SSHConnectionPool
 
 
+class _ClosedMessageTracker:
+    """Track 'closed' messages to allow draining trailing stdio."""
+
+    def __init__(self, drain_timeout: float = 20.0):
+        self._drain_timeout = drain_timeout
+        self._pending: Optional[Dict[str, Any]] = None
+        self._deadline: Optional[float] = None
+
+    def observe(self, message: Any) -> bool:
+        if isinstance(message, dict) and message.get("method") == "closed":
+            self._pending = message
+            self._deadline = time.time() + self._drain_timeout
+            return True
+        return False
+
+    def maybe_flush(self, handler, *, force: bool = False) -> bool:
+        if not self._pending:
+            return False
+        if not force and self._deadline and time.time() < self._deadline:
+            return False
+
+        handler.handle_message(self._pending)
+        self._pending = None
+        self._deadline = None
+        return True
+
+
 class LocalMessageReader(PipesMessageReader):
     """Tails a local messages file.
     Used for local dev mode.
@@ -64,9 +91,11 @@ class LocalMessageReader(PipesMessageReader):
                 time.sleep(0.5)
 
         # Tail file
+        tracker = _ClosedMessageTracker()
+
         while not self._stop.is_set():
             try:
-                with open(self.messages_path, "r", encoding="utf-8") as f:
+                with open(self.messages_path, "rb") as f:
                     # Handle file truncation
                     try:
                         size = os.path.getsize(self.messages_path)
@@ -78,16 +107,25 @@ class LocalMessageReader(PipesMessageReader):
                     if pos > 0:
                         f.seek(pos)
 
-                    for line in f:
-                        if self._stop.is_set():
+                    while not self._stop.is_set():
+                        line = f.readline()
+                        if not line:
+                            if tracker.maybe_flush(handler):
+                                self._stop.set()
+                                break
                             break
 
-                        line = line.strip()
-                        if not line:
+                        pos = f.tell()
+                        decoded_line = line.decode("utf-8", errors="replace").strip()
+                        if not decoded_line:
                             continue
 
+                        if self._stop.is_set():
+                            break
                         try:
-                            msg = json.loads(line)
+                            msg = json.loads(decoded_line)
+                            if tracker.observe(msg):
+                                continue
                             handler.handle_message(msg)
                         except json.JSONDecodeError:
                             # Ignore non-JSON lines
@@ -100,7 +138,13 @@ class LocalMessageReader(PipesMessageReader):
             except Exception as e:
                 logger.warning(f"Error reading messages: {e}")
 
+            if tracker.maybe_flush(handler, force=self._stop.is_set()):
+                self._stop.set()
+                break
+
             self._stop.wait(self.poll_interval)
+
+        tracker.maybe_flush(handler, force=True)
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
@@ -169,6 +213,7 @@ class SSHMessageReader(PipesMessageReader):
         self.total_messages = 0
         self._ssh_pool = ssh_pool
         self._fallback_next_line = 1
+        self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
@@ -181,6 +226,7 @@ class SSHMessageReader(PipesMessageReader):
         self.logger.debug(f"Starting SSH message reader for {self.remote_path}")
 
         # Start reader thread with auto-reconnect
+        self._closed_tracker = _ClosedMessageTracker()
         self._reader_thread = threading.Thread(
             target=self._read_loop_with_reconnect,
             args=(handler,),
@@ -190,7 +236,10 @@ class SSHMessageReader(PipesMessageReader):
 
         try:
             # Yield the params that the remote process needs
-            yield {"path": self.remote_path}
+            yield {
+                "path": self.remote_path,
+                PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: True,
+            }
 
             # Wait for messages - keep reader alive while job runs
             # The reader will stop when we set the stop flag
@@ -227,6 +276,9 @@ class SSHMessageReader(PipesMessageReader):
             if self._reader_thread and self._reader_thread.is_alive():
                 self._reader_thread.join(timeout=5)
 
+            if hasattr(self, "_closed_tracker"):
+                self._closed_tracker.maybe_flush(handler, force=True)
+
             self.logger.debug("Message reader stopped")
 
     def _read_loop_with_reconnect(self, handler):
@@ -239,6 +291,7 @@ class SSHMessageReader(PipesMessageReader):
         reconnect_count = 0
         total_message_count = 0
         return_code: int = 0
+        tracker = getattr(self, "_closed_tracker", _ClosedMessageTracker())
 
         while not self._stop_flag.is_set():
             try:
@@ -251,6 +304,7 @@ class SSHMessageReader(PipesMessageReader):
                             handler,
                             reconnect_count,
                             total_message_count,
+                            tracker,
                         )
                     )
                     if stop_loop:
@@ -283,6 +337,28 @@ class SSHMessageReader(PipesMessageReader):
 
                         try:
                             message = json.loads(line)
+                            if tracker.observe(message):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and message.get("method") == "log_external_stream"
+                            ):
+                                params = message.get("params", {}) or {}
+                                stream = params.get("stream")
+                                text = params.get("text", "")
+                                if (
+                                    isinstance(stream, str)
+                                    and stream in self._forwarded_lines
+                                ):
+                                    line_count = len(str(text).splitlines())
+                                    if text and not text.endswith("\n"):
+                                        line_count = max(line_count, 1)
+                                    if line_count:
+                                        self._forwarded_lines[stream] += line_count
+                                self.logger.debug(
+                                    "SSHMessageReader stdio chunk: %s",
+                                    message.get("params", {}).get("text", "")[:200],
+                                )
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
@@ -328,6 +404,28 @@ class SSHMessageReader(PipesMessageReader):
 
                         try:
                             message = json.loads(line)
+                            if tracker.observe(message):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and message.get("method") == "log_external_stream"
+                            ):
+                                params = message.get("params", {}) or {}
+                                stream = params.get("stream")
+                                text = params.get("text", "")
+                                if (
+                                    isinstance(stream, str)
+                                    and stream in self._forwarded_lines
+                                ):
+                                    line_count = len(str(text).splitlines())
+                                    if text and not text.endswith("\n"):
+                                        line_count = max(line_count, 1)
+                                    if line_count:
+                                        self._forwarded_lines[stream] += line_count
+                                self.logger.debug(
+                                    "SSHMessageReader stdio chunk: %s",
+                                    message.get("params", {}).get("text", "")[:200],
+                                )
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
@@ -383,6 +481,10 @@ class SSHMessageReader(PipesMessageReader):
                     self.logger.debug(f"Reconnecting in {self.reconnect_interval}s...")
                     self._stop_flag.wait(self.reconnect_interval)
 
+                if tracker.maybe_flush(handler):
+                    self._stop_flag.set()
+                    break
+
             except Exception as e:
                 if self._stop_flag.is_set():
                     break
@@ -400,6 +502,10 @@ class SSHMessageReader(PipesMessageReader):
                 if not self._stop_flag.is_set():
                     self._stop_flag.wait(self.reconnect_interval)
 
+                if tracker.maybe_flush(handler):
+                    self._stop_flag.set()
+                    break
+
         # self.logger.info(
         #     f"Message reader finished. Total messages received: {total_message_count}"
         # )
@@ -409,6 +515,7 @@ class SSHMessageReader(PipesMessageReader):
         handler,
         reconnect_count: int,
         total_message_count: int,
+        tracker: _ClosedMessageTracker,
     ) -> tuple[bool, int, int, bool]:
         """Poll messages.jsonl via SSH pool when ControlMaster is unavailable."""
         if not self._ssh_pool:
@@ -442,9 +549,33 @@ class SSHMessageReader(PipesMessageReader):
                 lines = [line.strip() for line in output.splitlines()]
                 lines = [line for line in lines if line]
                 if lines:
+                    processed_lines = 0
                     for line in lines:
+                        processed_lines += 1
                         try:
                             message = json.loads(line)
+                            if tracker.observe(message):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and message.get("method") == "log_external_stream"
+                            ):
+                                params = message.get("params", {}) or {}
+                                stream = params.get("stream")
+                                text = params.get("text", "")
+                                if (
+                                    isinstance(stream, str)
+                                    and stream in self._forwarded_lines
+                                ):
+                                    line_count = len(str(text).splitlines())
+                                    if text and not text.endswith("\n"):
+                                        line_count = max(line_count, 1)
+                                    if line_count:
+                                        self._forwarded_lines[stream] += line_count
+                                self.logger.debug(
+                                    "SSHMessageReader stdio chunk (fallback): %s",
+                                    message.get("params", {}).get("text", "")[:200],
+                                )
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
@@ -457,11 +588,19 @@ class SSHMessageReader(PipesMessageReader):
                             self.logger.warning(
                                 f"Error handling message: {e}", exc_info=True
                             )
-                    next_line += len(lines)
+                    next_line += processed_lines
 
             self._stop_flag.wait(self.reconnect_interval)
 
+            if tracker.maybe_flush(handler):
+                self._stop_flag.set()
+                break
+
         self._fallback_next_line = next_line
+
+        if tracker.maybe_flush(handler):
+            self._stop_flag.set()
+            return True, reconnect_count, total_message_count, True
 
         if message_count == 0:
             reconnect_count += 1
