@@ -73,19 +73,19 @@ const config: Config = {
 
   themeConfig: {
     // Replace with your project's social card
-    image: 'img/docusaurus-social-card.jpg',
+    image: 'img/ascii-logo.jpg',
     navbar: {
       title: 'dagster-slurm',
       logo: {
         alt: 'dagster-slurm Logo',
-        src: 'img/logo.svg',
+        src: 'img/ascii-logo.png',
       },
       items: [
         {
           type: 'docSidebar',
           sidebarId: 'tutorialSidebar',
           position: 'left',
-          label: 'Tutorial',
+          label: 'Documentation',
         },
         {
           type: 'doc',
@@ -94,6 +94,11 @@ const config: Config = {
           position: 'left',
         },
         // {to: '/blog', label: 'Blog', position: 'left'},
+        {
+          href: 'https://github.com/ascii-supply-networks/dagster-slurm/blob/main/docs/paper.md',
+          label: 'Publication',
+          position: 'right',
+        },
         {
           href: 'https://github.com/ascii-supply-networks/dagster-slurm',
           label: 'GitHub',
