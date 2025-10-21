@@ -897,7 +897,7 @@ class SlurmPipesClient(PipesClient):
                                 output_stream.flush()
                                 with streamed_lock:
                                     streamed_lines[stream_key] += sum(
-                                        1 for l in lines if l.strip()
+                                        1 for line in lines if line.strip()
                                     )
                                 next_line += len(lines)
 
