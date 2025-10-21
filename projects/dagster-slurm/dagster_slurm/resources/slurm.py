@@ -50,6 +50,10 @@ class SlurmQueueConfig(dg.ConfigurableResource):
     reservation: Optional[str] = Field(
         default=None, description="Reservation name for scheduled windows"
     )
+    account: Optional[str] = Field(
+        default=None,
+        description="Accounting project/charge code (required on many systems)",
+    )
 
 
 class SlurmResource(ConfigurableResource):
@@ -87,6 +91,7 @@ class SlurmResource(ConfigurableResource):
                 gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
                 qos=_optional_env("SLURM_QOS"),
                 reservation=_optional_env("SLURM_RESERVATION"),
+                account=_optional_env("SLURM_ACCOUNT"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
         )
@@ -106,6 +111,7 @@ class SlurmResource(ConfigurableResource):
                 gpus_per_node=int(os.getenv("SLURM_GPUS_PER_NODE", "0")),
                 qos=_optional_env("SLURM_QOS"),
                 reservation=_optional_env("SLURM_RESERVATION"),
+                account=_optional_env("SLURM_ACCOUNT"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
         )

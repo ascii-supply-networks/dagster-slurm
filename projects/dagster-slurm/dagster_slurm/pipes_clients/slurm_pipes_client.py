@@ -765,6 +765,7 @@ class SlurmPipesClient(PipesClient):
         mem_per_cpu = getattr(self.slurm.queue, "mem_per_cpu", None)
         qos = getattr(self.slurm.queue, "qos", None)
         reservation = getattr(self.slurm.queue, "reservation", None)
+        account = getattr(self.slurm.queue, "account", None)
         num_nodes = self.slurm.queue.num_nodes
         gpus_per_node = self.slurm.queue.gpus_per_node
         mem_override = False
@@ -782,6 +783,7 @@ class SlurmPipesClient(PipesClient):
             gpus_per_node = extra_opts.get("gpus_per_node", gpus_per_node)
             qos = extra_opts.get("qos", qos)
             reservation = extra_opts.get("reservation", reservation)
+            account = extra_opts.get("account", account)
 
         def _normalize_optional(value: Optional[Any]) -> Optional[str]:
             if value is None:
@@ -796,6 +798,7 @@ class SlurmPipesClient(PipesClient):
         mem_per_cpu = _normalize_optional(mem_per_cpu)
         qos = _normalize_optional(qos)
         reservation = _normalize_optional(reservation)
+        account = _normalize_optional(account)
 
         if gpus_per_node and not mem_override and not mem_per_cpu:
             # GPU partitions usually enforce fixed memory per GPU and reject explicit --mem.
@@ -837,6 +840,8 @@ class SlurmPipesClient(PipesClient):
             sbatch_opts.append(f"--qos={qos}")
         if reservation:
             sbatch_opts.append(f"--reservation={reservation}")
+        if account:
+            sbatch_opts.append(f"--account={account}")
 
         sbatch_opts.append(script_path)
 
