@@ -1,5 +1,6 @@
 import copy
 import os
+import shlex
 from typing import Any, Dict
 
 import dagster as dg
@@ -73,10 +74,11 @@ PRODUCTION_DOCKER_OVERRIDES: Dict[str, Any] = {
 SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
     "ssh_config": {
-        "host": dg.EnvVar("SLURM_EDGE_NODE"),
-        "port": dg.EnvVar("SLURM_EDGE_NODE_PORT"),
-        "user": dg.EnvVar("SLURM_EDGE_NODE_USER"),
-        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
+        "host": str(dg.EnvVar("SLURM_EDGE_NODE_HOST").get_value(default="127.0.0.1")),
+        "port": int(str(dg.EnvVar("SLURM_EDGE_NODE_PORT").get_value(default="2223"))),
+        "user": str(dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter")),
+        "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
+        "key_path": dg.EnvVar("SLURM_EDGE_NODE_KEY_PATH").get_value(default=None),
     },
     "slurm_queue_config": {
         "partition": "batch",
@@ -104,6 +106,63 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
             "head_startup_timeout": 120,
         },
         "spark": {"driver_memory": "8g", "executor_memory": "16g"},
+    },
+}
+
+SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    # Vienna Scientific Cluster (VSC-5) queue defaults.
+    # Off-hackathon CPU slots (active)
+    "vsc5": {
+        "slurm_queue_config": {
+            # sinfo | grep idle
+            "partition": "zen2_0256_a40x2",
+            "qos": "zen2_0256_a40x2",
+            # "partition": "zen3_0512",
+            # "qos": "zen3_0512_devel",
+            "time_limit": "00:10:00",
+            "num_nodes": 1,
+            "gpus_per_node": 0,
+        },
+        "slurm_session_config": {
+            "partition": "zen3_0512",
+            "qos": "zen3_0512_devel",
+            "time_limit": "00:10:00",
+            "num_nodes": 1,
+            "gpus_per_node": 0,
+        },
+    },
+    # Hackathon GPU reservation (toggle manually when the reservation is active)
+    # "vsc5": {
+    #     "slurm_queue_config": {
+    #         "partition": "zen3_0512_a100x2",
+    #         "qos": "zen3_0512_a100x2",
+    #         "reservation": "dagster-slurm_21",  # 22_23 on later days
+    #         "gpus_per_node": 1,
+    #         "num_nodes": 1,
+    #         "mem": None,
+    #     },
+    #     "slurm_session_config": {
+    #         "partition": "zen3_0512_a100x2",
+    #         "qos": "zen3_0512_a100x2",
+    #         "reservation": "dagster-slurm_21",
+    #         "gpus_per_node": 1,
+    #         "num_nodes": 1,
+    #     },
+    # },
+    # Leonardo (CINECA) runs directly on the edge node without an extra hop.
+    "leonardo": {
+        "slurm_queue_config": {
+            "partition": "boost_usr_prod",
+            "qos": "boost_qos_dbg",
+            "account": "EUHPC_D20_063",
+            "time_limit": "00:05:00",
+        },
+        "slurm_session_config": {
+            "partition": "boost_usr_prod",
+            "qos": "boost_qos_dbg",
+            "account": "EUHPC_D20_063",
+            "time_limit": "00:05:00",
+        },
     },
 }
 
@@ -236,8 +295,97 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
             _deep_merge(config, PRODUCTION_DOCKER_OVERRIDES)
     elif _is_supercomputer_based(deployment):
         config = copy.deepcopy(SUPERCOMPUTER_SLURM_BASE_CONFIG)
+        site_key = os.environ.get("SLURM_SUPERCOMPUTER_SITE", "").strip().lower()
+        if site_key:
+            site_override = SUPERCOMPUTER_SITE_OVERRIDES.get(site_key)
+            if not site_override:
+                available_sites = ", ".join(sorted(SUPERCOMPUTER_SITE_OVERRIDES.keys()))
+                raise ValueError(
+                    f"Unknown SLURM_SUPERCOMPUTER_SITE '{site_key}'. "
+                    f"Available options: {available_sites}"
+                )
+            _deep_merge(config, copy.deepcopy(site_override))
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
+
+    # Allow explicit env overrides for partition / QoS / reservation so they can be matched
+    # to whatever window is currently available on the supercomputer (e.g. hackathon slots).
+    queue_cfg = config.setdefault("slurm_queue_config", {})
+    session_cfg = config.setdefault("slurm_session_config", {})
+
+    def _apply_queue_field(env_var: str, field: str):
+        value = os.environ.get(env_var)
+        if value is None:
+            return
+        value = value.strip()
+        if value:
+            queue_cfg[field] = value
+            session_cfg[field] = value
+        else:
+            queue_cfg.pop(field, None)
+            session_cfg.pop(field, None)
+
+    _apply_queue_field("SLURM_SUPERCOMPUTER_PARTITION", "partition")
+    _apply_queue_field("SLURM_SUPERCOMPUTER_QOS", "qos")
+    _apply_queue_field("SLURM_SUPERCOMPUTER_RESERVATION", "reservation")
+
+    # Apply environment overrides for the SSH connection settings.
+    ssh_cfg = config.setdefault("ssh_config", {})
+    ssh_cfg["host"] = os.environ.get(
+        "SLURM_EDGE_NODE_HOST", ssh_cfg.get("host", "127.0.0.1")
+    )
+    ssh_cfg["port"] = int(
+        os.environ.get("SLURM_EDGE_NODE_PORT", str(ssh_cfg.get("port", 2223)))
+    )
+    ssh_cfg["user"] = os.environ.get(
+        "SLURM_EDGE_NODE_USER", ssh_cfg.get("user", "submitter")
+    )
+    password_value = os.environ.get("SLURM_EDGE_NODE_PASSWORD")
+    if password_value:
+        ssh_cfg["password"] = password_value
+    else:
+        ssh_cfg["password"] = None
+
+    key_value = os.environ.get("SLURM_EDGE_NODE_KEY_PATH")
+    if key_value:
+        ssh_cfg["key_path"] = key_value
+        ssh_cfg["password"] = None
+    else:
+        ssh_cfg["key_path"] = ssh_cfg.get("key_path")
+
+    # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
+    target_host = ssh_cfg.get("host")
+    jump_host_env = os.environ.get("SLURM_EDGE_NODE_JUMP_HOST")
+    if jump_host_env and target_host not in {"localhost", "127.0.0.1"}:
+        jump_config: Dict[str, Any] = {
+            "host": jump_host_env,
+            "port": int(os.environ.get("SLURM_EDGE_NODE_JUMP_PORT", "22")),
+            "user": os.environ.get("SLURM_EDGE_NODE_JUMP_USER", ssh_cfg["user"]),
+        }
+        jump_key = os.environ.get("SLURM_EDGE_NODE_JUMP_KEY")
+        jump_password = os.environ.get("SLURM_EDGE_NODE_JUMP_PASSWORD")
+        if jump_key and jump_password:
+            raise ValueError(
+                "SLURM_EDGE_NODE_JUMP_KEY and SLURM_EDGE_NODE_JUMP_PASSWORD cannot both be set."
+            )
+        if jump_key:
+            jump_config["key_path"] = jump_key
+        if jump_password:
+            jump_config["password"] = jump_password
+        extra_opts = shlex.split(os.environ.get("SLURM_EDGE_NODE_JUMP_OPTS_EXTRA", ""))
+        if extra_opts:
+            jump_config["extra_opts"] = extra_opts
+        jump_force_tty = os.environ.get("SLURM_EDGE_NODE_JUMP_FORCE_TTY")
+        if jump_force_tty:
+            jump_config["force_tty"] = jump_force_tty.lower() in {"1", "true", "yes"}
+
+        ssh_cfg["jump_host"] = jump_config
+    else:
+        ssh_cfg.pop("jump_host", None)
+
+    # Jump host obviates any post-login command/forced TTY.
+    ssh_cfg.pop("post_login_command", None)
+    ssh_cfg.pop("force_tty", None)
 
     # Step 2.2: Handle pre_deployed_env_path requirement for production
     if _is_production(deployment):

@@ -10,9 +10,7 @@ title: Choose an execution mode
 | Mode | Description | Typical use | Requirements |
 | --- | --- | --- | --- |
 | `local` | Runs assets directly on the Dagster code location process. | Laptop development, CI smoke tests. | No Slurm or SSH connectivity. |
-| `slurm` | Submits one Slurm job per asset materialization. | Staging clusters, simple production setups. | `SlurmResource` with queue/partition configuration. |
-| `slurm-session` | Keeps a Slurm allocation alive and reuses it across assets. | Production pipelines with warm clusters or expensive startup costs. | `SlurmResource` plus `SlurmSessionResource`. Optional cluster reuse toggles. |
-| `slurm-hetjob` | Bundles multiple resource profiles into one heterogeneous Slurm job. | Workloads that mix CPU-only and GPU-heavy stages. | Slurm partitions that support heterogeneous submissions. |
+| `slurm` | Submits one Slurm job per asset materialization. | Staging clusters, production pipelines today. | `SlurmResource` with queue/partition configuration. |
 
 Switch modes by updating the `ComputeResource.mode` field—asset code stays identical.
 
@@ -46,68 +44,17 @@ compute = ComputeResource(
 - Jobs terminate as soon as the asset finishes—ideal for isolated workloads.
 - Override `launcher=` on individual assets to run Ray or Spark workloads inside the allocation.
 
-## Slurm session mode (cluster reuse)
+## Work in progress
 
-```python
-session = SlurmSessionResource(
-    slurm=slurm,
-    num_nodes=4,
-    time_limit="06:00:00",
-)
+Session reuse (`slurm-session`) and heterogeneous jobs (`slurm-hetjob`) are on the roadmap. Configuration stubs remain in the API so early adopters can experiment, but we recommend planning production systems around the stable `local` and `slurm` modes for now.
 
-compute = ComputeResource(
-    mode="slurm-session",
-    slurm=slurm,
-    session=session,
-    default_launcher=RayLauncher(num_gpus_per_node=4),
-    enable_cluster_reuse=True,
-    cluster_reuse_tolerance=0.15,
-)
-```
 
-- Dagster maintains a persistent allocation controlled by the session resource.
-- With `enable_cluster_reuse=True`, launchers such as `RayLauncher` or `SparkLauncher` keep their clusters warm.
-- Use `compute.cleanup_cluster(...)` to force teardown after heavyweight jobs.
-
-## Heterogeneous job mode
-
-```python
-from dagster_slurm import ComputeResource, RayLauncher, SlurmResource
-from dagster_slurm.managers import HetJobComponent
-
-compute = ComputeResource(
-    mode="slurm-hetjob",
-    slurm=slurm,
-    default_launcher=BashLauncher(),
-)
-
-@asset(required_resource_keys={"compute"})
-def training_pipeline(context: AssetExecutionContext):
-    components = [
-        HetJobComponent(
-            component_id="preprocess",
-            launcher=BashLauncher(),
-            extras={},
-        ),
-        HetJobComponent(
-            component_id="train",
-            launcher=RayLauncher(num_gpus_per_node=4),
-            extras={},
-        ),
-    ]
-    return context.resources.compute.run_heterogeneous(context=context, components=components)
-```
-
-- Stitch CPU and GPU workloads into one submission for better queue times.
-- Each component can use a different launcher; Dagster coordinates metadata and logs.
 
 ## Choosing a launcher per mode
 
 | Mode | Recommended launcher(s) | Notes |
 | --- | --- | --- |
 | `local` | `BashLauncher`, `RayLauncher` (single node) | Keeps development parity with production launchers. |
-| `slurm` | `BashLauncher`, `RayLauncher`, `SparkLauncher` | Each asset gets a fresh allocation. |
-| `slurm-session` | `RayLauncher`, `SparkLauncher` | Designed for clusters that benefit from reuse. |
-| `slurm-hetjob` | Mix of launchers | Pair CPU-only steps with GPU steps efficiently. |
+| `slurm` | `BashLauncher`, `RayLauncher`, `SparkLauncher` | Each asset gets a fresh allocation. Session-based reuse will extend this list once stabilised. |
 
 Remember to include launcher-specific dependencies (e.g. `ray`) in your pixi environment or `pyproject.toml`.

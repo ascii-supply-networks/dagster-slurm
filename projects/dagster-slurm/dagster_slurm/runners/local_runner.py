@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 from dagster import get_dagster_logger
+import sys
 
 from .base import Runner
 
@@ -58,9 +59,9 @@ class LocalRunner(Runner):
                     check=True,
                 )
                 if result.stdout:
-                    self.logger.debug(f"stdout:\n{result.stdout}")
+                    print(result.stdout)
                 if result.stderr:
-                    self.logger.debug(f"stderr:\n{result.stderr}")
+                    print(result.stderr, file=sys.stderr)
             except subprocess.CalledProcessError as e:
                 self.logger.error(f"Script failed (exit {e.returncode})")
                 if e.stdout:

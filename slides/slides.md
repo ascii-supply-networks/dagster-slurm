@@ -225,7 +225,7 @@ transition: fade
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-docker compose up -d       # spins up Slurm edge + compute nodes
+docker compose up -d --build    # spins up Slurm edge + compute nodes
 ```
 Develop locally
 ```bash

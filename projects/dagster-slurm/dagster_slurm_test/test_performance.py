@@ -26,6 +26,7 @@ class TestPerformance:
         self,
         example_project_dir: Path,
         deployment_metadata: Dict[str, Any],
+        docker_slurm_env: Dict[str, str],
         slurm_cluster_ready,
     ):
         """Compare execution time between staging and production modes."""
@@ -49,7 +50,8 @@ class TestPerformance:
             deployment="PRODUCTION_DOCKER",
             assets="process_data",
             env_overrides={
-                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"]
+                **docker_slurm_env,
+                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"],
             },
             timeout=300,
         )

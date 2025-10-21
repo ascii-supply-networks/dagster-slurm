@@ -13,6 +13,7 @@ def train_model_chunk(chunk_id: int):
 def main():
     context = PipesContext.get()
     context.log.info("Starting Ray training...")
+    print("Hello from Ray...")
     # Ray is already initialized by launcher
     context.log.info(f"Ray address: {ray.get_runtime_context().gcs_address}")  # type: ignore
     # Distributed training

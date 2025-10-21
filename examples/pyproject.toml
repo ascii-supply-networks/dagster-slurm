@@ -5,7 +5,7 @@ description = "Example project how to use dagster with slurm"
 authors = [{ name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" }]
 requires-python = ">=3.12,<3.13"
 
-[tool.pixi.project]
+[tool.pixi.workspace]
 # not supported  "win-64", due to pip ray
 platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
 channels = ["conda-forge"]
@@ -121,6 +121,12 @@ cwd = "."
 env = { DAGSTER_DEPLOYMENT = "staging_docker" }
 description = "Start dagster webserver in staging mode"
 
+[tool.pixi.tasks.start-staging-hpc]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
+description = "Start dagster webserver in staging mode connected to supercomputer using SSH"
+
 [tool.pixi.tasks.deploy-prod-docker]
 cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py"
 cwd = "."
@@ -144,6 +150,20 @@ cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Start dagster webserver in production mode"
+
+[tool.pixi.tasks.start-staging-supercomputer]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
+description = "Start dagster webserver in staging mode with real HPC"
+
+# WARNING must pre-deploy!
+[tool.pixi.tasks.start-production-supercomputer]
+cmd = "pixi run -e dev --frozen dagster dev"
+cwd = "."
+env = { DAGSTER_DEPLOYMENT = "production_supercomputer" }
+description = "Start dagster webserver in production mode with real HPC"
+
 
 # TODO: add more launcher modes for the other variants
 

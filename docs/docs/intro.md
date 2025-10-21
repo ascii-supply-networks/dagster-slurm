@@ -17,7 +17,7 @@ sidebar_position: 1
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-docker compose up -d
+docker compose up -d --build
 cd examples
 ```
 
@@ -88,70 +88,104 @@ Jobs now skip environment packaging and launch noticeably faster.
 
 | Variable | Purpose | Notes |
 | --- | --- | --- |
-| `SLURM_EDGE_NODE_HOST` | SSH hostname of the login/edge node. | Use the public login node for your site. |
+| `SLURM_EDGE_NODE_HOST` | SSH hostname of the login/edge node. | - |
 | `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22` on most clusters. |
 | `SLURM_EDGE_NODE_USER` | Username used for SSH and job submission. | Often tied to an LDAP or project account. |
 | `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH` | Authentication method. | Prefer key-based auth; set whichever your site supports. |
+| `SLURM_EDGE_NODE_FORCE_TTY` (optional) | Request a pseudo-terminal (`-tt`). | Set to `true` on clusters that insist on interactive sessions. Leave `false` when using a jump host. |
+| `SLURM_EDGE_NODE_POST_LOGIN_COMMAND` (optional) | Command prefix run immediately after login. | Supports `{cmd}` placeholder; useful when you cannot use `ProxyJump`. |
+| `SLURM_EDGE_NODE_JUMP_HOST` / `_USER` / `_PORT` / `_PASSWORD` (optional) | Configure an SSH jump host (uses `ssh -J`). | Lets you hop via `vmos`/bastion nodes; password-based auth is supported. |
 | `SLURM_DEPLOYMENT_BASE_PATH` | Remote directory where dagster-slurm uploads job bundles. | Should be writable and have sufficient quota. |
 | `SLURM_PARTITION` | Default partition/queue name. | Override per asset for specialised queues. |
 | `SLURM_GPU_PARTITION` (optional) | GPU-enabled partition. | Useful when mixing CPU and GPU jobs. |
 | `SLURM_QOS` (optional) | QoS or account string. | Required on clusters that enforce QoS selection. |
+| `SLURM_SUPERCOMPUTER_SITE` (optional) | Enables site-specific overrides (`vsc5`, `leonardo`, …). | Adds TTY/post-login hops or queue defaults. |
 | `DAGSTER_DEPLOYMENT` | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project. |
+| `CI_DEPLOYED_ENVIRONMENT_PATH` (production only) | Path to a pre-built environment bundle on the cluster. | Required when using `production_supercomputer`. |
+| `DAGSTER_SLURM_SSH_CONTROL_DIR` (optional) | Directory for SSH ControlMaster sockets. | Override when `/tmp` is not writable; defaults to `~/.ssh/dagster-slurm`. |
 
 Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
 
-> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically falls back to plain SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower.
+> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically switches to one-off SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your security policy restricts where control sockets can live.
 
 ### Sample configuration: Vienna Scientific Cluster (VSC-5)
 
 ```dotenv title=".env.vsc5"
 # SSH / edge node access
-SLURM_EDGE_NODE_HOST=login.vsc5.tuwien.ac.at
+SLURM_EDGE_NODE_HOST=vsc5.vsc.ac.at
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=your_vsc_username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
+SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at        # optional, but recommended
+SLURM_EDGE_NODE_JUMP_USER=your_vsc_username
+SLURM_EDGE_NODE_JUMP_PASSWORD=...              # only if vmos requires a password
 
 # Deployment settings
 SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
-SLURM_PARTITION=main       # cpu partition
-SLURM_GPU_PARTITION=gpu    # optional: GPU jobs
-SLURM_QOS=normal
+SLURM_PARTITION=zen3_0512                      # pick a queue you can access
+SLURM_QOS=zen3_0512_devel                      # optional QoS/account string
+SLURM_RESERVATION=dagster-slurm_21             # optional reservation (if active)
+SLURM_SUPERCOMPUTER_SITE=vsc5
 
 # Dagster deployment selector
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the partition values (`main`, `gpu`) with the ones aligned to your project allocation (e.g. `short` for quick jobs).
+VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).  
+If your policies require password-only access, set `SLURM_EDGE_NODE_PASSWORD` and `SLURM_EDGE_NODE_JUMP_PASSWORD`; the same automation answers both prompts (you'll still need to handle one-time passcodes manually when they expire). Dagster prints `Enter … for vsc5.vsc.ac.at:` on your terminal—type the OTP there to continue. Password-based sessions automatically request a pseudo-TTY, so you only need `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
+
+> **Cleanup behaviour:** Completed runs trigger an asynchronous `rm -rf` of the run directory on the edge node. This keeps quotas tidy without delaying Dagster shutdown. Set `debug_mode=True` on the relevant `ComputeResource` while debugging to keep run folders around for manual inspection.
 
 ### Sample configuration: Leonardo (CINECA)
 
 ```dotenv title=".env.leonardo"
-SLURM_EDGE_NODE_HOST=login.leonardo.cineca.it
-SLURM_EDGE_NODE_PORT=2222          # Leonardo exposes a dedicated SSH port
-SLURM_EDGE_NODE_USER=your_cineca_id
+SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it
+SLURM_EDGE_NODE_PORT=22                     # Leonardo typically listens on 22; override if your project uses a custom port
+SLURM_EDGE_NODE_USER=a08trb02               # replace with your CINECA username
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_rsa_leonardo
 
-SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/your_cineca_id/dagster-slurm
-SLURM_PARTITION=batch              # CPU login partition
-SLURM_GPU_PARTITION=dcgpusr        # NVIDIA A100 (change to boost if applicable)
-SLURM_QOS=normal
+SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/usertrain/a08trb02/dagster-slurm
+SLURM_PARTITION=boost_usr_prod              # or boost_usr_dbg / dcgp_usr_prod depending on your entitlement
+SLURM_QOS=boost_qos_bprod
+SLURM_SUPERCOMPUTER_SITE=leonardo
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-Leonardo requires you to have an active project allocation; ensure the partition (`dcgpusr`, `boost`, or `cm`) matches your access level. If your site enforces Kerberos or OTP, rely on `ProxyCommand` in your SSH configuration or wrap dagster-slurm with a jump host.
+Leonardo requires you to have an active project allocation; the permitted partitions depend on your account type (`cpu_usr_prod`, `cpu_usr_dbg`, `dcgpu_usr_prod`, `cm_usr_dbg`, training queues, etc.). Verify your entitlements on the cluster:
 
-With the variables defined, restart your Dagster code location. The same assets now submit through your HPC scheduler.
+```bash
+sacctmgr show assoc where user=$USER format=Cluster,Account,Partition,QOS%20
+sinfo -s
+```
+
+If the output does not list `batch`, pick one of the partitions above that appears in both commands. GPU queues also need the matching QoS (e.g. `dcgpuqos`). Training accounts typically use `/leonardo/home/usertrain/<user>/…` for storage—adjust `SLURM_DEPLOYMENT_BASE_PATH` accordingly. If your site enforces OTP/Kerberos, configure a local `~/.ssh/config` entry or a bastion jump host—`dagster-slurm` will reuse that setup automatically.
+
+With the variables defined, restart your Dagster code location. To dry-run against the real scheduler while still allowing on-the-fly environment packaging, point `DAGSTER_DEPLOYMENT=staging_supercomputer` and run:
+
+```bash
+pixi run start-staging-supercomputer
+```
+
+For production workloads you should publish the environment bundle ahead of time (e.g. via CI using `python scripts/deploy_environment.py`). Once you export the uploaded path as `CI_DEPLOYED_ENVIRONMENT_PATH`, switch to `DAGSTER_DEPLOYMENT=production_supercomputer` and start Dagster:
+
+```bash
+pixi run start-production-supercomputer
+```
+
+The production preset refuses to start if `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, ensuring clusters never build environments during business-critical runs.
+
+To confirm the job landed on the expected queue, open an interactive shell on the cluster and run `squeue -j <jobid> -o '%i %P %q %R %T'`. The `Partition`, `QoS`, and `Reservation` columns should match your `.env` overrides.
 
 ## Execution modes
 
-`ComputeResource` adapts to four execution modes controlled by the `ExecutionMode` enum:
+`ComputeResource` currently supports two stable execution modes:
 
 | Mode | Description | Typical use |
 | --- | --- | --- |
 | `local` | Runs assets without SSH or Slurm. | Developer laptops and CI smoke tests. |
-| `slurm` | Submits one Slurm job per asset execution. | Staging clusters and simple production setups. |
-| `slurm-session` | Reuses Slurm allocations and (optionally) Ray/Spark clusters. | Long-running production deployments. |
-| `slurm-hetjob` | Builds heterogeneous job submissions for mixed resource requirements. | Optimising GPU/CPU mixes in a single submission. |
+| `slurm` | Submits one Slurm job per asset execution. | Staging clusters and production deployments today. |
+
+> Session-based reuse (`slurm-session`) and heterogeneous job submissions (`slurm-hetjob`) are active areas of development. The configuration stubs remain in the codebase but are not yet ready for day-to-day operations.
 
 Launchers (Bash, Ray, Spark, or custom) can be chosen globally or per asset to fit your workload.
 

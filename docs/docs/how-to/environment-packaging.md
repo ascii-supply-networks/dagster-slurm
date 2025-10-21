@@ -55,13 +55,15 @@ Point `ComputeResource` at that path:
 
 ```python
 compute = ComputeResource(
-    mode="slurm-session",
+    mode="slurm",
     slurm=slurm_resource,
-    session=session_resource,
     default_launcher=RayLauncher(),
     pre_deployed_env_path=deployment_path,
 )
 ```
+
+
+> Session reuse (`slurm-session`) will gain first-class environment hooks once the feature stabilises. For now, focus on the per-asset `slurm` mode when pointing at pre-built environments.
 
 Jobs now start immediately using the pre-installed environment.
 

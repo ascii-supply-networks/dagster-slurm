@@ -11,10 +11,12 @@ Integration for running Dagster assets on Slurm HPC clusters.
 
 See the [docs](https://ascii-supply-networks.github.io/dagster-slurm/) for instructions.
 
+> **Status:** Local execution and one-job-per-asset Slurm runs are production-ready today. Session-based cluster reuse and heterogeneous jobs are actively being developed and will land in a future release.
+
 ## ✨ features
 
 - **Unified API**: Same asset code works in dev (local) for rapid prototyping but just as well on a massive HPC system via SLURM.
-- **Job launch**: Currently we have one job per dagster asset (unless you use multi-asset jobs). We are exploring operator fusion here: https://github.com/ascii-supply-networks/dagster-slurm/issues/22 please share your thoughts with us
+- **Job launch**: One Slurm submission per Dagster asset keeps behaviour predictable. Operator-fusion/session reuse is on the roadmap (feedback welcome in [#22](https://github.com/ascii-supply-networks/dagster-slurm/issues/22)).
 - **Pluggable Launchers**: Bash, Ray, Spark (WIP) - easy to add more
 - **Environment Packaging**: Automatic `pixi`-based environment packaging for remote execution via `pixi-pack`
 - **Connection Pooling**: SSH ControlMaster for efficient remote operations

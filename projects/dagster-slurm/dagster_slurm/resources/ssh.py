@@ -33,7 +33,7 @@ class SSHConnectionResource(ConfigurableResource):
 
             # With a proxy jump host
             jump_box = SSHConnectionResource(
-                host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
+                host="jump.example.com", user="jumpuser", password="jump_password"
             )
             ssh_via_jump = SSHConnectionResource(
                 host="private-cluster",
@@ -83,7 +83,7 @@ class SSHConnectionResource(ConfigurableResource):
     jump_host: Optional["SSHConnectionResource"] = Field(
         default=None,
         description="An optional SSH connection to use as a proxy jump host (-J equivalent). "
-        "The jump host must use key-based authentication.",
+        "The jump host may use key- or password-based authentication.",
     )
     extra_opts: List[str] = Field(
         default_factory=list,
@@ -115,11 +115,8 @@ class SSHConnectionResource(ConfigurableResource):
                 "Cannot specify both 'key_path' and 'password'. Choose one authentication method."
             )
 
-        if self.jump_host:
-            if not self.jump_host.uses_key_auth:
-                raise ValueError("Proxy jump host must use key-based authentication.")
-            if self.jump_host.jump_host:
-                raise ValueError("Multi-level proxy jumps are not supported.")
+        if self.jump_host and self.jump_host.jump_host:
+            raise ValueError("Multi-level proxy jumps are not supported.")
         return self
 
     @property
@@ -131,6 +128,15 @@ class SSHConnectionResource(ConfigurableResource):
     def uses_password_auth(self) -> bool:
         """Returns True if using password-based authentication."""
         return self.password is not None
+
+    @property
+    def requires_tty(self) -> bool:
+        """Return True when the resource explicitly requires a TTY."""
+        if self.force_tty:
+            return True
+        if self.jump_host and self.jump_host.requires_tty:
+            return True
+        return False
 
     @classmethod
     def from_env(
@@ -202,41 +208,10 @@ class SSHConnectionResource(ConfigurableResource):
         if not self.jump_host:
             return []
 
-        # Validator ensures jump host uses key auth, so key_path is not None.
-        # We assert this for the type checker.
-        assert self.jump_host.key_path is not None
-
-        # Build the inner ssh command for the proxy. Jump host must use key auth.
-        proxy_ssh_cmd = [
-            "ssh",
-            "-p",
-            str(self.jump_host.port),
-            "-i",
-            self.jump_host.key_path,
-        ]
-
-        # Add standard options for a non-interactive proxy connection
-        proxy_ssh_cmd.extend(
-            [
-                "-o",
-                "IdentitiesOnly=yes",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                *self.jump_host.extra_opts,
-                f"{self.jump_host.user}@{self.jump_host.host}",
-                "-W",
-                "%h:%p",  # Connect to the final destination
-            ]
-        )
-
-        proxy_command_str = " ".join(shlex.quote(arg) for arg in proxy_ssh_cmd)
-        return ["-o", f"ProxyCommand={proxy_command_str}"]
+        target = f"{self.jump_host.user}@{self.jump_host.host}"
+        if self.jump_host.port != 22:
+            target = f"{target}:{self.jump_host.port}"
+        return ["-J", target]
 
     def get_ssh_base_command(self) -> List[str]:
         """Build base SSH command, including proxy and auth options."""
@@ -276,7 +251,7 @@ class SSHConnectionResource(ConfigurableResource):
                 "-o",
                 "PubkeyAuthentication=no",
                 "-o",
-                "NumberOfPasswordPrompts=1",
+                "NumberOfPasswordPrompts=3",
             ]
 
         return [

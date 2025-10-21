@@ -13,6 +13,24 @@ import pytest
 from .test_utils import run_dg_command, assert_materialization_success
 
 
+@pytest.fixture(scope="module")
+def docker_slurm_env(docker_ssh_key: Path) -> Dict[str, str]:
+    return {
+        "SLURM_EDGE_NODE_HOST": os.environ.get("SLURM_EDGE_NODE_HOST", "127.0.0.1"),
+        "SLURM_EDGE_NODE_PORT": os.environ.get("SLURM_EDGE_NODE_PORT", "2223"),
+        "SLURM_EDGE_NODE_USER": os.environ.get("SLURM_EDGE_NODE_USER", "submitter"),
+        "SLURM_EDGE_NODE_PASSWORD": os.environ.get(
+            "SLURM_EDGE_NODE_PASSWORD", "submitter"
+        ),
+        "SLURM_EDGE_NODE_KEY_PATH": str(docker_ssh_key),
+        "SLURM_EDGE_NODE_JUMP_HOST": os.environ.get("SLURM_EDGE_NODE_JUMP_HOST", ""),
+        "SLURM_EDGE_NODE_JUMP_USER": os.environ.get("SLURM_EDGE_NODE_JUMP_USER", ""),
+        "SLURM_EDGE_NODE_JUMP_PASSWORD": os.environ.get(
+            "SLURM_EDGE_NODE_JUMP_PASSWORD", ""
+        ),
+    }
+
+
 pytestmark = pytest.mark.needs_slurm_docker
 
 
@@ -79,9 +97,18 @@ class TestDevelopmentMode:
         )
 
         # Check for Ray local mode indicators
-        assert (
-            "Single-node mode" in result.stderr
-            or "local Ray cluster" in result.stderr.lower()
+        logs = f"{result.stdout}\n{result.stderr}".lower()
+        ray_local_markers = [
+            "single-node mode",
+            "starting local ray cluster",
+            "local ray cluster",
+            "ray is ready (local mode)",
+            "executing local script",
+            "localpipesclient",
+        ]
+        assert any(marker in logs for marker in ray_local_markers), (
+            "Expected Ray local mode indicator in CLI output. "
+            f"Captured logs:\n{result.stdout}\n{result.stderr}"
         )
 
 
@@ -98,7 +125,9 @@ class TestStagingDockerMode:
         """Ensure SLURM cluster is ready for all staging tests."""
         pass
 
-    def test_list_defs_staging(self, example_project_dir: Path):
+    def test_list_defs_staging(
+        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+    ):
         """Test listing definitions in staging mode."""
         result = subprocess.run(
             [
@@ -113,7 +142,11 @@ class TestStagingDockerMode:
                 "defs",
             ],
             cwd=example_project_dir,
-            env={**os.environ, "DAGSTER_DEPLOYMENT": "STAGING_DOCKER"},
+            env={
+                **os.environ,
+                **docker_slurm_env,
+                "DAGSTER_DEPLOYMENT": "STAGING_DOCKER",
+            },
             capture_output=True,
             text=True,
             timeout=30,
@@ -121,12 +154,15 @@ class TestStagingDockerMode:
 
         assert result.returncode == 0
 
-    def test_bash_assets_staging(self, example_project_dir: Path):
+    def test_bash_assets_staging(
+        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+    ):
         """Test shell/bash assets on SLURM with interactive build."""
         result = run_dg_command(
             example_project_dir,
             deployment="STAGING_DOCKER",
             assets="process_data,aggregate_results",
+            env_overrides=docker_slurm_env,
             timeout=600,  # Longer timeout for environment packing
         )
 
@@ -136,12 +172,15 @@ class TestStagingDockerMode:
         assert "Submitted job" in result.stderr
         assert "pixi pack" in result.stderr or "Packing environment" in result.stderr
 
-    def test_ray_staging(self, example_project_dir: Path):
+    def test_ray_staging(
+        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+    ):
         """Test Ray multi-node cluster on SLURM with interactive build."""
         result = run_dg_command(
             example_project_dir,
             deployment="STAGING_DOCKER",
             assets="distributed_training,distributed_inference",
+            env_overrides=docker_slurm_env,
             timeout=600,
         )
 
@@ -167,7 +206,10 @@ class TestProductionDockerMode:
         pass
 
     def test_bash_assets_production(
-        self, example_project_dir: Path, deployment_metadata: Dict[str, Any]
+        self,
+        example_project_dir: Path,
+        deployment_metadata: Dict[str, Any],
+        docker_slurm_env: Dict[str, str],
     ):
         """Test shell/bash assets with pre-deployed environment."""
         result = run_dg_command(
@@ -175,7 +217,8 @@ class TestProductionDockerMode:
             deployment="PRODUCTION_DOCKER",
             assets="process_data,aggregate_results",
             env_overrides={
-                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"]
+                **docker_slurm_env,
+                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"],
             },
             timeout=300,
         )
@@ -187,7 +230,10 @@ class TestProductionDockerMode:
         assert "Submitted job" in result.stderr
 
     def test_ray_assets_production(
-        self, example_project_dir: Path, deployment_metadata: Dict[str, Any]
+        self,
+        example_project_dir: Path,
+        deployment_metadata: Dict[str, Any],
+        docker_slurm_env: Dict[str, str],
     ):
         """Test Ray assets with pre-deployed environment."""
         result = run_dg_command(
@@ -195,7 +241,8 @@ class TestProductionDockerMode:
             deployment="PRODUCTION_DOCKER",
             assets="distributed_training,distributed_inference",
             env_overrides={
-                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"]
+                **docker_slurm_env,
+                "CI_DEPLOYED_ENVIRONMENT_PATH": deployment_metadata["deployment_path"],
             },
             timeout=300,
         )

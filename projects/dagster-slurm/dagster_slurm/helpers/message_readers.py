@@ -6,10 +6,42 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, cast
+
+import shlex
 
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .ssh_pool import SSHConnectionPool
+
+
+class _ClosedMessageTracker:
+    """Track 'closed' messages to allow draining trailing stdio."""
+
+    def __init__(self, drain_timeout: float = 20.0):
+        self._drain_timeout = drain_timeout
+        self._pending: Optional[Dict[str, Any]] = None
+        self._deadline: Optional[float] = None
+
+    def observe(self, message: Any) -> bool:
+        if isinstance(message, dict) and message.get("method") == "closed":
+            self._pending = message
+            self._deadline = time.time() + self._drain_timeout
+            return True
+        return False
+
+    def maybe_flush(self, handler, *, force: bool = False) -> bool:
+        if not self._pending:
+            return False
+        if not force and self._deadline and time.time() < self._deadline:
+            return False
+
+        handler.handle_message(self._pending)
+        self._pending = None
+        self._deadline = None
+        return True
 
 
 class LocalMessageReader(PipesMessageReader):
@@ -59,9 +91,11 @@ class LocalMessageReader(PipesMessageReader):
                 time.sleep(0.5)
 
         # Tail file
+        tracker = _ClosedMessageTracker()
+
         while not self._stop.is_set():
             try:
-                with open(self.messages_path, "r", encoding="utf-8") as f:
+                with open(self.messages_path, "rb") as f:
                     # Handle file truncation
                     try:
                         size = os.path.getsize(self.messages_path)
@@ -73,16 +107,25 @@ class LocalMessageReader(PipesMessageReader):
                     if pos > 0:
                         f.seek(pos)
 
-                    for line in f:
-                        if self._stop.is_set():
+                    while not self._stop.is_set():
+                        line = f.readline()
+                        if not line:
+                            if tracker.maybe_flush(handler):
+                                self._stop.set()
+                                break
                             break
 
-                        line = line.strip()
-                        if not line:
+                        pos = f.tell()
+                        decoded_line = line.decode("utf-8", errors="replace").strip()
+                        if not decoded_line:
                             continue
 
+                        if self._stop.is_set():
+                            break
                         try:
-                            msg = json.loads(line)
+                            msg = json.loads(decoded_line)
+                            if tracker.observe(msg):
+                                continue
                             handler.handle_message(msg)
                         except json.JSONDecodeError:
                             # Ignore non-JSON lines
@@ -95,7 +138,13 @@ class LocalMessageReader(PipesMessageReader):
             except Exception as e:
                 logger.warning(f"Error reading messages: {e}")
 
+            if tracker.maybe_flush(handler, force=self._stop.is_set()):
+                self._stop.set()
+                break
+
             self._stop.wait(self.poll_interval)
+
+        tracker.maybe_flush(handler, force=True)
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
@@ -141,6 +190,7 @@ class SSHMessageReader(PipesMessageReader):
         control_path: Optional[str] = None,
         reconnect_interval: float = 2.0,
         max_reconnect_attempts: int = 10,
+        ssh_pool: Optional["SSHConnectionPool"] = None,
     ):
         """Args:
         remote_path: Path to messages.jsonl on remote host
@@ -157,8 +207,13 @@ class SSHMessageReader(PipesMessageReader):
         self.max_reconnect_attempts = max_reconnect_attempts
         self.logger = get_dagster_logger()
         self._proc: Optional[subprocess.Popen[str]] = None
+        self._pexpect_child: Optional[Any] = None
         self._stop_flag = threading.Event()
         self._reader_thread: Optional[threading.Thread] = None
+        self.total_messages = 0
+        self._ssh_pool = ssh_pool
+        self._fallback_next_line = 1
+        self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
@@ -171,6 +226,7 @@ class SSHMessageReader(PipesMessageReader):
         self.logger.debug(f"Starting SSH message reader for {self.remote_path}")
 
         # Start reader thread with auto-reconnect
+        self._closed_tracker = _ClosedMessageTracker()
         self._reader_thread = threading.Thread(
             target=self._read_loop_with_reconnect,
             args=(handler,),
@@ -180,7 +236,10 @@ class SSHMessageReader(PipesMessageReader):
 
         try:
             # Yield the params that the remote process needs
-            yield {"path": self.remote_path}
+            yield {
+                "path": self.remote_path,
+                PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: True,
+            }
 
             # Wait for messages - keep reader alive while job runs
             # The reader will stop when we set the stop flag
@@ -205,10 +264,20 @@ class SSHMessageReader(PipesMessageReader):
                         self._proc.kill()
                     except:  # noqa: E722
                         pass
+            if self._pexpect_child is not None:
+                try:
+                    self._pexpect_child.close(force=True)
+                except Exception as e:  # pragma: no cover - best effort cleanup
+                    self.logger.debug(f"Error closing tail session: {e}")
+                finally:
+                    self._pexpect_child = None
 
             # Wait for reader thread to finish
             if self._reader_thread and self._reader_thread.is_alive():
                 self._reader_thread.join(timeout=5)
+
+            if hasattr(self, "_closed_tracker"):
+                self._closed_tracker.maybe_flush(handler, force=True)
 
             self.logger.debug("Message reader stopped")
 
@@ -221,68 +290,159 @@ class SSHMessageReader(PipesMessageReader):
         """
         reconnect_count = 0
         total_message_count = 0
+        return_code: int = 0
+        tracker = getattr(self, "_closed_tracker", _ClosedMessageTracker())
 
         while not self._stop_flag.is_set():
             try:
                 # Start tail process
-                ssh_cmd = self._build_ssh_tail_command()
+                ssh_cmd_optional = self._build_ssh_tail_command()
 
-                if not all(ssh_cmd):
-                    self.logger.error(f"SSH command contains None values: {ssh_cmd}")
-                    return
+                if ssh_cmd_optional is None:
+                    handled, reconnect_count, total_message_count, stop_loop = (
+                        self._poll_messages_with_pool(
+                            handler,
+                            reconnect_count,
+                            total_message_count,
+                            tracker,
+                        )
+                    )
+                    if stop_loop:
+                        break
+                    if handled:
+                        continue
+
+                assert ssh_cmd_optional is not None
+                ssh_cmd: list[str] = ssh_cmd_optional
 
                 self.logger.debug(
                     f"Starting tail (attempt {reconnect_count + 1}): "
                     f"{' '.join(str(x) for x in ssh_cmd)}"
                 )
 
-                self._proc = subprocess.Popen(
-                    ssh_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,
-                )
+                self._proc = None
+                if self._requires_password_auth() and not self.control_path:
+                    child = self._spawn_tail_with_password(ssh_cmd)
+                    self._pexpect_child = child
+                    reconnect_count = 0
+                    message_count = 0
+
+                    for line in self._iter_pexpect_lines(child):
+                        if self._stop_flag.is_set():
+                            break
+
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        try:
+                            message = json.loads(line)
+                            if tracker.observe(message):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and message.get("method") == "log_external_stream"
+                            ):
+                                params = message.get("params", {}) or {}
+                                stream = params.get("stream")
+                                text = params.get("text", "")
+                                if (
+                                    isinstance(stream, str)
+                                    and stream in self._forwarded_lines
+                                ):
+                                    line_count = len(str(text).splitlines())
+                                    if text and not text.endswith("\n"):
+                                        line_count = max(line_count, 1)
+                                    if line_count:
+                                        self._forwarded_lines[stream] += line_count
+                                self.logger.debug(
+                                    "SSHMessageReader stdio chunk: %s",
+                                    message.get("params", {}).get("text", "")[:200],
+                                )
+                            handler.handle_message(message)
+                            message_count += 1
+                            total_message_count += 1
+                            self.total_messages = total_message_count
+                        except json.JSONDecodeError as je:
+                            self.logger.warning(
+                                f"Malformed JSON message: {line[:100]}... Error: {je}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
+
+                    if child.isalive():
+                        child.close(force=True)
+
+                    self._pexpect_child = None
+                    return_code = (
+                        child.exitstatus if child.exitstatus is not None else 0
+                    )
+                    stderr = ""
+                else:
+                    self._proc = subprocess.Popen(
+                        ssh_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                    )
 
                 # Reset reconnect counter on successful start
                 reconnect_count = 0
                 message_count = 0
 
-                # Read messages from tail
-                for line in self._proc.stdout:  # type: ignore
-                    if self._stop_flag.is_set():
-                        break
+                if self._proc:
+                    for line in self._proc.stdout:  # type: ignore
+                        if self._stop_flag.is_set():
+                            break
 
-                    line = line.strip()
-                    if not line:
-                        continue
+                        line = line.strip()
+                        if not line:
+                            continue
 
-                    try:
-                        # Parse JSON message
-                        message = json.loads(line)
+                        try:
+                            message = json.loads(line)
+                            if tracker.observe(message):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and message.get("method") == "log_external_stream"
+                            ):
+                                params = message.get("params", {}) or {}
+                                stream = params.get("stream")
+                                text = params.get("text", "")
+                                if (
+                                    isinstance(stream, str)
+                                    and stream in self._forwarded_lines
+                                ):
+                                    line_count = len(str(text).splitlines())
+                                    if text and not text.endswith("\n"):
+                                        line_count = max(line_count, 1)
+                                    if line_count:
+                                        self._forwarded_lines[stream] += line_count
+                                self.logger.debug(
+                                    "SSHMessageReader stdio chunk: %s",
+                                    message.get("params", {}).get("text", "")[:200],
+                                )
+                            handler.handle_message(message)
+                            message_count += 1
+                            total_message_count += 1
+                            self.total_messages = total_message_count
+                        except json.JSONDecodeError as je:
+                            self.logger.warning(
+                                f"Malformed JSON message: {line[:100]}... Error: {je}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
 
-                        # Pass parsed dict to handler
-                        handler.handle_message(message)
-                        message_count += 1
-                        total_message_count += 1
-
-                        # self.logger.debug(
-                        #     f"Received message {total_message_count}: "
-                        #     f"{message.get('method', 'unknown')}"
-                        # )
-
-                    except json.JSONDecodeError as je:
-                        # Log malformed JSON but continue
-                        self.logger.warning(
-                            f"Malformed JSON message: {line[:100]}... Error: {je}"
-                        )
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Error handling message: {e}", exc_info=True
-                        )
-
-                # Process exited
-                return_code = self._proc.wait()
+                    return_code = self._proc.wait()
+                    stderr = self._proc.stderr.read() if self._proc.stderr else ""
+                else:
+                    stderr = ""
 
                 if self._stop_flag.is_set():
                     # Normal shutdown
@@ -294,8 +454,6 @@ class SSHMessageReader(PipesMessageReader):
                     break
 
                 # Unexpected exit - try to reconnect
-                stderr = self._proc.stderr.read() if self._proc.stderr else ""
-
                 if message_count > 0:
                     # We received messages, so connection was working
                     self.logger.info(
@@ -323,6 +481,10 @@ class SSHMessageReader(PipesMessageReader):
                     self.logger.debug(f"Reconnecting in {self.reconnect_interval}s...")
                     self._stop_flag.wait(self.reconnect_interval)
 
+                if tracker.maybe_flush(handler):
+                    self._stop_flag.set()
+                    break
+
             except Exception as e:
                 if self._stop_flag.is_set():
                     break
@@ -340,11 +502,123 @@ class SSHMessageReader(PipesMessageReader):
                 if not self._stop_flag.is_set():
                     self._stop_flag.wait(self.reconnect_interval)
 
+                if tracker.maybe_flush(handler):
+                    self._stop_flag.set()
+                    break
+
         # self.logger.info(
         #     f"Message reader finished. Total messages received: {total_message_count}"
         # )
 
-    def _build_ssh_tail_command(self) -> list[str]:
+    def _poll_messages_with_pool(
+        self,
+        handler,
+        reconnect_count: int,
+        total_message_count: int,
+        tracker: _ClosedMessageTracker,
+    ) -> tuple[bool, int, int, bool]:
+        """Poll messages.jsonl via SSH pool when ControlMaster is unavailable."""
+        if not self._ssh_pool:
+            self.logger.error(
+                "SSHMessageReader fallback requires an SSHConnectionPool "
+                "when ControlMaster is unavailable."
+            )
+            self._stop_flag.wait(self.reconnect_interval)
+            return True, reconnect_count, total_message_count, self._stop_flag.is_set()
+
+        quoted_path = shlex.quote(self.remote_path)
+        next_line = self._fallback_next_line
+        message_count = 0
+
+        self.logger.debug(
+            "Polling %s for Pipes messages via SSH pool fallback",
+            self.remote_path,
+        )
+
+        while not self._stop_flag.is_set():
+            try:
+                output = self._ssh_pool.run(
+                    f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
+                )
+            except Exception as exc:
+                if not self._stop_flag.is_set():
+                    self.logger.debug("Polling messages file failed: %s", exc)
+                break
+
+            if output:
+                lines = [line.strip() for line in output.splitlines()]
+                lines = [line for line in lines if line]
+                if lines:
+                    processed_lines = 0
+                    for line in lines:
+                        processed_lines += 1
+                        try:
+                            message = json.loads(line)
+                            if tracker.observe(message):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and message.get("method") == "log_external_stream"
+                            ):
+                                params = message.get("params", {}) or {}
+                                stream = params.get("stream")
+                                text = params.get("text", "")
+                                if (
+                                    isinstance(stream, str)
+                                    and stream in self._forwarded_lines
+                                ):
+                                    line_count = len(str(text).splitlines())
+                                    if text and not text.endswith("\n"):
+                                        line_count = max(line_count, 1)
+                                    if line_count:
+                                        self._forwarded_lines[stream] += line_count
+                                self.logger.debug(
+                                    "SSHMessageReader stdio chunk (fallback): %s",
+                                    message.get("params", {}).get("text", "")[:200],
+                                )
+                            handler.handle_message(message)
+                            message_count += 1
+                            total_message_count += 1
+                            self.total_messages = total_message_count
+                        except json.JSONDecodeError as je:
+                            self.logger.warning(
+                                f"Malformed JSON message: {line[:100]}... Error: {je}"
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
+                    next_line += processed_lines
+
+            self._stop_flag.wait(self.reconnect_interval)
+
+            if tracker.maybe_flush(handler):
+                self._stop_flag.set()
+                break
+
+        self._fallback_next_line = next_line
+
+        if tracker.maybe_flush(handler):
+            self._stop_flag.set()
+            return True, reconnect_count, total_message_count, True
+
+        if message_count == 0:
+            reconnect_count += 1
+            if reconnect_count >= self.max_reconnect_attempts:
+                self.logger.error(
+                    f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. "
+                    f"Total messages received: {total_message_count}"
+                )
+                return True, reconnect_count, total_message_count, True
+        else:
+            reconnect_count = 0
+
+        if self._stop_flag.is_set():
+            return True, reconnect_count, total_message_count, True
+
+        return True, reconnect_count, total_message_count, False
+
+    def _build_ssh_tail_command(self) -> Optional[list[str]]:
         """Build SSH command to tail the remote messages file.
 
         Returns:
@@ -391,11 +665,39 @@ class SSHMessageReader(PipesMessageReader):
                 ]
             )
         else:
-            # Password auth without ControlMaster won't work
-            raise RuntimeError(
-                "Password authentication requires ControlMaster. "
-                "Pass control_path to SSHMessageReader constructor."
-            )
+            if self._requires_password_auth():
+                if self._ssh_pool:
+                    return None
+                base_cmd.extend(
+                    [
+                        "-o",
+                        "PreferredAuthentications=password,keyboard-interactive",
+                        "-o",
+                        "NumberOfPasswordPrompts=3",
+                    ]
+                )
+            elif self.ssh_config.uses_key_auth:
+                key_path_opt = self.ssh_config.key_path
+                if not key_path_opt:
+                    raise RuntimeError(
+                        "SSH key authentication requires key_path to be set"
+                    )
+                key_path = cast(str, key_path_opt)
+                base_cmd.extend(
+                    [
+                        "-i",
+                        key_path,
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "BatchMode=yes",
+                    ]
+                )
+            else:
+                raise RuntimeError(
+                    "Password authentication requires ControlMaster. "
+                    "Pass control_path to SSHMessageReader constructor."
+                )
 
         # Add extra options
         base_cmd.extend(self.ssh_config.extra_opts)
@@ -423,3 +725,111 @@ class SSHMessageReader(PipesMessageReader):
             f"  ssh {self.ssh_config.user}@{self.ssh_config.host} -p {self.ssh_config.port} "
             f"'cat {self.remote_path}'"
         )
+
+    def _requires_password_auth(self) -> bool:
+        if self.ssh_config.uses_password_auth:
+            return True
+        if self.ssh_config.jump_host and self.ssh_config.jump_host.uses_password_auth:
+            return True
+        return False
+
+    def _collect_passwords(self) -> list[str]:
+        passwords: list[str] = []
+        if self.ssh_config.jump_host and self.ssh_config.jump_host.password:
+            passwords.append(self.ssh_config.jump_host.password)
+        if self.ssh_config.password:
+            passwords.append(self.ssh_config.password)
+        return passwords
+
+    def _spawn_tail_with_password(self, ssh_cmd: list[str]):
+        try:
+            import pexpect  # type: ignore
+        except ImportError as exc:  # pragma: no cover - dependency guard
+            raise RuntimeError(
+                "Password-based log tailing requires the 'pexpect' package. "
+                "Install it with 'pip install pexpect'."
+            ) from exc
+
+        cmd_str = " ".join(shlex.quote(part) for part in ssh_cmd)
+        self.logger.debug(f"Spawning password-based tail: {cmd_str}")
+        child = pexpect.spawn(cmd_str, timeout=120, encoding="utf-8")
+        child.delaybeforesend = 0
+        passwords = self._collect_passwords()
+        if not passwords:
+            child.close(force=True)
+            raise RuntimeError(
+                "Password authentication requested but no password provided."
+            )
+
+        pw_index = 0
+        fallback_password = passwords[-1]
+        fallback_attempts = 0
+        prompt_timeout = 120
+
+        while True:
+            index = child.expect(
+                [
+                    r"(?i)password:",
+                    r"(?i)passphrase",
+                    r"(?i)verification code",
+                    r"(?i)otp",
+                    pexpect.EOF,
+                    pexpect.TIMEOUT,
+                ],
+                timeout=prompt_timeout,
+            )
+
+            if index in (0, 1):
+                if pw_index < len(passwords):
+                    child.sendline(passwords[pw_index])
+                    pw_index += 1
+                    continue
+                if fallback_password and fallback_attempts < 3:
+                    child.sendline(fallback_password)
+                    fallback_attempts += 1
+                    continue
+                child.close(force=True)
+                raise RuntimeError("Authentication failed: no password remaining")
+            if index in (2, 3):  # OTP or verification code
+                # Prompt user interactively via /dev/tty if possible.
+                try:
+                    with (
+                        open("/dev/tty", "w", encoding="utf-8", buffering=1) as tty_out,
+                        open("/dev/tty", "r", encoding="utf-8", buffering=1) as tty_in,
+                    ):
+                        tty_out.write(
+                            f"Enter verification code for {self.ssh_config.host}: "
+                        )
+                        tty_out.flush()
+                        code = tty_in.readline().strip()
+                except OSError:
+                    child.close(force=True)
+                    raise RuntimeError(
+                        "OTP required but no interactive TTY is available."
+                    )
+                if not code:
+                    child.close(force=True)
+                    raise RuntimeError("Empty OTP provided; aborting tail session")
+                child.sendline(code)
+                continue
+            if index == 4:  # EOF
+                break
+            if index == 5:  # TIMEOUT -> assume command started
+                break
+
+        child.timeout = 5
+        return child
+
+    def _iter_pexpect_lines(self, child):
+        import pexpect  # type: ignore
+
+        while not self._stop_flag.is_set():
+            try:
+                chunk = child.readline()
+                if not chunk:
+                    continue
+                yield chunk
+            except pexpect.TIMEOUT:
+                continue
+            except pexpect.EOF:
+                break
