@@ -47,7 +47,7 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     },
     "compute_config": {
         "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
-        "debug_mode": False,
+        "debug_mode": True,
     },
     "launchers": {
         "bash": {},
@@ -96,7 +96,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "compute_config": {
         "auto_detect_platform": False,
         "pack_platform": "linux-64",
-        "debug_mode": False,
+        "debug_mode": True,
     },
     "launchers": {
         "bash": {},
