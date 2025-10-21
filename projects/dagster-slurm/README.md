@@ -19,7 +19,7 @@ Example
 
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
-docker compose up -d
+docker compose up -d --build
 cd dagster-slurm/examples
 ```
 

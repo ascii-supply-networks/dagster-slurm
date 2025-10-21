@@ -38,7 +38,7 @@ aas-journal: Journal of Open Source Software
 
 Dagster is a modern data orchestrator that emphasises reproducibility, observability, and a strong developer experience [@dagster]. In parallel, most high-performance computing (HPC) centres continue to rely on Slurm for batch scheduling and resource governance [@yoo2003slurm]. The two ecosystems rarely meet in practice: Dagster projects often target cloud or single-node deployments, while Slurm users maintain bespoke submission scripts with limited reuse or visibility. This paper introduces **dagster-slurm**, an open-source integration that allows the same Dagster assets to run unchanged across laptops, CI pipelines, containerised Slurm clusters, and Tier-0 supercomputers. The project packages dependencies with Pixi [@pixi], submits workloads through Slurm using Dagster Pipes [@dagsterpipes], and streams logs plus scheduler metrics back to the Dagster UI.
 
-The key contribution is a unified compute resource (`ComputeResource`) that hides SSH transport (including password-only jump hosts and OTP prompts), dependency packaging, and queue configuration while still respecting Slurm’s scheduling semantics. Users choose between four execution modes (`local`, `slurm`, `slurm-session`, and `slurm-hetjob`); launchers for Bash, Ray, and Spark ship out of the box and can be extended. Production workflows further benefit from environment reuse, session-based allocations, and automatic heterogeneous job construction, reducing queue churn and keeping observability in a single pane of glass.
+The key contribution is a unified compute resource (`ComputeResource`) that hides SSH transport (including password-only jump hosts and OTP prompts), dependency packaging, and queue configuration while still respecting Slurm’s scheduling semantics. Today the project ships with two production-ready execution modes—`local` for laptop/CI development and `slurm` for one-job-per-asset submissions. Experimental support for session-based reuse and heterogeneous jobs lives in feature branches and will graduate once the ergonomics match the rest of the API. Launchers for Bash, Ray, and Spark ship out of the box and can be extended.
 
 # Statement of Need
 
@@ -47,7 +47,7 @@ Research software engineers and data scientists increasingly face cross-environm
 - Preserve Dagster’s asset-based design, lineage tracking, and alerting for workloads that ultimately run on Slurm-managed hardware.
 - Remove the need to rewrite orchestration glue when moving from development to production supercomputers.
 - Provide a batteries-included path for packaging Python environments reproducibly (Pixi + pixi-pack) and deploying them in air-gapped environments.
-- Support advanced HPC patterns—including session reuse for long-lived clusters and heterogeneous Slurm jobs—without forcing users to abandon Dagster’s abstractions.
+- Offer a clear path to advanced HPC patterns (session reuse for long-lived clusters, heterogeneous Slurm jobs) while keeping the current stable surface area intentionally small; these features are being iterated on in the open.
 
 # System Overview
 
@@ -80,10 +80,9 @@ slurm = SlurmResource(
 )
 
 compute = ComputeResource(
-    mode=ExecutionMode.SLURM_SESSION,
+    mode=ExecutionMode.SLURM,
     slurm=slurm,
     default_launcher=RayLauncher(num_gpus_per_node=1),
-    enable_cluster_reuse=True,
 )
 
 @dg.asset(required_resource_keys={"compute"})
@@ -98,7 +97,7 @@ def train_model(context: dg.AssetExecutionContext):
     yield from completed.get_results()
 ```
 
-Local development simply swaps `ExecutionMode.SLURM_SESSION` for `ExecutionMode.LOCAL`; staging clusters can set `ExecutionMode.SLURM` to submit per-asset `sbatch` jobs. The example project bundled with the repository demonstrates this workflow, complete with Dockerised Slurm nodes for integration testing.
+Local development simply swaps `ExecutionMode.SLURM` for `ExecutionMode.LOCAL`. The example project bundled with the repository demonstrates this workflow, complete with Dockerised Slurm nodes for integration testing. Session reuse and heterogeneous jobs remain under active development; early adopters can track progress in the repository milestones.
 
 # Evaluation
 

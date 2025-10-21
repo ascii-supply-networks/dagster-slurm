@@ -27,9 +27,9 @@ For containerised development the bundled docker-compose stack already provides 
 
 Ray support starts with the standard `ComputeResource` from `dagster_slurm`. You provide:
 
-1. An execution mode (`local`, `slurm`, `slurm-session`, or `slurm-hetjob`)
+1. An execution mode (`local` or `slurm`)
 2. A `RayLauncher` either as the default launcher or per asset
-3. Optional session configuration when you want to reuse Ray clusters across assets
+3. Optional advanced settings (session reuse and heterogeneous jobs are under active development).
 
 ```python title="definitions/assets.py"
 import dagster as dg
@@ -49,14 +49,13 @@ slurm = SlurmResource(
 )
 
 compute = ComputeResource(
-    mode=ExecutionMode.SLURM_SESSION,
+    mode=ExecutionMode.SLURM,
     slurm=slurm,
     default_launcher=RayLauncher(
         num_cpus_per_node=32,
         num_gpus_per_node=4,
         ray_version="2.9.3",
     ),
-    enable_cluster_reuse=True,
 )
 ```
 
@@ -131,8 +130,8 @@ The launcher exposes the head node address via Ray defaults, so `ray.init(addres
 | --- | --- |
 | `local` | Starts a local Ray runtime on the Dagster node. Ideal for development, no Slurm required. |
 | `slurm` | Submits a Slurm job per asset; the `RayLauncher` bootstraps a Ray cluster inside that allocation and tears it down afterwards. |
-| `slurm-session` | Keeps a Slurm allocation alive across asset runs. With `enable_cluster_reuse=True` the same Ray head/worker nodes remain warm. |
-| `slurm-hetjob` | Bundles multiple resource groups (e.g. CPU-heavy + GPU-heavy stages). Each component can declare its own `RayLauncher` footprint. |
+
+> Session reuse and heterogeneous jobs are planned enhancements. Their configuration knobs remain in the API but are considered experimental until documented otherwise.
 
 To mix Ray with other launchers, override `launcher=` per asset or per step.
 
@@ -162,6 +161,6 @@ Ray workers inherit that environment automatically.
 
 - **Cluster never starts** – Ensure `ray` is installed in the packed environment and that your Slurm partition allows the requested CPUs/GPUs. Check the job logs under `${SLURM_DEPLOYMENT_BASE_PATH}/.../run.log`.
 - **Workers cannot reach the head node** – Verify that intra-node networking is allowed on your cluster. Set `head_node_address` explicitly in `RayLauncher` if your setup uses custom hostnames.
-- **Hanging shutdowns** – On long-lived sessions call `compute.cleanup_cluster(cluster_id)` after large jobs to force Ray teardown.
+- **Hanging shutdowns** – When session reuse becomes available, call `compute.cleanup_cluster(cluster_id)` after large jobs to force Ray teardown.
 
 Need more? Open an issue with your cluster details so we can extend the launcher helpers.

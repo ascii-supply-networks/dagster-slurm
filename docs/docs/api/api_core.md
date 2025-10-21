@@ -80,7 +80,7 @@ Bases: `ConfigurableResource`
 Unified compute resource - adapts to deployment.
 
 This is the main facade that assets depend on.
-Hides complexity of local vs Slurm vs session execution.
+Hides complexity of local and Slurm execution today while leaving hooks for future session reuse.
 
 Usage:
 : @asset
@@ -102,25 +102,7 @@ Slurm per-asset mode (staging):
 : slurm = SlurmResource.from_env()
   compute = ComputeResource(mode=”slurm”, slurm=slurm)
 
-Slurm session mode with cluster reuse (prod):
-: slurm = SlurmResource.from_env()
-  session = SlurmSessionResource(slurm=slurm, num_nodes=10)
-  compute = ComputeResource(
-  <br/>
-  > mode=”slurm-session”,
-  > slurm=slurm,
-  > session=session,
-  > enable_cluster_reuse=True,
-  > cluster_reuse_tolerance=0.2,
-  <br/>
-  )
-
-Heterogeneous job mode (optimal resource allocation):
-: compute = ComputeResource(
-  : mode=”slurm-hetjob”,
-    slurm=slurm,
-  <br/>
-  )
+Planned enhancements (session reuse, heterogeneous jobs) will reuse the same facade once they stabilise. Early adopters can explore the experimental classes in the repository, but the documented surface area focuses on the `local` and `slurm` modes.
 
 * **Parameters:**
   **data** (`Any`)
@@ -791,7 +773,7 @@ Bases: `ConfigurableResource`
 Unified compute resource - adapts to deployment.
 
 This is the main facade that assets depend on.
-Hides complexity of local vs Slurm vs session execution.
+Hides complexity of local and Slurm execution today while leaving hooks for future session reuse.
 
 Usage:
 : @asset
@@ -813,25 +795,7 @@ Slurm per-asset mode (staging):
 : slurm = SlurmResource.from_env()
   compute = ComputeResource(mode=”slurm”, slurm=slurm)
 
-Slurm session mode with cluster reuse (prod):
-: slurm = SlurmResource.from_env()
-  session = SlurmSessionResource(slurm=slurm, num_nodes=10)
-  compute = ComputeResource(
-  <br/>
-  > mode=”slurm-session”,
-  > slurm=slurm,
-  > session=session,
-  > enable_cluster_reuse=True,
-  > cluster_reuse_tolerance=0.2,
-  <br/>
-  )
-
-Heterogeneous job mode (optimal resource allocation):
-: compute = ComputeResource(
-  : mode=”slurm-hetjob”,
-    slurm=slurm,
-  <br/>
-  )
+Planned enhancements (session reuse, heterogeneous jobs) will reuse the same facade once they stabilise. Early adopters can explore the experimental classes in the repository, but the documented surface area focuses on the `local` and `slurm` modes.
 
 * **Parameters:**
   **data** (`Any`)

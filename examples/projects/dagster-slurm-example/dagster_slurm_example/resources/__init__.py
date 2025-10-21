@@ -112,43 +112,43 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
 SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Vienna Scientific Cluster (VSC-5) queue defaults.
     # Off-hackathon CPU slots (active)
-    # "vsc5": {
-    #     "slurm_queue_config": {
-    #         # sinfo | grep idle
-    #         "partition": "zen2_0256_a40x2",
-    #         "qos": "zen2_0256_a40x2",
-    #         # "partition": "zen3_0512",
-    #         # "qos": "zen3_0512_devel",
-    #         "time_limit": "00:10:00",
-    #         "num_nodes": 1,
-    #         "gpus_per_node": 0,
-    #     },
-    #     "slurm_session_config": {
-    #         "partition": "zen3_0512",
-    #         "qos": "zen3_0512_devel",
-    #         "time_limit": "00:10:00",
-    #         "num_nodes": 1,
-    #         "gpus_per_node": 0,
-    #     },
-    # },
-    # Hackathon GPU reservation (toggle manually when the reservation is active)
     "vsc5": {
         "slurm_queue_config": {
-            "partition": "zen3_0512_a100x2",
-            "qos": "zen3_0512_a100x2",
-            "reservation": "dagster-slurm_21",  # 22_23 on later days
-            "gpus_per_node": 1,
+            # sinfo | grep idle
+            "partition": "zen2_0256_a40x2",
+            "qos": "zen2_0256_a40x2",
+            # "partition": "zen3_0512",
+            # "qos": "zen3_0512_devel",
+            "time_limit": "00:10:00",
             "num_nodes": 1,
-            "mem": None,
+            "gpus_per_node": 0,
         },
         "slurm_session_config": {
-            "partition": "zen3_0512_a100x2",
-            "qos": "zen3_0512_a100x2",
-            "reservation": "dagster-slurm_21",
-            "gpus_per_node": 1,
+            "partition": "zen3_0512",
+            "qos": "zen3_0512_devel",
+            "time_limit": "00:10:00",
             "num_nodes": 1,
+            "gpus_per_node": 0,
         },
     },
+    # Hackathon GPU reservation (toggle manually when the reservation is active)
+    # "vsc5": {
+    #     "slurm_queue_config": {
+    #         "partition": "zen3_0512_a100x2",
+    #         "qos": "zen3_0512_a100x2",
+    #         "reservation": "dagster-slurm_21",  # 22_23 on later days
+    #         "gpus_per_node": 1,
+    #         "num_nodes": 1,
+    #         "mem": None,
+    #     },
+    #     "slurm_session_config": {
+    #         "partition": "zen3_0512_a100x2",
+    #         "qos": "zen3_0512_a100x2",
+    #         "reservation": "dagster-slurm_21",
+    #         "gpus_per_node": 1,
+    #         "num_nodes": 1,
+    #     },
+    # },
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
         "slurm_queue_config": {

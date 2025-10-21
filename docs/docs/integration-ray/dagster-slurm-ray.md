@@ -19,17 +19,15 @@ defs = Definitions(
     assets=[train_model, evaluate_model, export_model],
     resources={
         "compute": ComputeResource(
-            mode="slurm-session",
+            mode="slurm",
             slurm=slurm_resource,
-            session=session_resource,
             default_launcher=ray_launcher,
-            enable_cluster_reuse=True,
         ),
     },
 )
 ```
 
-The shared launcher ensures all assets run inside the same Ray cluster when `slurm-session` mode is active, minimising cluster churn.
+The shared launcher keeps every asset on the same Ray launcher configuration while still running each one in its own Slurm job. Session reuse remains experimental.
 
 ### Asset-specific overrides
 
@@ -59,20 +57,9 @@ Use Dagster's `MultiAssetSensor`, `AssetCheck`, or `AutomationCondition` to coor
 - Fan out inference shards as individual materializations by emitting multiple Dagster outputs from a single Ray job.
 - Use `context.defer_asset` to schedule dependent Ray assets once the cluster has produced a success marker.
 
-## Session reuse and cluster lifecycle
+## Roadmap: session reuse
 
-When `ComputeResource.enable_cluster_reuse` is `True`, the Ray head node persists across runs until:
-
-- The materialization succeeds and the cluster is idle longer than `cluster_reuse_tolerance`.
-- The Dagster run fails and `cleanup_on_failure=True`.
-
-To force a teardown (for example between large experiments):
-
-```python
-context.resources.compute.cleanup_cluster(cluster_id="ray-prod")
-```
-
-Pass a custom `cluster_id` to `RayLauncher` if you need multiple concurrent clusters inside the same session.
+Keeping a Ray head node alive across multiple Dagster assets (often referred to as `slurm-session`) is still under active development. The configuration hooks remain in the code to avoid breaking changes, but we recommend sticking to the `slurm` mode for production work today. Track progress or join the design discussions on GitHub if your workloads would benefit from long-lived clusters.
 
 ## Mixing Ray with other launchers
 

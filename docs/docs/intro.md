@@ -17,7 +17,7 @@ sidebar_position: 1
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-docker compose up -d
+docker compose up -d --build
 cd examples
 ```
 
@@ -178,14 +178,14 @@ To confirm the job landed on the expected queue, open an interactive shell on th
 
 ## Execution modes
 
-`ComputeResource` adapts to four execution modes controlled by the `ExecutionMode` enum:
+`ComputeResource` currently supports two stable execution modes:
 
 | Mode | Description | Typical use |
 | --- | --- | --- |
 | `local` | Runs assets without SSH or Slurm. | Developer laptops and CI smoke tests. |
-| `slurm` | Submits one Slurm job per asset execution. | Staging clusters and simple production setups. |
-| `slurm-session` | Reuses Slurm allocations and (optionally) Ray/Spark clusters. | Long-running production deployments. |
-| `slurm-hetjob` | Builds heterogeneous job submissions for mixed resource requirements. | Optimising GPU/CPU mixes in a single submission. |
+| `slurm` | Submits one Slurm job per asset execution. | Staging clusters and production deployments today. |
+
+> Session-based reuse (`slurm-session`) and heterogeneous job submissions (`slurm-hetjob`) are active areas of development. The configuration stubs remain in the codebase but are not yet ready for day-to-day operations.
 
 Launchers (Bash, Ray, Spark, or custom) can be chosen globally or per asset to fit your workload.
 
