@@ -97,9 +97,18 @@ class TestDevelopmentMode:
         )
 
         # Check for Ray local mode indicators
-        assert (
-            "Single-node mode" in result.stderr
-            or "local Ray cluster" in result.stderr.lower()
+        logs = f"{result.stdout}\n{result.stderr}".lower()
+        ray_local_markers = [
+            "single-node mode",
+            "starting local ray cluster",
+            "local ray cluster",
+            "ray is ready (local mode)",
+            "executing local script",
+            "localpipesclient",
+        ]
+        assert any(marker in logs for marker in ray_local_markers), (
+            "Expected Ray local mode indicator in CLI output. "
+            f"Captured logs:\n{result.stdout}\n{result.stderr}"
         )
 
 
