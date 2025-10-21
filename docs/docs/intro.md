@@ -108,7 +108,7 @@ Set the variables in a `.env` file or your orchestrator’s secret store. Passwo
 
 > **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically switches to one-off SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your security policy restricts where control sockets can live.
 
-### Sample configuration: Vienna Scientific Cluster (VSC-5)
+### Sample configuration: Austrian Scientific Computing (ASC) (VSC-5)
 
 ```dotenv title=".env.vsc5"
 # SSH / edge node access

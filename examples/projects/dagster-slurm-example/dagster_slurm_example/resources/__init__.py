@@ -110,7 +110,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
 }
 
 SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    # Vienna Scientific Cluster (VSC-5) queue defaults.
+    # Austrian Scientific Computing (ASC) (VSC-5) queue defaults.
     # Off-hackathon CPU slots (active)
     "vsc5": {
         "slurm_queue_config": {
