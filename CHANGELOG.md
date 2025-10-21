@@ -2,6 +2,106 @@
 
 <!-- version list -->
 
+## v1.5.0-rc.3 (2025-10-21)
+
+### Bug Fixes
+
+- CI even more fixing ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Ci more ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Explore fixing ssh tests ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Interactive session ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Make tests green again ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Message reader (local) ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- No gpus in dev queue on VSC5
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine CI ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine CI more ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine execution on VSC5 ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine leonardo configs ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Reinfe message reading (a bit not yet fully)
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Still failing, but now better error of missing budget
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Test more ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Tests in CI ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- VSC5 ssh connection ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+### Chores
+
+- Begin exploring leonardo ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Cleanup, disable debug mode
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine docs ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+### Features
+
+- Explore leonardo ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Make jump host approach more flexible
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Package upgrades ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Prep launch for real HPC systems
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine 5 ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine docs ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine paper ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Refine SSH further for VSC5
+  ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+- Use other more free nodes ([#58](https://github.com/ascii-supply-networks/dagster-slurm/pull/58),
+  [`444e2d9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/444e2d928b1588ed70b54be1d4f65996991ae657))
+
+
 ## v1.5.0-rc.2 (2025-10-17)
 
 ### Bug Fixes
