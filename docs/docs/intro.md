@@ -45,9 +45,8 @@ pixi run start
 
 Navigate to [http://localhost:3000](http://localhost:3000) to view the Dagster UI with assets running in-process.
 
-### 2. Using Dagster
 
-## Using Dagster with Slurm
+### 2. Using Dagster
 
 To understand the benefits of using **Dagster** with **Slurm**, open the **Dagster UI** and navigate to the **Assets** tab.
 Here, you’ll see the different assets that can be *materialized* (i.e., executed).
