@@ -6,7 +6,11 @@ sidebar_position: 1
 
 `dagster-slurm` lets you take the same Dagster assets from a laptop to a Slurm-backed supercomputer with minimal configuration changes. This page walks through the demo environment bundled with the repository and highlights the key concepts you will reuse on your own cluster.
 
-## What Dagster technically delivers
+**An European sovereign GPU cloud does not come out of nowhere
+maybe this project can support making HPC systems more accessible**.
+
+
+## What Dagster-Slurm technically delivers
 
 - **Deterministic runtimes:** `pixi` and `pixi-pack` freeze your dependencies, upload the bundle to the HPC edge, and install exactly once per version.
 - **Automated deployment:** Dagster assembles the run directory, syncs it to the cluster, and invokes Slurm without custom shell scripts.
@@ -78,7 +82,7 @@ Depending on your Dagster configuration, you can also log and visualize addition
    (or your own equivalent module).
 2. Provide the connection details via environment variables—`dagster-slurm` reads them at runtime so you can keep secrets out of the repository.
 
-### Required environment variables
+**Required environment variables**
 
 | Variable | Purpose | Notes |
 | --- | --- | --- |
@@ -102,80 +106,6 @@ Set the variables in a `.env` file or your orchestrator’s secret store. Passwo
 
 > **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically switches to one-off SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your security policy restricts where control sockets can live.
 
-### Sample configuration: Austrian Scientific Computing (ASC) (VSC-5)
-
-```dotenv title=".env.vsc5"
-# SSH / edge node access
-SLURM_EDGE_NODE_HOST=vsc5.vsc.ac.at
-SLURM_EDGE_NODE_PORT=22
-SLURM_EDGE_NODE_USER=your_vsc_username
-SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
-SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at        # optional, but recommended
-SLURM_EDGE_NODE_JUMP_USER=your_vsc_username
-SLURM_EDGE_NODE_JUMP_PASSWORD=...              # required: VMOS bastion only accepts password/OTP auth
-
-# Deployment settings
-SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
-SLURM_PARTITION=zen3_0512                      # pick a queue you can access
-SLURM_QOS=zen3_0512_devel                      # optional QoS/account string
-SLURM_RESERVATION=dagster-slurm_21             # optional reservation (if active)
-SLURM_SUPERCOMPUTER_SITE=vsc5
-
-# Dagster deployment selector
-DAGSTER_DEPLOYMENT=production_supercomputer
-```
-
-VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).  
-VMOS currently rejects key-only authentication, so always provide `SLURM_EDGE_NODE_JUMP_PASSWORD` (and be ready to type the time-based OTP on the first prompt). The final hop to `vsc5.vsc.ac.at` can still use your SSH key. If your policies require password-only access end-to-end, set `SLURM_EDGE_NODE_PASSWORD`; Dagster prints `Enter … for vsc5.vsc.ac.at:` on your terminal—type the OTP there to continue. Password-based sessions automatically request a pseudo-TTY, so you only need `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
-
-> **Cleanup behaviour:** Completed runs trigger an asynchronous `rm -rf` of the run directory on the edge node. This keeps quotas tidy without delaying Dagster shutdown. Set `debug_mode=True` on the relevant `ComputeResource` while debugging to keep run folders around for manual inspection.
-
-### Sample configuration: Leonardo (CINECA)
-
-```dotenv title=".env.leonardo"
-SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it
-SLURM_EDGE_NODE_PORT=22                     # Leonardo typically listens on 22; override if your project uses a custom port
-SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/usertrain/a08trb02/dagster-slurm
-SLURM_PARTITION=boost_usr_prod              # or boost_usr_dbg / dcgp_usr_prod depending on your entitlement
-SLURM_QOS=boost_qos_bprod
-SLURM_SUPERCOMPUTER_SITE=leonardo
-DAGSTER_DEPLOYMENT=production_supercomputer
-```
-
-Leonardo requires you to have an active project allocation; the permitted partitions depend on your account type. Verify your entitlements on the cluster:
-
-```bash
-sacctmgr show assoc where user=$USER format=Cluster,Account,Partition,QOS%20
-sinfo -s
-```
-
-If the output does not list `batch`, pick one of the partitions above that appears in both commands. GPU queues also need the matching QoS (e.g. `dcgpuqos`). Training accounts typically use `/leonardo/home/usertrain/<user>/…` for storage—adjust `SLURM_DEPLOYMENT_BASE_PATH` accordingly. If your site enforces OTP/Kerberos, configure a local `~/.ssh/config` entry or a bastion jump host—`dagster-slurm` will reuse that setup automatically.
-
-With the variables defined, restart your Dagster code location. To dry-run against the real scheduler while still allowing on-the-fly environment packaging, point `DAGSTER_DEPLOYMENT=staging_supercomputer` and run:
-
-```bash
-pixi run start-staging-supercomputer
-```
-
-For production workloads you should publish the environment bundle ahead of time (e.g. via CI using `python scripts/deploy_environment.py`). Once you export the uploaded path as `CI_DEPLOYED_ENVIRONMENT_PATH`, switch to `DAGSTER_DEPLOYMENT=production_supercomputer` and start Dagster:
-
-```bash
-pixi run start-production-supercomputer
-```
-
-The production preset refuses to start if `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, ensuring clusters never build environments during business-critical runs.
-
-### Staging vs. production modes
-
-| Mode | Environment packaging | Typical use case |
-| --- | --- | --- |
-| `staging_supercomputer` | Builds/publishes pixi environments on demand for each run. Startup is slower, but ideal while iterating or validating new dependencies. | Dry runs, QA, exploratory workloads. |
-| `production_supercomputer` | Expects a pre-deployed environment (referenced via `CI_DEPLOYED_ENVIRONMENT_PATH`). Launches quickly because the runtime is already present on the cluster. | Business-critical pipelines that require deterministic runtimes. |
-
-In practice, use staging while developing or testing new packages, then promote the bundle via CI and switch the deployment to production once the artifact is published.
-
-To confirm the job landed on the expected queue, open an interactive shell on the cluster and run `squeue -j <jobid> -o '%i %P %q %R %T'`. The `Partition`, `QoS`, and `Reservation` columns should match your `.env` overrides.
-
 ## Execution modes
 
 `ComputeResource` currently supports two stable execution modes:
@@ -188,6 +118,17 @@ To confirm the job landed on the expected queue, open an interactive shell on th
 > Session-based reuse (`slurm-session`) and heterogeneous job submissions (`slurm-hetjob`) are active areas of development. The configuration stubs remain in the codebase but are not yet ready for day-to-day operations.
 
 Launchers (Bash, Ray, Spark—WIP, or custom) can be chosen globally or per asset to fit your workload.
+
+## Staging vs. production modes
+
+| Mode | Environment packaging | Typical use case |
+| --- | --- | --- |
+| `staging_supercomputer` | Builds/publishes pixi environments on demand for each run. Startup is slower, but ideal while iterating or validating new dependencies. | Dry runs, QA, exploratory workloads. |
+| `production_supercomputer` | Expects a pre-deployed environment (referenced via `CI_DEPLOYED_ENVIRONMENT_PATH`). Launches quickly because the runtime is already present on the cluster. | Business-critical pipelines that require deterministic runtimes. |
+
+In practice, use staging while developing or testing new packages, then promote the bundle via CI and switch the deployment to production once the artifact is published.
+
+To confirm the job landed on the expected queue, open an interactive shell on the cluster and run `squeue -j <jobid> -o '%i %P %q %R %T'`. The `Partition`, `QoS`, and `Reservation` columns should match your `.env` overrides.
 
 ## API examples
 
