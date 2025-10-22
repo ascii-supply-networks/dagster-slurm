@@ -1,6 +1,6 @@
 """Unified compute resource - main facade."""
 
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
 from pydantic import Field, PrivateAttr, model_validator
@@ -254,10 +254,8 @@ class ComputeResource(ConfigurableResource):
             try:
                 override_payload = override.model_dump(exclude_unset=True)
                 # model_copy returns a new instance, keeping the original default untouched.
-                return cast(
-                    ComputeLauncher,
-                    default_launcher.model_copy(update=override_payload),
-                )
+                return default_launcher.model_copy(update=override_payload)
+
             except AttributeError:
                 # Fall back to using the provided launcher directly if it doesn't support dumping.
                 pass
