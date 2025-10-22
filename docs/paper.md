@@ -120,6 +120,6 @@ Community contributions—issue reports, cluster-specific recipes, and new launc
 # Acknowledgements
 
 We thank the operations teams at the Austrian Scientific Computing (ASC) (VSC-5) and CINECA’s Leonardo supercomputer for early feedback, and the Dagster community for discussions around orchestrating HPC workloads. Funding and in-kind support were provided by the Complexity Science Hub Vienna and the Austrian Supply Chain Intelligence Institute.
-We furhter thank the EUROCC AI HACKATHON 2025 for providing the opportunity to test and validate our work in a real HPC environment. https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375
+This work was completed in part at the EUROCC AI HACKATHON 2025, part of the Open Hackathons program. The authors would like to acknowledge OpenACC-Standard.org for their support.
 
 # References
