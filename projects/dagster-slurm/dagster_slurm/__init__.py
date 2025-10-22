@@ -5,7 +5,7 @@ Run Dagster assets on Slurm clusters with support for:
 - Local dev mode (no SSH/Slurm)
 - Per-asset Slurm submission (staging)
 - Session mode with operator fusion (production)
-- Multiple launchers (Bash, Ray, Spark)
+- Multiple launchers (Bash, Ray, Spark—WIP)
 """
 
 # Core resources
@@ -37,7 +37,7 @@ __all__ = [
     "BashLauncher",
     "RayLauncher",
     "ComputeLauncher",
-    "SparkLauncher",
+    "SparkLauncher",  # experimental Spark support
     # Advanced: Direct client access
     "LocalPipesClient",
     "SlurmPipesClient",

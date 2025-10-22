@@ -77,18 +77,16 @@ transition: slide-left
 
 ---
 transition: fade-out
-layout: statement
+class: bg-white text-black
 ---
 
-# A supercomputer that few can use is just an expensive heater.
-
-status quo
-
+<div class="-mt-22">
+<img src="/img/pass-offering.svg" />
+</div>
 <!--
-- Hard to use
-- Waiting for queue submission
-- Non-standard Interfaces
+From the (public) cloud we expect so much more.
 -->
+
 
 ---
 #title: More than a single engine
@@ -139,143 +137,6 @@ h1 {
 <!--
 Here is another comment.
 -->
-
----
-transition: slide-left
-layout: intro
----
-
-# What is a supercomputer?
-
-- **Parallel Processing**: Use multiple nodes to perform calculations simultaneously, significantly reducing the time required for complex tasks.
-- **High-Speed Interconnects**: Fast networking technologies to enable efficient communication between nodes.
-- **Large Memory Capacity**: Substantial amounts of RAM to handle large datasets and memory-intensive applications.
-- **Specialized Software**: Run specialized software and libraries optimized for parallel processing and high-performance computing.
-
-<!--
-You can have `style` tag in markdown to override the style for the current page.
-Learn more: https://sli.dev/features/slide-scope-style
--->
-
-<style>
-h1 {
-  background-color: #2B90B6;
-  background-image: linear-gradient(45deg, #4EC5D4 10%, #146b8c 20%);
-  background-size: 100%;
-  -webkit-background-clip: text;
-  -moz-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  -moz-text-fill-color: transparent;
-}
-</style>
-
-<!--
-Here is another comment.
--->
-
----
-transition: fade-out
-layout: intro
----
-
-# Developer productivity
-
-- Rapid exploration
-- Maintainability
-  - Autoformatting
-  - Linting
-  - Testing
-  - Library packaging
-- Observability (single pane of glass)
-
-<style>
-h1 {
-  background-color: #2B90B6;
-  background-image: linear-gradient(45deg, #4EC5D4 10%, #146b8c 20%);
-  background-size: 100%;
-  -webkit-background-clip: text;
-  -moz-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  -moz-text-fill-color: transparent;
-}
-</style>
-
----
-transition: fade
-layout: two-cols
-class: bg-gray-900 text-white
----
-
-# dagster-slurm
-
-- **Same assets everywhere** — `ExecutionMode` toggles between local, Slurm
-- **Automatic environment packaging** — pixi-pack bundles or reuses pre-built envs per run.
-- **Launchers** — Script, Ray, or custom runtime plugged into Dagster Pipes.
-- **Observability** — Slurm metrics + Ray logs stream back into the Dagster UI.
-
-::right::
-![](/img/arch-detail-dark.svg)
-
----
-transition: fade
----
-
-# Minimal workflow demo
-
-```bash
-git clone https://github.com/ascii-supply-networks/dagster-slurm.git
-cd dagster-slurm
-docker compose up -d --build    # spins up Slurm edge + compute nodes
-```
-Develop locally
-```bash
-cd examples
-pixi run start             # Dagster UI on http://localhost:3000
-```
-Submit through Slurm
-```bash
-pixi run start-staging     # same assets, now via sbatch
-```
-
-
----
-transition: slide-left
-layout: center
----
-
-# Asset code stays the same
-
-```python
-import dagster as dg
-from dagster_slurm import ComputeResource, RayLauncher
-
-@dg.asset
-def training_job(context: dg.AssetExecutionContext, compute: ComputeResource):
-    payload = dg.file_relative_path(__file__, "../workloads/train.py")
-
-    completed = compute.run(
-        context=context,
-        payload_path=payload,
-        launcher=RayLauncher(num_gpus_per_node=2),
-        resource_requirements={"framework": "ray", "cpus": 32, "gpus": 2, "memory_gb": 120},
-        extra_env={"EXP_NAME": context.run.run_id},
-    )
-    yield from completed.get_results()
-```
-
-
----
-transition: fade-out
-class: bg-white text-black
----
-
-<div class="-mt-22">
-<img src="/img/pass-offering.svg" />
-</div>
-<!--
-From the (public) cloud we expect so much more.
--->
-
 
 ---
 transition: fade-out
@@ -399,6 +260,168 @@ Advantages of asset-based orchestration:
 -->
 
 ---
+transition: slide-left
+layout: intro
+---
+
+# What is a supercomputer?
+
+- **Parallel Processing**: Use multiple nodes to perform calculations simultaneously, significantly reducing the time required for complex tasks.
+- **High-Speed Interconnects**: Fast networking technologies to enable efficient communication between nodes.
+- **Large Memory Capacity**: Substantial amounts of RAM to handle large datasets and memory-intensive applications.
+- **Specialized Software**: Run specialized software and libraries optimized for parallel processing and high-performance computing.
+
+<!--
+You can have `style` tag in markdown to override the style for the current page.
+Learn more: https://sli.dev/features/slide-scope-style
+-->
+
+<style>
+h1 {
+  background-color: #2B90B6;
+  background-image: linear-gradient(45deg, #4EC5D4 10%, #146b8c 20%);
+  background-size: 100%;
+  -webkit-background-clip: text;
+  -moz-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  -moz-text-fill-color: transparent;
+}
+</style>
+
+<!--
+Here is another comment.
+-->
+
+---
+transition: fade-out
+layout: statement
+---
+
+# A supercomputer that few can use is just an expensive heater.
+
+status quo
+
+<!--
+- Hard to use
+- Waiting for queue submission
+- Non-standard Interfaces
+-->
+
+
+---
+transition: fade-out
+layout: intro
+---
+
+# Developer productivity
+
+- Rapid exploration locally; flip configuration to land on Slurm without code edits.
+- Maintainability: autoformatting, linting, testing, and reproducible pixi environments baked in.
+- Observability: Dagster UI becomes the single pane of glass for HPC and non-HPC logs.
+- Structured metrics from Slurm (memory, CPUs, wall time) stream back alongside Dagster events.
+
+<style>
+h1 {
+  background-color: #2B90B6;
+  background-image: linear-gradient(45deg, #4EC5D4 10%, #146b8c 20%);
+  background-size: 100%;
+  -webkit-background-clip: text;
+  -moz-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  -moz-text-fill-color: transparent;
+}
+</style>
+
+---
+transition: fade
+layout: two-cols
+class: bg-gray-900 text-white
+---
+
+# dagster-slurm
+
+- **Same assets everywhere** — flip `ExecutionMode` to target laptops or Slurm with identical code.
+- **Deterministic runtime packaging** — pixi/pixi-pack capture dependencies, ship them to the HPC edge, and install in place.
+- **Launch orchestration** — Dagster submits jobs, watches queue state, and reconciles completions via Slurm.
+- **Unified observability** — Slurm telemetry, Ray logs, and Pipes stdout land in the Dagster UI for one shared console.
+
+::right::
+![](/img/arch-detail-dark.svg)
+
+---
+transition: fade
+#layout: two-cols
+#class: bg-slate-950 text-white
+---
+
+# What Dagster handles
+
+**Under the hood**
+- Packages environments with pixi/pixi-pack and syncs them to the cluster.
+- Verifies the exact dependency set before booting workloads.
+- Submits, monitors, and tears down Slurm jobs on your behalf.
+
+**Developer experience**
+- Switch between local and HPC by editing configuration, not code.
+- Follow logs and Ray/Slurm telemetry from a single Dagster UI.
+- Capture memory/CPU metrics and run metadata in a structured timeline.
+
+<!-- ::right::
+![](/img/pipes-architecture.svg) -->
+
+---
+transition: fade
+---
+
+# Minimal workflow demo
+
+```bash
+git clone https://github.com/ascii-supply-networks/dagster-slurm.git
+cd dagster-slurm
+docker compose up -d --build    # spins up Slurm edge + compute nodes
+```
+Develop locally
+```bash
+cd examples
+pixi run start             # Dagster UI on http://localhost:3000
+```
+Submit through Slurm
+```bash
+pixi run start-staging     # same assets, now via sbatch
+pixi run start-staging-supercomputer # use real HPC cluster
+```
+
+
+---
+transition: slide-left
+layout: center
+---
+
+# Asset code stays the same
+
+```python
+import dagster as dg
+from dagster_slurm import ComputeResource, RayLauncher
+
+@dg.asset
+def training_job(context: dg.AssetExecutionContext, compute: ComputeResource):
+    payload = dg.file_relative_path(__file__, "../workloads/train.py")
+
+    completed = compute.run(
+        context=context,
+        payload_path=payload,
+        launcher=RayLauncher(num_gpus_per_node=2),
+        resource_requirements={"framework": "ray", "cpus": 32, "gpus": 2, "memory_gb": 120},
+        extra_env={"EXP_NAME": context.run.run_id},
+    )
+    yield from completed.get_results()
+```
+
+
+
+
+
+---
 transition: slide-up
 level: 2
 # class: bg-white text-black
@@ -417,7 +440,7 @@ class: bg-white text-black
 ---
 
 
-# Architecture diagram
+# Execution modes
 
 <img src="/img/architecture-diagram.svg" />
 
@@ -465,3 +488,10 @@ class: bg-white text-black
 <div class="grid place-items-center h-full">
 <img src="/img/pipes-architecture.svg" />
 </div>
+
+
+---
+layout: statement
+---
+# An EU sovereign GPU cloud does not come out of nowhere
+maybe this project can support making HPC systems more accessible

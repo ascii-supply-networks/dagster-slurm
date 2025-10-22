@@ -42,7 +42,7 @@ compute = ComputeResource(
 
 - Each run file-packages the asset environment using `pixi-pack` (unless `pre_deployed_env_path` is set).
 - Jobs terminate as soon as the asset finishes—ideal for isolated workloads.
-- Override `launcher=` on individual assets to run Ray or Spark workloads inside the allocation.
+- Override `launcher=` on individual assets to run Ray or Spark (WIP) workloads inside the allocation.
 
 ## Work in progress
 
@@ -55,6 +55,6 @@ Session reuse (`slurm-session`) and heterogeneous jobs (`slurm-hetjob`) are on t
 | Mode | Recommended launcher(s) | Notes |
 | --- | --- | --- |
 | `local` | `BashLauncher`, `RayLauncher` (single node) | Keeps development parity with production launchers. |
-| `slurm` | `BashLauncher`, `RayLauncher`, `SparkLauncher` | Each asset gets a fresh allocation. Session-based reuse will extend this list once stabilised. |
+| `slurm` | `BashLauncher`, `RayLauncher`, `SparkLauncher` (WIP) | Each asset gets a fresh allocation. Session-based reuse will extend this list once stabilised. |
 
 Remember to include launcher-specific dependencies (e.g. `ray`) in your pixi environment or `pyproject.toml`.

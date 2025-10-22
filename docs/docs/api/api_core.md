@@ -16,7 +16,7 @@ Run Dagster assets on Slurm clusters with support for:
 - Local dev mode (no SSH/Slurm)
 - Per-asset Slurm submission (staging)
 - Session mode with operator fusion (production)
-- Multiple launchers (Bash, Ray, Spark)
+- Multiple launchers (Bash, Ray, Spark—WIP)
 
 ### *class* dagster_slurm.BashLauncher(\*\*data)
 
@@ -729,7 +729,8 @@ This is the proper Dagster resource lifecycle hook.
 
 Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
-Apache Spark launcher.
+Apache Spark launcher.  
+⚠️ **Work in progress:** Spark support is experimental and will change.
 
 Modes:
 - Local: Single-node Spark (no allocation_context)
