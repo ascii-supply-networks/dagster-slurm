@@ -6,6 +6,10 @@ sidebar_position: 1
 
 `dagster-slurm` lets you take the same Dagster assets from a laptop to a Slurm-backed supercomputer with minimal configuration changes. This page walks through the demo environment bundled with the repository and highlights the key concepts you will reuse on your own cluster.
 
+**An European sovereign GPU cloud does not come out of nowhere
+maybe this project can support making HPC systems more accessible**.
+
+
 ## What Dagster-Slurm technically delivers
 
 - **Deterministic runtimes:** `pixi` and `pixi-pack` freeze your dependencies, upload the bundle to the HPC edge, and install exactly once per version.

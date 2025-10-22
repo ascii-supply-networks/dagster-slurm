@@ -31,7 +31,8 @@ seoMeta:
 routerMode: hash
 ---
 
-# Dagster + Slurm = Productive HPC
+# Dagster + Slurm 
+## = Productive HPC
 
 <div @click="$slidev.nav.next" class="mt-12 py-1" hover:bg="white op-10">
 bridge the gap between orchestration and HPC schedulers <carbon:arrow-right />
@@ -428,7 +429,7 @@ transition: fade
 #class: bg-slate-950 text-white
 ---
 
-# What Dagster handles
+# What dagster-slurm handles
 
 ## Under the hood
 - Packages environments with pixi/pixi-pack and syncs them to the cluster.
@@ -457,6 +458,7 @@ disabled: true
 transition: slide-up
 level: 2
 class: bg-white text-black
+disabled: true
 ---
 
 
@@ -529,6 +531,34 @@ maybe this project can support making HPC systems more accessible
 
 dagster-slurm
 
+---
+layout: default
+---
+
+# Evolution and Strategy
+
+> Goal: Bridge Dagster + Slurm
+
+- Strategy: Make things work on real HPCs
+- Change? Not needed; VSC, Leonardo working now.
+- Learnings: Inconsistent NUMA on Leonardo, OTP hurdles
+
+---
+layout: default
+---
+
+# Results and Final Profile
+
+- Accomplished connecting our solution to 2 real HPC systems (Leonardo, VSC5).
+- This allows for a single pane of glass
+- This streamlines and simplfies working with HPC systems
+- Slurm in CI is possible
+
+
+## Learnings
+To become a viable possibility for a European GPU cloud some changes are needed:
+- Authentication, techincal service users
+- Netowrk access (to connect to exteral data)
 
 ---
 layout: default
@@ -542,20 +572,14 @@ layout: default
 
 <br>
 
-### Language standards
-- Stable Python + CUDA stacks blessed by HPC admins for orchestrated workloads.
-- Shared packaging guidelines so teams stop reinventing environment hygiene.
-
-<br>
-
 ### Event
 - Hackathon office hours with site operators to fast-track credential tweaks.
 
 <br>
 
 ### Systems
-- dagster-slurm shipped as a supported module once prerequisites land.
-- Relaxed staging network or managed data bridge for large datasets.
+- dagster-slurm shipped as a supported module once prerequisites land (technical service user)
+- changed network access from all cluster nodes for accessing large external datasets.
 
 ---
 layout: intro
@@ -568,37 +592,17 @@ class: bg-emerald-950 text-white
 - Engineers gained observability in a shared single pane of glass instead of tailing Slurm logs per node.
 - Continued development is planned
 
----
-layout: two-cols-header
----
+Resources necessary:
+- Access to HPC system to test
+- Desire of HPC operators to change systems to solve blockers (technical service user, network access)
 
-# One-page summary
-
-::left::
-### Opportunity
-- Orchestration for sovereign HPC GPU capacity.
-- Offer repeatable, observable workflows for research and production teams.
-
-### Results
-- Dagster assets launch through Slurm with reproducible pixi-pack environments.
-- Single pane of glass surfaces run metadata, queue state, and resource usage; for both HPC and non-HPC workloads.
-
-::right::
-### Approach
-- Extended Dagster pipes to speak Slurm
-- Conda via pixi and pixi-pack for reliable runtime shipping.
-
-### Next
-- Automate service credentials, align NUMA defaults
-- Partner with admins on network access so data-heavy external assets can flow.
-- Evaluate pilot jobs
 
 ---
 layout: default
 class: bg-slate-100 text-slate-900
 ---
 
-# Hackathon snapshot
+# One-page summary
 
 <div class="grid grid-cols-2 grid-rows-2 gap-4 h-[480px]">
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
@@ -609,12 +613,13 @@ class: bg-slate-100 text-slate-900
     </ul>
   </div>
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
-    <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System Prerequisites</h3>
+    <!-- <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System Prerequisites</h3>
     <ul class="mt-4 space-y-2 text-base leading-relaxed">
       <li>Service credentials without 12-hour OTP churn.</li>
       <li>Predictable NUMA and partition settings to avoid manual overrides.</li>
       <li>Flexible data ingress so large external assets like commoncrawl can be analyzed on HPC systems</li>
-    </ul>
+    </ul> -->
+    <img src="/img/arch-overview.png"/>
   </div>
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
     <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Hackathon Objectives</h3>
@@ -627,7 +632,7 @@ class: bg-slate-100 text-slate-900
     <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Technical Accomplishment</h3>
     <ul class="mt-4 space-y-2 text-base leading-relaxed">
       <li>Integration accomplished for Leonardo, VSC5</li>
-      <li>Documented friction points for deep dives with HPC administrators.</li>
+      <li>SLURM in CI</li>
     </ul>
   </div>
 </div>
@@ -639,15 +644,25 @@ class: bg-white text-black
 
 # 100-word summary
 
-Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: assets defined once now flip from local development to Slurm without code changes. Pixi-pack seals Python environments so the same build runs on laptops, and real HPC clusters. Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability. We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent NUMA defaults—and captured concrete asks for admins. The effort validates that orchestrator ergonomics and supercomputer horsepower can finally coexist. Hackathon teams glimpsed HPC becoming broadly achievable.
+Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: assets defined once now flip from local development to Slurm without code changes. Pixi-pack seals Python environments so the same build runs on laptops, and real HPC clusters. 
+
+Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability. 
+
+We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent NUMA defaults—and captured concrete asks for admins.
+
+> The effort validates that orchestrator-based ergonomics and supercomputer horsepower can finally coexist.
 
 
 ---
 layout: default
 ---
+
 # Acknowledgements
+
+The EUROCC AI Hackathon
+https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375
 
 We thank the operations teams at the Austrian Scientific Computing (ASC) (VSC-5) and CINECA’s Leonardo supercomputer for early feedback, and the Dagster community for discussions around orchestrating HPC workloads. Funding and in-kind support were provided by the Complexity Science Hub Vienna and the Austrian Supply Chain Intelligence Institute.
 We furhter thank the EUROCC AI HACKATHON 2025 for providing the opportunity to test and validate our work in a real HPC environment. 
 
-https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375
+
