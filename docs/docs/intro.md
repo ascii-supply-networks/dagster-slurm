@@ -58,7 +58,7 @@ Once it’s materialized, go to the **Runs** tab and open the newly created run.
 In the **Run view**, you can explore detailed output and run information (see screenshot below).
 For example, you can check the input path, output logs, number of processed rows, and total processing time.
 
-![Screenshot comparing multiple Dagster runs](../static/img/process_data_asset_view.png)
+![Screenshot comparing multiple Dagster runs](../static/img/process_data_run_view.png)
 
 Under the **`stderr`** and **`stdout`** tabs, Dagster automatically collects the respective logs.
 This feature is especially useful when working with **Slurm**, where you would otherwise need to manually log into the compute machine to locate the individual output files.
@@ -69,8 +69,7 @@ Here, you can review all past runs of that asset, compare their performance, and
 Depending on your Dagster configuration, you can also log and visualize additional metrics or properties.
 
 
-![Screenshot comparing multiple Dagster runs](../static/img/process_data_run_view.png)
-
+![Screenshot comparing multiple Dagster runs](../static/img/process_data_asset_view.png)
 
 
 ## 3. Point to your own HPC cluster
