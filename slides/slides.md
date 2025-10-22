@@ -465,6 +465,7 @@ backgroundSize: contain
 - neatly packaging of environments
 - easy bootstrap
 - task runner
+- [`pixi-pack`](https://github.com/Quantco/pixi-pack) to ship consistent environments to HPC systems
 
 ---
 transition: fade-out
@@ -491,7 +492,19 @@ class: bg-white text-black
 
 
 ---
+layout: default
+---
+
+# Main challenges
+
+- No technical service user (currently we have to manually run OTP credentials every 12 hours)
+- No network connectivity from cluster nodes (we want to eventually process TBs of commoncrawl data)
+- Bespoke slurm configuration on NUMA settings on Leonardo possibly inconsistent on some nodes (workaround -> cpu-bind=none)
+
+---
 layout: statement
 ---
-# An EU sovereign GPU cloud does not come out of nowhere
+# EU sovereign GPU cloud does not come out of nowhere
 maybe this project can support making HPC systems more accessible
+
+dagster-slurm

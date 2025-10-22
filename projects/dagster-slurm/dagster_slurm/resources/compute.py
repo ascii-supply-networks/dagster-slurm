@@ -1,6 +1,6 @@
 """Unified compute resource - main facade."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
 from pydantic import Field, PrivateAttr, model_validator
@@ -187,7 +187,7 @@ class ComputeResource(ConfigurableResource):
 
         """
         # Resolve launcher with fallback to default
-        effective_launcher = launcher or self.default_launcher
+        effective_launcher = self._resolve_launcher(launcher)
 
         # Ensure we have a launcher
         if effective_launcher is None:
@@ -241,6 +241,28 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
             )
+
+    def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:
+        """Merge launcher overrides with the deployment default when possible."""
+        if override is None:
+            return self.default_launcher
+
+        default_launcher = self.default_launcher
+
+        # Merge when the override is the same launcher type so site defaults persist.
+        if isinstance(override, default_launcher.__class__):
+            try:
+                override_payload = override.model_dump(exclude_unset=True)
+                # model_copy returns a new instance, keeping the original default untouched.
+                return cast(
+                    ComputeLauncher,
+                    default_launcher.model_copy(update=override_payload),
+                )
+            except AttributeError:
+                # Fall back to using the provided launcher directly if it doesn't support dumping.
+                pass
+
+        return override
 
     def run(
         self,
@@ -309,7 +331,7 @@ class ComputeResource(ConfigurableResource):
         logger = get_dagster_logger()
 
         # Determine effective launcher
-        effective_launcher = launcher or self.default_launcher
+        effective_launcher = self._resolve_launcher(launcher)
 
         # Handle cluster reuse in session mode
         if self.enable_cluster_reuse and resource_requirements:

@@ -8,6 +8,7 @@ from pydantic import Field
 from dagster_slurm.config.runtime import RuntimeVariant
 
 from .base import ComputeLauncher, ExecutionPlan
+import dagster as dg
 
 
 class RayLauncher(ComputeLauncher):
@@ -231,12 +232,20 @@ class RayLauncher(ComputeLauncher):
 
         common_args = []
         if self.object_store_memory_gb is not None:
+            # must end with space for correct command formatting
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
             common_args.append(f"--object-store-memory={bytes_value}")
 
-        cpu_bind_option = (
-            f"--cpu-bind={self.worker_cpu_bind} " if self.worker_cpu_bind else ""
-        )
+        if self.worker_cpu_bind is not None:
+            if self.worker_cpu_bind == "_none_":
+                # If we see our special string, use the literal 'none'
+                cpu_bind_option = "--cpu-bind=none "
+            else:
+                # Otherwise, use the string value directly
+                cpu_bind_option = f"--cpu-bind={self.worker_cpu_bind} "
+        else:
+            cpu_bind_option = ""
+        dg.get_dagster_logger().info(f"Using CPU bind of: {cpu_bind_option}")
 
         head_args = [
             "--head",

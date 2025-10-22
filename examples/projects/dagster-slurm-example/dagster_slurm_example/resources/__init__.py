@@ -165,7 +165,8 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
         },
         "launchers": {
             "ray": {
-                "worker_cpu_bind": "none",
+                # Use an unambiguous string that won't be coerced to None
+                "worker_cpu_bind": "_none_",
             }
         },
     },
