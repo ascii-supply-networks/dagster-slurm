@@ -16,6 +16,7 @@ def run_inference_batch(batch_id: int):
 def main():  # noqa: C901
     context = PipesContext.get()
     context.log.info("Starting Ray inference...")
+    print("hello from inference")
     model_path = os.environ.get("MODEL_PATH")
     context.log.info(f"Loading model from: {model_path}")
 

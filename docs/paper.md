@@ -46,7 +46,7 @@ Research software engineers and data scientists increasingly face cross-environm
 
 - Preserve Dagster’s asset-based design, lineage tracking, and alerting for workloads that ultimately run on Slurm-managed hardware.
 - Remove the need to rewrite orchestration glue when moving from development to production supercomputers.
-- Provide a batteries-included path for packaging Python environments reproducibly (Pixi + pixi-pack) and deploying them in air-gapped environments.
+- Provide a batteries-included path for packaging Python environments reproducibly (Pixi https://pixi.sh/latest/ + pixi-pack, https://github.com/Quantco/pixi-pack) and deploying them in air-gapped environments.
 - Offer a clear path to advanced HPC patterns (session reuse for long-lived clusters, heterogeneous Slurm jobs) while keeping the current stable surface area intentionally small; these features are being iterated on in the open.
 
 # System Overview

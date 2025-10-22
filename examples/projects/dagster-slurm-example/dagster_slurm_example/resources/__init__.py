@@ -153,7 +153,7 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "leonardo": {
         "slurm_queue_config": {
             "partition": "boost_usr_prod",
-            "qos": "boost_qos_dbg",
+            # "qos": "boost_qos_dbg",
             "account": "EUHPC_D20_063",
             "time_limit": "00:05:00",
         },
@@ -162,6 +162,12 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "qos": "boost_qos_dbg",
             "account": "EUHPC_D20_063",
             "time_limit": "00:05:00",
+        },
+        "launchers": {
+            "ray": {
+                # "worker_cpu_bind": "none",
+                "worker_cpu_bind": "cores",
+            }
         },
     },
 }
