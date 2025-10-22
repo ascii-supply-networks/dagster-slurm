@@ -37,6 +37,8 @@ The Docker compose stack starts a local Dagster control plane, a Slurm edge node
 
 ## 1. Develop locally (no Slurm)
 
+*TODO*: Explain what we see here.
+
 For rapid iteration, execute assets directly on your workstation:
 
 ```bash
