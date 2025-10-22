@@ -3,7 +3,7 @@ from functools import cached_property
 import dagster as dg
 from dagster_ray import PipesRayJobClient, RayResource
 from ray.job_submission import JobSubmissionClient
-
+import os
 
 class PipesRayJobClientLazyLocalResource(dg.ConfigurableResource):
     """A resource that provides a PipesRayJobClient.
@@ -11,32 +11,39 @@ class PipesRayJobClientLazyLocalResource(dg.ConfigurableResource):
     """
 
     ray_cluster: RayResource
-
+    jobs_api_url: str | None = None 
+    
     @cached_property
     def pipes_client(self) -> PipesRayJobClient:
         """Lazily initializes and returns a PipesRayJobClient connected to the
         provided Ray cluster.
         """
-        try:
-            import ray
-
-            if ray.is_initialized():  # type: ignore[missing-argument]
-                ray_address = ray.get_runtime_context().gcs_address  # type: ignore[missing-argument]
-                if ray_address:
-                    host = ray_address.split(":")[0]
-                    dashboard_address = f"http://{host}:8265"
-                else:
-                    dashboard_address = "http://127.0.0.1:8265"
-            else:
-                dashboard_address = "http://127.0.0.1:8265"
-        except Exception as e:
-            dg.get_dagster_logger().warning(f"Could not get Ray address: {e}")
-            dashboard_address = "http://127.0.0.1:8265"
-
-        dg.get_dagster_logger().info(
-            f"Connecting PipesRayJobClient to Ray at: {dashboard_address}"
+        addr = (
+            self.jobs_api_url
+            or os.environ.get("RAY_JOB_SUBMISSION_ADDRESS")
+            or os.environ.get("RAY_DASHBOARD_ADDRESS")
         )
-        return PipesRayJobClient(client=JobSubmissionClient(address=dashboard_address))
+        if not addr:
+            # Try to derive from RAY_ADDRESS if it looks like host:port or http://...
+            env_addr = os.environ.get("RAY_ADDRESS")
+            if env_addr:
+                if env_addr.startswith("http"):
+                    addr = env_addr
+                elif ":" in env_addr:
+                    host = env_addr.split(":", 1)[0]
+                    addr = f"http://{host}:8265"
+            try:
+                import ray
+                if ray.is_initialized():
+                    gcs = ray.get_runtime_context().gcs_address  # type: ignore[attr-defined]
+                    host = gcs.split(":", 1)[0] if gcs else "127.0.0.1"
+                    addr = f"http://{host}:8265"
+            except Exception as e:
+                dg.get_dagster_logger().warning(f"Could not infer Ray Jobs address: {e}")
+                addr = "http://127.0.0.1:8265"
+
+        dg.get_dagster_logger().info(f"Using Ray Jobs API at: {addr}")
+        return PipesRayJobClient(client=JobSubmissionClient(address=addr))
 
     def run(self, *args, **kwargs):
         return self.pipes_client.run(*args, **kwargs)

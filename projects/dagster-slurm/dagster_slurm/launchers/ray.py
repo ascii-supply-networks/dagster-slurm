@@ -187,9 +187,10 @@ class RayLauncher(ComputeLauncher):
     trap cleanup_ray EXIT SIGINT SIGTERM
     # Start Ray head
     ray start --head --port={self.ray_port} \\
-      --dashboard-host=127.0.0.1 --dashboard-port={self.dashboard_port} \\
+      --dashboard-host=0.0.0.0 --dashboard-port={self.dashboard_port} \\
       --num-gpus={self.num_gpus_per_node} {obj_store}
-    export RAY_ADDRESS="127.0.0.1:{self.ray_port}"
+    export RAY_ADDRESS="0.0.0.0:{self.ray_port}"
+    export RAY_JOB_SUBMISSION_ADDRESS="http://$(hostname -f):{self.dashboard_port}"
     # Wait for Ray to be ready
     echo "[$({date_fmt})] Waiting for Ray to be ready..."
     for i in $(seq 1 {self.head_startup_timeout}); do
@@ -230,7 +231,7 @@ class RayLauncher(ComputeLauncher):
         head_args = [
             "--head",
             "-v",
-            "--node-ip-address=$head_node_name",
+            "--node-ip-address=$head_ip",
             f"--port={self.ray_port}",
             "--dashboard-host=0.0.0.0",
             f"--dashboard-port={self.dashboard_port}",
@@ -273,15 +274,22 @@ class RayLauncher(ComputeLauncher):
     set -e
     activation_script="$1"
     echo "======================================="
-    echo "Ray Cluster Driver Script Started on $(hostname)"
+    echo "Ray Cluster Driver Script Started on $(hostname -f)"
     echo "Activating environment: $activation_script"
     echo "======================================="
     source "$activation_script"
 
-    # Define all variables first
-    head_node_name=$(hostname)
+    # Preflight: ensure no stale Ray from previous attempts
+    ray stop --force 2>/dev/null || true
+    rm -rf {temp_dir_path} 2>/dev/null || true
+
+    # Define variables
+    head_node_name=$(hostname -f)
+    head_short=$(hostname -s)
+    head_ip=$(hostname -I | awk '{{print $1}}')
     port={self.ray_port}
-    ip_head="$head_node_name:$port" # This is now 'c1:6379'
+    dash={self.dashboard_port}
+    ip_head="$head_ip:$port"
     redis_password="{redis_pw}"
     WORKER_PIDS=()
     worker_nodes=()
@@ -296,9 +304,9 @@ class RayLauncher(ComputeLauncher):
             echo "PAYLOAD FAILED OR SCRIPT EXITED UNEXPECTEDLY! Capturing logs..." >&2
             for node in "${{worker_nodes[@]}}"; do
                 echo "--- WORKER NODE ($node) RAYLET LOG ---" >&2
-                srun --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
+                srun --nodes=1 --ntasks=1 --cpu-bind=none -w "$node" bash -lc 'tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
             done
-            echo "--- HEAD NODE ($(hostname)) RAYLET LOG ---" >&2
+            echo "--- HEAD NODE ($(hostname -f)) RAYLET LOG ---" >&2
             tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
         fi
@@ -317,9 +325,10 @@ class RayLauncher(ComputeLauncher):
     trap cleanup EXIT SIGINT SIGTERM
 
     # ===== 1. Start Head Node =====
-    echo "Starting Ray head on this node ($(hostname)) at $ip_head..."
+    echo "Starting Ray head on $head_node_name (IP: $head_ip) at $ip_head..."
     ray start {head_cmd_str}
     export RAY_ADDRESS="$ip_head"
+    export RAY_JOB_SUBMISSION_ADDRESS="http://$head_ip:$dash"
 
     # ===== 2. Wait for Head to be Ready =====
     echo "Waiting for Ray head to be ready..."
@@ -332,15 +341,18 @@ class RayLauncher(ComputeLauncher):
     # ===== 3. Start Worker Nodes =====
     all_nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
     for node in "${{all_nodes[@]}}"; do
-        if [[ "$node" != "$head_node_name" ]]; then worker_nodes+=("$node"); fi
+        # Exclude the head by shortname to avoid FQDN/shortname mismatch
+        if [[ "$node" != "$head_short" ]]; then worker_nodes+=("$node"); fi
     done
-    echo "Head node: $head_node_name"; echo "Worker nodes: ${{worker_nodes[@]}}"
+    echo "Head node: $head_node_name ($head_short)"; echo "Worker nodes: ${{worker_nodes[@]}}"
     for node_i in "${{worker_nodes[@]}}"; do
-        echo "Launching worker on $node_i..."
-        srun --nodes=1 --ntasks=1 -w "$node_i" \\
-            {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
-        WORKER_PIDS+=($!)
-        sleep {self.worker_startup_delay}
+    echo "Launching worker on $node_i..."
+    srun --nodes=1 --ntasks=1 --ntasks-per-node=1 \\
+        --exclusive --cpu-bind=none \\
+        -w "$node_i" \\
+        {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
+    WORKER_PIDS+=($!)
+    sleep {self.worker_startup_delay}
     done
 
     # ===== 4. Wait for All Workers to Register =====
@@ -383,7 +395,7 @@ class RayLauncher(ComputeLauncher):
 
     # ===== 5. Run Payload =====
     echo "Executing user payload..."
-    export RAY_NODE_IP_ADDRESS="$head_node_name"
+    export RAY_NODE_IP_ADDRESS="$head_ip"
     {shlex.quote(python_executable)} {shlex.quote(payload_path)}
     """
 
