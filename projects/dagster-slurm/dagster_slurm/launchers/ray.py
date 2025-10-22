@@ -1,7 +1,7 @@
 """Ray cluster launcher with robust startup/shutdown."""
 
 import shlex
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from pydantic import Field
 
@@ -48,6 +48,19 @@ class RayLauncher(ComputeLauncher):
     worker_startup_delay: int = Field(
         default=1, description="Seconds between worker starts"
     )
+    
+    use_head_ip: bool = Field(default=True, description="Use node IP instead of hostname for Ray head.")
+    dashboard_host: str = Field(default="0.0.0.0", description="Bind host for Ray dashboard (e.g., 0.0.0.0 or 127.0.0.1).")
+    port_strategy: str = Field(default="fixed", description="'fixed' or 'hash_jobid' for head/dashboard ports.")
+
+    include_head_as_worker: bool = Field(default=False, description="If True, also start a worker on the head via srun.")
+    match_head_by_shortname: bool = Field(default=True, description="Exclude head by shortname (True) or FQDN (False).")
+
+    srun_cpu_bind: str = Field(default="none", description="Value for --cpu-bind; '' to omit.")
+    srun_exclusive: bool = Field(default=True, description="Use --exclusive for worker srun.")
+    srun_ntasks_per_node: int = Field(default=1, description="--ntasks-per-node for worker srun.")
+    srun_hint: Optional[str] = Field(default=None, description="--hint value (e.g., 'nomultithread').")
+    srun_extra_args: List[str] = Field(default_factory=list, description="Any extra srun flags for workers.")
 
     def prepare_execution(
         self,
@@ -155,11 +168,8 @@ class RayLauncher(ComputeLauncher):
             auxiliary_scripts=auxiliary_scripts,
         )
 
-    def _generate_local_template(
-        self, date_fmt: str, activation_script: Optional[str]
-    ) -> str:
+    def _generate_local_template(self, date_fmt: str, activation_script: Optional[str]) -> str:
         """Generate Ray startup for local (single-node) mode."""
-        # Build object store argument if specified
         obj_store = ""
         if self.object_store_memory_gb is not None:
             bytes_value = self.object_store_memory_gb * 1_000_000_000
@@ -187,9 +197,9 @@ class RayLauncher(ComputeLauncher):
     trap cleanup_ray EXIT SIGINT SIGTERM
     # Start Ray head
     ray start --head --port={self.ray_port} \\
-      --dashboard-host=0.0.0.0 --dashboard-port={self.dashboard_port} \\
+      --dashboard-host={self.dashboard_host} --dashboard-port={self.dashboard_port} \\
       --num-gpus={self.num_gpus_per_node} {obj_store}
-    export RAY_ADDRESS="0.0.0.0:{self.ray_port}"
+    export RAY_ADDRESS="127.0.0.1:{self.ray_port}"
     export RAY_JOB_SUBMISSION_ADDRESS="http://$(hostname -f):{self.dashboard_port}"
     # Wait for Ray to be ready
     echo "[$({date_fmt})] Waiting for Ray to be ready..."
@@ -229,12 +239,11 @@ class RayLauncher(ComputeLauncher):
             common_args.append(f"--object-store-memory={bytes_value}")
 
         head_args = [
-            "--head",
-            "-v",
-            "--node-ip-address=$head_ip",
-            f"--port={self.ray_port}",
-            "--dashboard-host=0.0.0.0",
-            f"--dashboard-port={self.dashboard_port}",
+            "--head", "-v",
+            "--node-ip-address=$head_addr",
+            f"--port={{port}}",
+            f"--dashboard-host={self.dashboard_host}",
+            f"--dashboard-port={{dash}}",
             f"--num-gpus={self.num_gpus_per_node}",
             "--redis-password=$redis_password",
             f"--temp-dir={temp_dir_path}",
@@ -250,7 +259,19 @@ class RayLauncher(ComputeLauncher):
         head_cmd_str = " \\\n    ".join(head_args)
         worker_cmd_str = " \\\n    ".join(worker_args)
 
-        # --- Worker Script ---
+        # Build worker srun flags from config
+        srun_flags = ["--nodes=1", "--ntasks=1", f"--ntasks-per-node={self.srun_ntasks_per_node}"]
+        if self.srun_exclusive:
+            srun_flags.append("--exclusive")
+        if self.srun_cpu_bind:
+            srun_flags.append(f"--cpu-bind={self.srun_cpu_bind}")
+        if self.srun_hint:
+            srun_flags.append(f"--hint={self.srun_hint}")
+        if self.srun_extra_args:
+            srun_flags += list(self.srun_extra_args)
+        srun_flags_str = " ".join(srun_flags)
+
+        # --- Worker script ---
         ray_worker_script = f"""#!/bin/bash
     set -e
     activation_script="$1"
@@ -279,17 +300,30 @@ class RayLauncher(ComputeLauncher):
     echo "======================================="
     source "$activation_script"
 
-    # Preflight: ensure no stale Ray from previous attempts
+    # Preflight cleanup
     ray stop --force 2>/dev/null || true
     rm -rf {temp_dir_path} 2>/dev/null || true
 
     # Define variables
     head_node_name=$(hostname -f)
     head_short=$(hostname -s)
-    head_ip=$(hostname -I | awk '{{print $1}}')
-    port={self.ray_port}
-    dash={self.dashboard_port}
-    ip_head="$head_ip:$port"
+
+    # Choose address for Ray head (IP vs FQDN)
+    if [[ "{str(self.use_head_ip).lower()}" == "true" ]]; then
+        head_addr=$(hostname -I | awk '{{print $1}}')
+    else
+        head_addr="$head_node_name"
+    fi
+    # Port strategy (fixed or per-job hash)
+    if [[ "{self.port_strategy}" == "hash_jobid" && -n "$SLURM_JOB_ID" ]]; then
+        base=$(( 20000 + (SLURM_JOB_ID % 20000) ))
+        port=$base
+        dash=$((base+1))
+    else
+        port={self.ray_port}
+        dash={self.dashboard_port}
+    fi
+    ip_head="$head_addr:$port"
     redis_password="{redis_pw}"
     WORKER_PIDS=()
     worker_nodes=()
@@ -325,10 +359,10 @@ class RayLauncher(ComputeLauncher):
     trap cleanup EXIT SIGINT SIGTERM
 
     # ===== 1. Start Head Node =====
-    echo "Starting Ray head on $head_node_name (IP: $head_ip) at $ip_head..."
-    ray start {head_cmd_str}
+    echo "Starting Ray head on $head_node_name (addr: $head_addr) core:$port dash:$dash"
+    ray start {head_cmd_str.replace("{port}", "$port").replace("{dash}", "$dash")}
     export RAY_ADDRESS="$ip_head"
-    export RAY_JOB_SUBMISSION_ADDRESS="http://$head_ip:$dash"
+    export RAY_JOB_SUBMISSION_ADDRESS="http://$head_addr:$dash"
 
     # ===== 2. Wait for Head to be Ready =====
     echo "Waiting for Ray head to be ready..."
@@ -340,22 +374,28 @@ class RayLauncher(ComputeLauncher):
 
     # ===== 3. Start Worker Nodes =====
     all_nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
-    for node in "${{all_nodes[@]}}"; do
-        # Exclude the head by shortname to avoid FQDN/shortname mismatch
-        if [[ "$node" != "$head_short" ]]; then worker_nodes+=("$node"); fi
-    done
-    echo "Head node: $head_node_name ($head_short)"; echo "Worker nodes: ${{worker_nodes[@]}}"
+    if [[ "{str(self.include_head_as_worker).lower()}" == "true" ]]; then
+        worker_nodes=("${{all_nodes[@]}}")
+    else
+        for node in "${{all_nodes[@]}}"; do
+            if [[ "{str(self.match_head_by_shortname).lower()}" == "true" ]]; then
+            [[ "$node" != "$head_short" ]] && worker_nodes+=("$node")
+            else
+            [[ "$node" != "$head_node_name" ]] && worker_nodes+=("$node")
+            fi
+        done
+    fi
+    echo "Head: $head_node_name ; Workers: ${{worker_nodes[@]}}"
+
+    # ===== 4 Launch workers =====
     for node_i in "${{worker_nodes[@]}}"; do
-    echo "Launching worker on $node_i..."
-    srun --nodes=1 --ntasks=1 --ntasks-per-node=1 \\
-        --exclusive --cpu-bind=none \\
-        -w "$node_i" \\
-        {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
-    WORKER_PIDS+=($!)
-    sleep {self.worker_startup_delay}
+        echo "Launching worker on $node_i..."
+        srun {srun_flags_str} -w "$node_i" \\
+            {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" & WORKER_PIDS+=($!)
+        sleep {self.worker_startup_delay}
     done
 
-    # ===== 4. Wait for All Workers to Register =====
+    # ===== 5. Wait for All Workers to Register =====
     echo "Waiting briefly for worker processes to launch..."
     sleep 5 # Give workers a few seconds to start or fail
     for pid in "${{WORKER_PIDS[@]}}"; do
@@ -393,9 +433,9 @@ class RayLauncher(ComputeLauncher):
         fi
     done
 
-    # ===== 5. Run Payload =====
+    # ===== 7. Run Payload =====
     echo "Executing user payload..."
-    export RAY_NODE_IP_ADDRESS="$head_ip"
+    export RAY_NODE_IP_ADDRESS="$head_addr"
     {shlex.quote(python_executable)} {shlex.quote(payload_path)}
     """
 
@@ -407,10 +447,7 @@ class RayLauncher(ComputeLauncher):
     echo "Designated head node: $head_node"
     srun --nodes=1 --ntasks=1 -w "$head_node" {working_dir}/ray_driver.sh "{activation_script}"
     """
-        auxiliary_scripts = {
-            "ray_driver.sh": ray_driver_script,
-            "ray_worker.sh": ray_worker_script,
-        }
+        auxiliary_scripts = {"ray_driver.sh": ray_driver_script, "ray_worker.sh": ray_worker_script}
 
         if allocation_context:
             raise NotImplementedError("This architecture is for standalone sbatch jobs")

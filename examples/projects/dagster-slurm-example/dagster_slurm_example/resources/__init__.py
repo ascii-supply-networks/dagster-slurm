@@ -104,6 +104,17 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
             "num_gpus_per_node": 0,
             "dashboard_port": 8265,
             "head_startup_timeout": 120,
+            "use_head_ip": True,
+            "dashboard_host": "0.0.0.0",
+            "port_strategy": "hash_jobid",
+            "include_head_as_worker": False,
+            "match_head_by_shortname": True,
+            
+            "srun_cpu_bind": "none",
+            "srun_exclusive": True,
+            "srun_ntasks_per_node": 1,
+            "srun_hint": "nomultithread",
+            "srun_extra_args": ["--mem=0"] 
         },
         "spark": {"driver_memory": "8g", "executor_memory": "16g"},
     },
