@@ -16,5 +16,9 @@ export DAGSTER_PROD_ENV_PATH="${deployment_path}"
 ```
 Then start Dagster in production mode:
 ```bash
-pixi run start-prod-docker
+# for local integration testing -> see the docker mode in how to contriubte for explanation
+# pixi run start-prod-docker
+
+# for the real HPC system
+pixi run start-production-supercomputer
 ```
