@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v1.6.0-rc.1 (2025-10-22)
+
+### Bug Fixes
+
+- Lint refinement ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Only bind none for leonardo seems to work
+  ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Ray for leonardo and CPU binding more
+  ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Refine logo ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+### Chores
+
+- Refine docs, slides ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Refine paper ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Refine text ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+### Features
+
+- Nobinding for leonardo ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Refine 6 ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+- Upgrade pixi ([#60](https://github.com/ascii-supply-networks/dagster-slurm/pull/60),
+  [`7114b12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7114b1271e91b7833633c2cd504577103761d1c4))
+
+
 ## v1.6.0 (2025-10-21)
 
 
