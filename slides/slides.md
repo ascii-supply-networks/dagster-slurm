@@ -78,6 +78,7 @@ transition: slide-left
 ---
 transition: fade-out
 class: bg-white text-black
+disabled: true
 ---
 
 <div class="-mt-22">
@@ -111,11 +112,11 @@ layout: intro
 
 # What is a data orchestrator?
 
-- 🧑‍💻 **Task Scheduling**: Determine the correct execution order of tasks
-- **Resource Management**: Manage the allocation and utilization of computing resources
-- **Observability**: Provide visibility into the status and performance of workflows, allowing users to track progress and troubleshoot issues - ideally as a single pane of glass
-- 🛠 **Integration**: Facilitate communication and data exchange between different systems and services, enabling a cohesive workflow
-- **Developer experience**: They should offer multiple modes of execution - small and big
+- 🧑‍💻 **Workflow coordination**: Express dependencies, priorities, and retries across many jobs—not just one queue submission.
+- **Resource abstraction**: Bind the same code to laptops, clouds, or supercomputers via configuration, not rewrites.
+- **Observability**: Provide visibility into the status and performance of workflows, allowing users to track progress and troubleshoot issues from a single pane of glass.
+- 🛠 **Integration**: Facilitate communication and data exchange between different systems and services, enabling a cohesive workflow.
+- **Developer experience**: Offer fast local loops plus production parity so teams can move quickly without breaking rigor.
 
 <!--
 You can have `style` tag in markdown to override the style for the current page.
@@ -154,6 +155,8 @@ image: /img/lineage-dark2.png
 - Graph allows computer to reason about data dependencies
 - Rapid iteration: Just edit code. No need to wait for XYZ SaaS service
 - Break down tool and department silos
+- Assets know when upstream data changed and re-materialise only when stale.
+
 
 ```python {3-5|7|all}
 import dagster as dg
@@ -260,6 +263,56 @@ Advantages of asset-based orchestration:
 -->
 
 ---
+transition: fade
+---
+
+# Minimal workflow demo
+
+```bash
+git clone https://github.com/ascii-supply-networks/dagster-slurm.git
+cd dagster-slurm
+```
+Develop locally
+```bash
+cd examples
+pixi run start             # Dagster UI on http://localhost:3000
+```
+Submit through Slurm
+```bash
+pixi run start-staging-supercomputer # use real HPC cluster, interactive enviroment bootstrap
+pixi run start-production-supercomputer # pre-deployed environment, faster startup
+```
+
+---
+transition: slide-left
+layout: center
+---
+
+# Asset code stays the same
+
+- Same Dagster asset runs locally or on Slurm; only configuration changes.
+- Compute resource wraps payload execution with observability and retries.
+
+```python
+import dagster as dg
+from dagster_slurm import BashLauncher, ComputeResource
+
+@dg.asset
+def train_pytorch(context: dg.AssetExecutionContext, compute: ComputeResource):
+    script_path = dg.file_relative_path(
+        __file__, "../workloads/pytorch/train_classifier.py"
+    )
+
+    completed = compute.run(
+        context=context,
+        payload_path=script_path,
+        launcher=BashLauncher(),
+        extra_env={"EPOCHS": "3", "BATCH_SIZE": "128"},
+    )
+    yield from completed.get_results()
+```
+
+---
 transition: slide-left
 layout: intro
 ---
@@ -307,16 +360,38 @@ status quo
 - Non-standard Interfaces
 -->
 
+---
+transition: fade
+layout: default
+---
+
+# Different strengths, better together
+
+### Data orchestrator
+- Models business data products and when they need to refresh.
+- Captures lineage, metadata, and failures across heterogeneous systems.
+- Keeps engineers productive with local runs, tests, and incremental deploys.
+
+### Supercomputer + Slurm
+- Maximises utilisation of scarce accelerators and node hours.
+- Enforces fair-share policies, job placement, and low-level resource binding.
+- Provides high-performance file systems and interconnect-aware scheduling.
+
+### Bridge
+- dagster-slurm lets Dagster plan the work while Slurm owns the physical execution.
+
+
 
 ---
 transition: fade-out
 layout: intro
+disabled: true
 ---
 
 # Developer productivity
 
 - Rapid exploration locally; flip configuration to land on Slurm without code edits.
-- Maintainability: autoformatting, linting, testing, and reproducible pixi environments baked in.
+- Maintainability: through reproducible pixi environments (lockfiles, environments).
 - Observability: Dagster UI becomes the single pane of glass for HPC and non-HPC logs.
 - Structured metrics from Slurm (memory, CPUs, wall time) stream back alongside Dagster events.
 
@@ -335,15 +410,14 @@ h1 {
 ---
 transition: fade
 layout: two-cols
-class: bg-gray-900 text-white
 ---
 
-# dagster-slurm
+# dagster-slurm in one slide
 
-- **Same assets everywhere** — flip `ExecutionMode` to target laptops or Slurm with identical code.
-- **Deterministic runtime packaging** — pixi/pixi-pack capture dependencies, ship them to the HPC edge, and install in place.
-- **Launch orchestration** — Dagster submits jobs, watches queue state, and reconciles completions via Slurm.
-- **Unified observability** — Slurm telemetry, Ray logs, and Pipes stdout land in the Dagster UI for one shared console.
+- **Keep the Dagster control plane** — asset logic, schedules, and policies stay in Dagster regardless of where you run.
+- **Package once, run anywhere** — pixi/pixi-pack builds reproducible environments that deploy to login nodes, edge VMs, or compute partitions.
+- **Delegate execution to Slurm** — dagster-slurm translates runs into `sbatch`/`squeue` interactions while respecting quotas and placement rules.
+- **See everything in Dagster UI** — queue state, Slurm metrics, and Pipes logs stream back for a single operational console.
 
 ::right::
 ![](/img/arch-detail-dark.svg)
@@ -356,80 +430,26 @@ transition: fade
 
 # What Dagster handles
 
-**Under the hood**
+## Under the hood
 - Packages environments with pixi/pixi-pack and syncs them to the cluster.
 - Verifies the exact dependency set before booting workloads.
 - Submits, monitors, and tears down Slurm jobs on your behalf.
 
-**Developer experience**
+## Developer experience
 - Switch between local and HPC by editing configuration, not code.
-- Follow logs and Ray/Slurm telemetry from a single Dagster UI.
+- Follow logs and Slurm telemetry plus Pipes messages from a single pane of glass, for HPC and non-HPC workloads.
 - Capture memory/CPU metrics and run metadata in a structured timeline.
 
 <!-- ::right::
 ![](/img/pipes-architecture.svg) -->
 
----
-transition: fade
----
-
-# Minimal workflow demo
-
-```bash
-git clone https://github.com/ascii-supply-networks/dagster-slurm.git
-cd dagster-slurm
-docker compose up -d --build    # spins up Slurm edge + compute nodes
-```
-Develop locally
-```bash
-cd examples
-pixi run start             # Dagster UI on http://localhost:3000
-```
-Submit through Slurm
-```bash
-pixi run start-staging     # same assets, now via sbatch
-pixi run start-staging-supercomputer # use real HPC cluster
-```
-
-
----
-transition: slide-left
-layout: center
----
-
-# Asset code stays the same
-
-```python
-import dagster as dg
-from dagster_slurm import ComputeResource, RayLauncher
-
-@dg.asset
-def training_job(context: dg.AssetExecutionContext, compute: ComputeResource):
-    payload = dg.file_relative_path(__file__, "../workloads/train.py")
-
-    completed = compute.run(
-        context=context,
-        payload_path=payload,
-        launcher=RayLauncher(num_gpus_per_node=2),
-        resource_requirements={"framework": "ray", "cpus": 32, "gpus": 2, "memory_gb": 120},
-        extra_env={"EXP_NAME": context.run.run_id},
-    )
-    yield from completed.get_results()
-```
-
-
-
-
 
 ---
 transition: slide-up
-level: 2
-# class: bg-white text-black
+disabled: true
 ---
 
-
 # Architecture in detail
-
 
 ![](/img/arch-detail-dark.svg)
 
@@ -491,15 +511,15 @@ class: bg-white text-black
 </div>
 
 
----
 layout: default
 ---
 
-# Main challenges
+# Problems encountered
 
-- No technical service user (currently we have to manually run OTP credentials every 12 hours)
-- No network connectivity from cluster nodes (we want to eventually process TBs of commoncrawl data)
-- Bespoke slurm configuration on NUMA settings on Leonardo possibly inconsistent on some nodes (workaround -> cpu-bind=none)
+- No technical service user: 12-hour OTP tokens block continuous orchestration.
+- Outbound network is closed on compute nodes, trapping larger data pulls.
+- Partition-specific NUMA settings on Leonardo trigger inconsistent CPU pinning.
+- Packaging GPU dependencies still requires manual alignment with site modules.
 
 ---
 layout: statement
@@ -508,3 +528,126 @@ layout: statement
 maybe this project can support making HPC systems more accessible
 
 dagster-slurm
+
+
+---
+layout: default
+---
+
+# Wishlist
+
+### Tools
+- Pre-installed pixi/pixi-pack on login nodes to speed up onboarding.
+- Sample Dagster pipelines that demonstrate sanctioned Slurm patterns and dagster-slurm available
+
+<br>
+
+### Language standards
+- Stable Python + CUDA stacks blessed by HPC admins for orchestrated workloads.
+- Shared packaging guidelines so teams stop reinventing environment hygiene.
+
+<br>
+
+### Event
+- Hackathon office hours with site operators to fast-track credential tweaks.
+
+<br>
+
+### Systems
+- dagster-slurm shipped as a supported module once prerequisites land.
+- Relaxed staging network or managed data bridge for large datasets.
+
+---
+layout: intro
+class: bg-emerald-950 text-white
+---
+
+# Was it worth it?
+
+- **Yes.** We now trigger the same Dagster assets locally and on Leonardo, VSC5 without code edits.
+- Engineers gained observability in a shared single pane of glass instead of tailing Slurm logs per node.
+- Continued development is planned
+
+---
+layout: two-cols-header
+---
+
+# One-page summary
+
+::left::
+### Opportunity
+- Orchestration for sovereign HPC GPU capacity.
+- Offer repeatable, observable workflows for research and production teams.
+
+### Results
+- Dagster assets launch through Slurm with reproducible pixi-pack environments.
+- Single pane of glass surfaces run metadata, queue state, and resource usage; for both HPC and non-HPC workloads.
+
+::right::
+### Approach
+- Extended Dagster pipes to speak Slurm
+- Conda via pixi and pixi-pack for reliable runtime shipping.
+
+### Next
+- Automate service credentials, align NUMA defaults
+- Partner with admins on network access so data-heavy external assets can flow.
+- Evaluate pilot jobs
+
+---
+layout: default
+class: bg-slate-100 text-slate-900
+---
+
+# Hackathon snapshot
+
+<div class="grid grid-cols-2 grid-rows-2 gap-4 h-[480px]">
+  <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
+    <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Application Background</h3>
+    <ul class="mt-4 space-y-2 text-base leading-relaxed">
+      <li>Data orchestrators like Dagster deliver richer end-to-end observability.</li>
+      <li>They integrate heterogeneous systems so data and compute stay coordinated.</li>
+    </ul>
+  </div>
+  <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
+    <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System Prerequisites</h3>
+    <ul class="mt-4 space-y-2 text-base leading-relaxed">
+      <li>Service credentials without 12-hour OTP churn.</li>
+      <li>Predictable NUMA and partition settings to avoid manual overrides.</li>
+      <li>Flexible data ingress so large external assets like commoncrawl can be analyzed on HPC systems</li>
+    </ul>
+  </div>
+  <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
+    <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Hackathon Objectives</h3>
+    <ul class="mt-4 space-y-2 text-base leading-relaxed">
+      <li>Integrate Dagster orchestration with real HPC clusters</li>
+      <li>Make Leonardo and VSC5 work</li>
+    </ul>
+  </div>
+  <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
+    <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Technical Accomplishment</h3>
+    <ul class="mt-4 space-y-2 text-base leading-relaxed">
+      <li>Integration accomplished for Leonardo, VSC5</li>
+      <li>Documented friction points for deep dives with HPC administrators.</li>
+    </ul>
+  </div>
+</div>
+
+---
+layout: center
+class: bg-white text-black
+---
+
+# 100-word summary
+
+Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: assets defined once now flip from local development to Slurm without code changes. Pixi-pack seals Python environments so the same build runs on laptops, and real HPC clusters. Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability. We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent NUMA defaults—and captured concrete asks for admins. The effort validates that orchestrator ergonomics and supercomputer horsepower can finally coexist. Hackathon teams glimpsed HPC becoming broadly achievable.
+
+
+---
+layout: default
+---
+# Acknowledgements
+
+We thank the operations teams at the Austrian Scientific Computing (ASC) (VSC-5) and CINECA’s Leonardo supercomputer for early feedback, and the Dagster community for discussions around orchestrating HPC workloads. Funding and in-kind support were provided by the Complexity Science Hub Vienna and the Austrian Supply Chain Intelligence Institute.
+We furhter thank the EUROCC AI HACKATHON 2025 for providing the opportunity to test and validate our work in a real HPC environment. 
+
+https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375
