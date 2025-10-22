@@ -37,8 +37,6 @@ The Docker compose stack starts a local Dagster control plane, a Slurm edge node
 
 ## 1. Develop locally (no Slurm)
 
-*TODO*: Explain what we see here.
-
 For rapid iteration, execute assets directly on your workstation:
 
 ```bash
@@ -47,51 +45,35 @@ pixi run start
 
 Navigate to [http://localhost:3000](http://localhost:3000) to view the Dagster UI with assets running in-process.
 
-## 2. Exercise the bundled Slurm cluster
+### 2. Using Dagster
 
-Switching to Slurm-backed execution only requires environment variables that describe the edge node. Create an `.env` file with:
+## Using Dagster with Slurm
 
-```dotenv
-SLURM_EDGE_NODE_HOST=localhost
-SLURM_EDGE_NODE_PORT=2223
-SLURM_EDGE_NODE_USER=submitter
-SLURM_EDGE_NODE_PASSWORD=submitter
-SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
-```
+To understand the benefits of using **Dagster** with **Slurm**, open the **Dagster UI** and navigate to the **Assets** tab.
+Here, you’ll see the different assets that can be *materialized* (i.e., executed).
 
-Then run:
+For this example, select the asset **`process_data`**, which is a dummy asset that doesn’t actually process any data.
+Once it’s materialized, go to the **Runs** tab and open the newly created run.
 
-```bash
-pixi run start-staging
-```
+In the **Run view**, you can explore detailed output and run information (see screenshot below).
+For example, you can check the input path, output logs, number of processed rows, and total processing time.
 
-Assets now submit through Slurm, and Dagster displays job logs, status, and resource metadata collected from the cluster.
+![Screenshot comparing multiple Dagster runs](../static/img/process_data_asset_view.png)
 
-## 3. Prepare production-style runs
+Under the **`stderr`** and **`stdout`** tabs, Dagster automatically collects the respective logs.
+This feature is especially useful when working with **Slurm**, where you would otherwise need to manually log into the compute machine to locate the individual output files.
+With Dagster, all logs are centralized, making them easy to access, compare, and troubleshoot.
 
-Production environments typically reuse pre-built runtimes to avoid the startup cost of packaging dependencies on each run. The demo shows this by pre-deploying the pixi environment and pointing the resource configuration at it.
+To further explore your asset runs, return to the Assets tab and select process_data again.
+Here, you can review all past runs of that asset, compare their performance, and analyze trends across executions (see screenshot below).
+Depending on your Dagster configuration, you can also log and visualize additional metrics or properties.
 
-```bash
-pixi run deploy-prod-docker  # builds and uploads the pixi environment
-```
 
-Inspect the generated metadata and persist the target path:
+![Screenshot comparing multiple Dagster runs](../static/img/process_data_run_view.png)
 
-```bash
-deployment_path="$(jq -er '.deployment_path' deployment_metadata.json)"
-echo "DAGSTER_PROD_ENV_PATH=${deployment_path}" > .env.prod
-export DAGSTER_PROD_ENV_PATH="${deployment_path}"
-```
 
-Then start Dagster in production mode:
 
-```bash
-pixi run start-prod-docker
-```
-
-Jobs now skip environment packaging and launch noticeably faster.
-
-## 4. Point to your own HPC cluster
+## 3. Point to your own HPC cluster
 
 1. Update the SSH and Slurm configuration in
    [`examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py`](https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py)
