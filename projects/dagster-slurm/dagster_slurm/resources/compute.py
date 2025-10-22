@@ -250,7 +250,7 @@ class ComputeResource(ConfigurableResource):
         default_launcher = self.default_launcher
 
         # Merge when the override is the same launcher type so site defaults persist.
-        if isinstance(override, default_launcher.__class__):
+        if type(override) is type(default_launcher):
             try:
                 override_payload = override.model_dump(exclude_unset=True)
                 # model_copy returns a new instance, keeping the original default untouched.
