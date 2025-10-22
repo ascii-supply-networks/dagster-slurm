@@ -8,6 +8,7 @@ from pydantic import Field
 from dagster_slurm.config.runtime import RuntimeVariant
 
 from .base import ComputeLauncher, ExecutionPlan
+import dagster as dg
 
 
 class RayLauncher(ComputeLauncher):
@@ -56,7 +57,13 @@ class RayLauncher(ComputeLauncher):
     include_head_as_worker: bool = Field(default=False, description="If True, also start a worker on the head via srun.")
     match_head_by_shortname: bool = Field(default=True, description="Exclude head by shortname (True) or FQDN (False).")
 
-    srun_cpu_bind: str = Field(default="none", description="Value for --cpu-bind; '' to omit.")
+    worker_cpu_bind: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional value for srun --cpu-bind when starting workers. "
+            "Leave unset to inherit Slurm defaults."
+        ),
+    )
     srun_exclusive: bool = Field(default=True, description="Use --exclusive for worker srun.")
     srun_ntasks_per_node: int = Field(default=1, description="--ntasks-per-node for worker srun.")
     srun_hint: Optional[str] = Field(default=None, description="--hint value (e.g., 'nomultithread').")
@@ -235,8 +242,20 @@ class RayLauncher(ComputeLauncher):
 
         common_args = []
         if self.object_store_memory_gb is not None:
+            # must end with space for correct command formatting
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
             common_args.append(f"--object-store-memory={bytes_value}")
+
+        if self.worker_cpu_bind is not None:
+            if self.worker_cpu_bind == "_none_":
+                # If we see our special string, use the literal 'none'
+                cpu_bind_option = "--cpu-bind=none "
+            else:
+                # Otherwise, use the string value directly
+                cpu_bind_option = f"--cpu-bind={self.worker_cpu_bind} "
+        else:
+            cpu_bind_option = ""
+        dg.get_dagster_logger().info(f"Using CPU bind of: {cpu_bind_option}")
 
         head_args = [
             "--head", "-v",
@@ -263,8 +282,8 @@ class RayLauncher(ComputeLauncher):
         srun_flags = ["--nodes=1", "--ntasks=1", f"--ntasks-per-node={self.srun_ntasks_per_node}"]
         if self.srun_exclusive:
             srun_flags.append("--exclusive")
-        if self.srun_cpu_bind:
-            srun_flags.append(f"--cpu-bind={self.srun_cpu_bind}")
+        if self.cpu_bind_option:
+            srun_flags.append(f"--cpu-bind={self.cpu_bind_option}")
         if self.srun_hint:
             srun_flags.append(f"--hint={self.srun_hint}")
         if self.srun_extra_args:
