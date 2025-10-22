@@ -110,7 +110,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
             "include_head_as_worker": False,
             "match_head_by_shortname": True,
             
-            "srun_cpu_bind": "none",
+            "worker_cpu_bind": "_none_",
             "srun_exclusive": True,
             "srun_ntasks_per_node": 1,
             "srun_hint": "nomultithread",
