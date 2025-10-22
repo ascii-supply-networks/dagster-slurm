@@ -8,6 +8,7 @@ from pydantic import Field
 from dagster_slurm.config.runtime import RuntimeVariant
 
 from .base import ComputeLauncher, ExecutionPlan
+import dagster as dg
 
 
 class RayLauncher(ComputeLauncher):
@@ -47,6 +48,13 @@ class RayLauncher(ComputeLauncher):
     )
     worker_startup_delay: int = Field(
         default=1, description="Seconds between worker starts"
+    )
+    worker_cpu_bind: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional value for srun --cpu-bind when starting workers. "
+            "Leave unset to inherit Slurm defaults."
+        ),
     )
 
     def prepare_execution(
@@ -224,8 +232,20 @@ class RayLauncher(ComputeLauncher):
 
         common_args = []
         if self.object_store_memory_gb is not None:
+            # must end with space for correct command formatting
             bytes_value = int(self.object_store_memory_gb * 1_000_000_000)
             common_args.append(f"--object-store-memory={bytes_value}")
+
+        if self.worker_cpu_bind is not None:
+            if self.worker_cpu_bind == "_none_":
+                # If we see our special string, use the literal 'none'
+                cpu_bind_option = "--cpu-bind=none "
+            else:
+                # Otherwise, use the string value directly
+                cpu_bind_option = f"--cpu-bind={self.worker_cpu_bind} "
+        else:
+            cpu_bind_option = ""
+        dg.get_dagster_logger().info(f"Using CPU bind of: {cpu_bind_option}")
 
         head_args = [
             "--head",
@@ -337,7 +357,7 @@ class RayLauncher(ComputeLauncher):
     echo "Head node: $head_node_name"; echo "Worker nodes: ${{worker_nodes[@]}}"
     for node_i in "${{worker_nodes[@]}}"; do
         echo "Launching worker on $node_i..."
-        srun --nodes=1 --ntasks=1 -w "$node_i" \\
+        srun {cpu_bind_option}--nodes=1 --ntasks=1 -w "$node_i" \\
             {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
         WORKER_PIDS+=($!)
         sleep {self.worker_startup_delay}

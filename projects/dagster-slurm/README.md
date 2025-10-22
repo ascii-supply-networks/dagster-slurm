@@ -93,7 +93,7 @@ go to http://localhost:3000 and you should see the dagster webserver running.
 
 #### real HPC supercomputer execution
 
-- Targets clusters like VSC-5 (Vienna Scientific Cluster) and Leonardo (CINECA).
+- Targets clusters like VSC-5 (Austrian Scientific Computing (ASC)) and Leonardo (CINECA).
 - Assets run against the real scheduler, so ensure the account has queue access and quotas.
 
 Create a `.env` file with the edge-node credentials and select the site profile:

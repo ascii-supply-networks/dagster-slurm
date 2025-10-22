@@ -63,7 +63,7 @@ Keeping a Ray head node alive across multiple Dagster assets (often referred to 
 
 ## Mixing Ray with other launchers
 
-You can orchestrate heterogeneous jobs by combining Ray with Bash or Spark launchers:
+You can orchestrate heterogeneous jobs by combining Ray with Bash or Spark (WIP) launchers:
 
 ```python
 from dagster_slurm import BashLauncher, RayLauncher
@@ -117,6 +117,6 @@ Keep Ray worker code close to the Dagster repository so `pixi-pack` bundles the 
 
 ## Next steps
 
-- Configure Spark alongside Ray using the [Spark integration guide](../integration-spark/spark.md).
+- Configure Spark (WIP) alongside Ray using the [Spark integration guide](../integration-spark/spark.md).
 - Explore the [API reference](../api/api_core.md#class-dagster_slurm-raylauncher) for every launcher parameter.
 - Share success stories or issues on GitHub—feedback helps shape the launcher roadmap.
