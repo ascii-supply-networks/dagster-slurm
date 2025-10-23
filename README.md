@@ -9,7 +9,7 @@
 
 Integration for running Dagster assets on Slurm HPC clusters.
 
-`dagster-slurm` lets you take the same Dagster assets from a laptop to a Slurm-backed supercomputer with minimal configuration changes. This page walks through the demo environment bundled with the repository and highlights the key concepts you will reuse on your own cluster.
+`dagster-slurm` lets you take the same Dagster assets from a laptop to a Slurm-backed supercomputer with minimal configuration changes.
 
 **An European sovereign GPU cloud does not come out of nowhere
 maybe this project can support making HPC systems more accessible**.
