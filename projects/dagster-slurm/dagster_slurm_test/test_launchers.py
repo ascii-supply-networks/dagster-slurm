@@ -67,7 +67,8 @@ def test_ray_launcher_local_mode():
 
     script = "\n".join(plan.payload)
     assert "ray start --head" in script
-    assert "dashboard-port=8265" in script
+    assert 'dash_port="8265"' in script
+    assert "--dashboard-port=$dash_port" in script
 
 
 def test_ray_launcher_cluster_standalone_mode():
@@ -104,9 +105,9 @@ def test_ray_launcher_cluster_standalone_mode():
     worker_script = plan.auxiliary_scripts["ray_worker.sh"]
 
     # 1. Assertions for the Driver Script
-    assert "head_node_name=$(hostname)" in driver_script
+    assert 'head_node_name=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)' in driver_script
     assert "ray start --head" in driver_script
-    assert "--node-ip-address=$head_node_name" in driver_script
+    assert "--node-ip-address=$head_bind_addr" in driver_script
     assert 'srun --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
     assert "python3 /path/to/script.py" in driver_script
 
