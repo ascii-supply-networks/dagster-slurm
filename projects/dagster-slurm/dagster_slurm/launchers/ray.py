@@ -208,6 +208,8 @@ class RayLauncher(ComputeLauncher):
     # Set trap BEFORE starting Ray
     trap cleanup_ray EXIT SIGINT SIGTERM
     # Start Ray head
+    unset RAY_ADDRESS 2>/dev/null || true
+    export RAY_DASHBOARD_ADDRESS="http://127.0.0.1:$dash_port"
     ray start --head --port=$port \
         --dashboard-host={self.dashboard_host} --dashboard-port=$dash_port \
         --num-gpus={self.num_gpus_per_node} {obj_store}
@@ -326,7 +328,6 @@ class RayLauncher(ComputeLauncher):
     head_node_name=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
     # Resolve what Ray should BIND to (and what workers should CONNECT to)
     head_bind_addr="$head_node_name"
-    head_bind_addr="$head_node_name"
     if [[ "{str(self.use_head_ip).lower()}" == "true" ]]; then
       # Prefer IPv4; fall back to IPv6; finally fall back to hostname
       ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}')
@@ -341,6 +342,10 @@ class RayLauncher(ComputeLauncher):
     head_adv="$head_bind_addr"
     if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
     ip_head="$head_adv:$port"
+    unset RAY_ADDRESS 2>/dev/null || true
+    export RAY_ADDRESS="$ip_head"
+    export RAY_NODE_IP_ADDRESS="$head_bind_addr"
+    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
 
     redis_password="{redis_pw}"
     WORKER_PIDS=()
@@ -443,7 +448,7 @@ class RayLauncher(ComputeLauncher):
 
     # ===== 5. Run Payload =====
     echo "Executing user payload..."
-    export RAY_NODE_IP_ADDRESS="$head_node_name"
+    export RAY_NODE_IP_ADDRESS="$head_bind_addr"
     {shlex.quote(python_executable)} {shlex.quote(payload_path)}
     """
 

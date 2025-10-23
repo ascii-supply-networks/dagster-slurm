@@ -4,7 +4,7 @@ import dagster as dg
 from dagster_slurm import ComputeResource, RayLauncher
 
 
-@dg.asset(name="distributed_training")
+@dg.asset
 def distributed_training(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
@@ -40,7 +40,7 @@ def distributed_training(
     yield from completed_run.get_results()
 
 
-@dg.asset(name="distributed_inference", deps=[distributed_training])
+@dg.asset(deps=[distributed_training])
 def distributed_inference(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
