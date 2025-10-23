@@ -114,10 +114,10 @@ layout: intro
 # What is a data orchestrator?
 
 - 🧑‍💻 **Workflow coordination**: Express dependencies, priorities, and retries across many jobs—not just one queue submission.
-- **Resource abstraction**: Bind the same code to laptops, clouds, or supercomputers via configuration, not rewrites.
+- **Resource abstraction**: Reproducible execute the same code on laptops, clouds, or supercomputers via configuration, not rewrites.
 - **Observability**: Provide visibility into the status and performance of workflows, allowing users to track progress and troubleshoot issues from a single pane of glass.
 - 🛠 **Integration**: Facilitate communication and data exchange between different systems and services, enabling a cohesive workflow.
-- **Developer experience**: Offer fast local loops plus production parity so teams can move quickly without breaking rigor.
+- **Simplicity**: Possibility to scale the system down to a single laptop for fast debugging and onboarding.
 
 <!--
 You can have `style` tag in markdown to override the style for the current page.
@@ -276,7 +276,7 @@ cd dagster-slurm
 Develop locally
 ```bash
 cd examples
-pixi run start             # Dagster UI on http://localhost:3000
+pixi run start # Dagster UI on http://localhost:3000
 ```
 Submit through Slurm
 ```bash
@@ -322,8 +322,7 @@ layout: intro
 
 - **Parallel Processing**: Use multiple nodes to perform calculations simultaneously, significantly reducing the time required for complex tasks.
 - **High-Speed Interconnects**: Fast networking technologies to enable efficient communication between nodes.
-- **Large Memory Capacity**: Substantial amounts of RAM to handle large datasets and memory-intensive applications.
-- **Specialized Software**: Run specialized software and libraries optimized for parallel processing and high-performance computing.
+- **Specialized Hardware**: Large RAM, many beefy GPUS, possibly even custom accelerators.
 
 <!--
 You can have `style` tag in markdown to override the style for the current page.
@@ -424,6 +423,18 @@ layout: two-cols
 ![](/img/arch-detail-dark.svg)
 
 ---
+layout: image
+image: /img/process_data_run_view.png
+backgroundSize: contain
+---
+
+---
+layout: image
+image: /img/process_data_asset_view.png
+backgroundSize: contain
+---
+
+---
 transition: fade
 #layout: two-cols
 #class: bg-slate-950 text-white
@@ -520,7 +531,7 @@ layout: default
 
 - No technical service user: 12-hour OTP tokens block continuous orchestration.
 - Outbound network is closed on compute nodes, trapping larger data pulls.
-- Partition-specific NUMA settings on Leonardo trigger inconsistent CPU pinning.
+- Failing Slurm jobs due to incorrect automatic CPU pinning for partial node allocation on Leonardo
 - Packaging GPU dependencies still requires manual alignment with site modules.
 
 ---
@@ -541,7 +552,7 @@ layout: default
 
 - Strategy: Make things work on real HPCs
 - Change? Not needed; VSC, Leonardo working now.
-- Learnings: Inconsistent NUMA on Leonardo, OTP hurdles
+- Learnings: Inconsistent automatic CPU pinning on Leonardo, OTP hurdles
 
 ---
 layout: default
@@ -557,8 +568,8 @@ layout: default
 
 ## Learnings
 To become a viable possibility for a European GPU cloud some changes are needed:
-- Authentication, techincal service users
-- Netowrk access (to connect to exteral data)
+- Authentication, technical service users
+- Network access (to connect to external data)
 
 ---
 layout: default
@@ -613,12 +624,6 @@ class: bg-slate-100 text-slate-900
     </ul>
   </div>
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
-    <!-- <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System Prerequisites</h3>
-    <ul class="mt-4 space-y-2 text-base leading-relaxed">
-      <li>Service credentials without 12-hour OTP churn.</li>
-      <li>Predictable NUMA and partition settings to avoid manual overrides.</li>
-      <li>Flexible data ingress so large external assets like commoncrawl can be analyzed on HPC systems</li>
-    </ul> -->
     <img src="/img/arch-overview.png"/>
   </div>
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
@@ -648,7 +653,7 @@ Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: a
 
 Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability. 
 
-We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent NUMA defaults—and captured concrete asks for admins.
+We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent CPU pinning on Leonardo and captured concrete asks for admins.
 
 > The effort validates that orchestrator-based ergonomics and supercomputer horsepower can finally coexist.
 
