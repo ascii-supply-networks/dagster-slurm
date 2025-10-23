@@ -531,7 +531,7 @@ layout: default
 
 - No technical service user: 12-hour OTP tokens block continuous orchestration.
 - Outbound network is closed on compute nodes, trapping larger data pulls.
-- Partition-specific NUMA settings on Leonardo trigger inconsistent CPU pinning.
+- Failing Slurm jobs due to incorrect automatic CPU pinning for partial node allocation on Leonardo
 - Packaging GPU dependencies still requires manual alignment with site modules.
 
 ---
@@ -552,7 +552,7 @@ layout: default
 
 - Strategy: Make things work on real HPCs
 - Change? Not needed; VSC, Leonardo working now.
-- Learnings: Inconsistent NUMA on Leonardo, OTP hurdles
+- Learnings: Inconsistent automatic CPU pinning on Leonardo, OTP hurdles
 
 ---
 layout: default
@@ -624,12 +624,6 @@ class: bg-slate-100 text-slate-900
     </ul>
   </div>
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
-    <!-- <h3 class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System Prerequisites</h3>
-    <ul class="mt-4 space-y-2 text-base leading-relaxed">
-      <li>Service credentials without 12-hour OTP churn.</li>
-      <li>Predictable NUMA and partition settings to avoid manual overrides.</li>
-      <li>Flexible data ingress so large external assets like commoncrawl can be analyzed on HPC systems</li>
-    </ul> -->
     <img src="/img/arch-overview.png"/>
   </div>
   <div class="border border-slate-300 bg-white rounded-xl p-6 flex flex-col shadow-sm">
@@ -659,7 +653,7 @@ Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: a
 
 Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability. 
 
-We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent NUMA defaults—and captured concrete asks for admins.
+We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent CPU pinning on Leonardo and captured concrete asks for admins.
 
 > The effort validates that orchestrator-based ergonomics and supercomputer horsepower can finally coexist.
 
