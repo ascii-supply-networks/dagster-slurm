@@ -103,7 +103,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "ray": {
             "num_gpus_per_node": 0,
             "dashboard_port": 8265,
-            "head_startup_timeout": 120, 
+            "head_startup_timeout": 120,
             "use_head_ip": True,
             "dashboard_host": "0.0.0.0",
             "port_strategy": "hash_jobid",
