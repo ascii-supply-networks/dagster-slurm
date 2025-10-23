@@ -135,7 +135,7 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "slurm_queue_config": {
             "partition": "zen3_0512_a100x2",
             "qos": "zen3_0512_a100x2",
-            "reservation": "dagster-slurm_22",  # 23 on later days
+            "reservation": "dagster-slurm_23",
             "gpus_per_node": 1,
             "num_nodes": 1,
             "mem": None,
@@ -143,7 +143,7 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "slurm_session_config": {
             "partition": "zen3_0512_a100x2",
             "qos": "zen3_0512_a100x2",
-            "reservation": "dagster-slurm_22",
+            "reservation": "dagster-slurm_23",
             "gpus_per_node": 1,
             "num_nodes": 1,
         },
