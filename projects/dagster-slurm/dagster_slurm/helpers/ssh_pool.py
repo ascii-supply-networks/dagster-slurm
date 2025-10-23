@@ -26,11 +26,11 @@ class SSHConnectionPool:
 
     def __init__(self, ssh_config: "SSHConnectionResource"):
         self.config = ssh_config
-        self.logger = get_dagster_logger()
         self.control_path: Optional[str] = self._prepare_control_path()
         self._master_started = False
         self._fallback_mode = False
         self._fallback_reason: Optional[str] = None
+        self.logger = get_dagster_logger()
         self._lock = threading.RLock()
 
     def _collect_passwords(self) -> list[str]:
