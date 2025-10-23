@@ -3,23 +3,28 @@ sidebar_position: 99
 title: HPC - VSC-5
 ---
 
-## Sample configuration: Austrian Scientific Computing (ASC) (VSC-5)
+## Sample configuration: Austrian Scientific Computing (ASC) VSC-5
 
 ```dotenv title=".env.vsc5"
-# SSH / edge node access
+# SSH / cluster login node access
 SLURM_EDGE_NODE_HOST=vsc5.vsc.ac.at
-SLURM_EDGE_NODE_PORT=22
+SLURM_EDGE_NODE_PORT=27                        # use port 22 for password-based auth and port 27 for key-based auth on VSC5
 SLURM_EDGE_NODE_USER=your_vsc_username
+# SLURM_EDGE_NODE_PASSWORD=password            # specify either password or ssh key path
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
-SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at        # optional, but recommended
+SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at       # optional, may be necessary if outside of university network / VPN
 SLURM_EDGE_NODE_JUMP_USER=your_vsc_username
-SLURM_EDGE_NODE_JUMP_PASSWORD=...              # required: VMOS bastion only accepts password/OTP auth
+SLURM_EDGE_NODE_JUMP_PASSWORD=...              # required: VMOS bastion only accepts password auth
 
 # Deployment settings
 SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
-SLURM_PARTITION=zen3_0512                      # pick a queue you can access
-SLURM_QOS=zen3_0512_devel                      # optional QoS/account string
-SLURM_RESERVATION=dagster-slurm_21             # optional reservation (if active)
+SLURM_PARTITION=zen3_0512                      # default partition (without GPUs)
+SLURM_QOS=zen3_0512                            # matching QOS for default partition
+# SLURM_QOS=zen3_0512_devel                    # alternative: Development queue with higher priority (max. 5 nodes, max. 10 minutes)
+# SLURM_PARTITION=zen3_0512_a100x2             # GPU partition with 2xA100
+# SLURM_QOS=zen3_0512_a100x2                   # matching QOS for A100 partition
+# SLURM_QOS=zen3_0512_a100x2_devel             # alternative: Development queue with higher priority (max. 2 nodes, max. 10 minutes)
+# SLURM_RESERVATION=reservation_name           # optional reservation (if active)
 SLURM_SUPERCOMPUTER_SITE=vsc5
 
 # Dagster deployment selector
@@ -33,21 +38,14 @@ VMOS currently rejects key-only authentication, so always provide `SLURM_EDGE_NO
 
 
 ## SSH on VSC-5
-To keep the VSC-5 login chain responsive, configure SSH keepalives for the `vmos` bastion and `vsc5` login node:
+To keep the VSC-5 login chain responsive, configure SSH keepalives for the `vmos.vsc.ac.at` bastion and `vsc5.vsc.ac.at` login node:
 
 ```sshconfig title="~/.ssh/config"
-Host vmos
-    HostName vmos.vsc.ac.at
-    User dagster01
-    ServerAliveInterval 120
-    ServerAliveCountMax 2
-
-Host vsc5
-    HostName vsc5.vsc.ac.at
-    User dagster01
-    ProxyJump vmos
+Host vmos.vsc.ac.at vsc5.vsc.ac.at
     ServerAliveInterval 120
     ServerAliveCountMax 2
 ```
 
-Replace the usernames with your account. These settings dramatically reduce dropped ControlMaster tunnels and `ssh_exchange_identification` failures when submitting many jobs through `dagster-slurm`.
+Replace the usernames with your account. These settings dramatically reduce dropped tunnels and `ssh_exchange_identification` failures when submitting many jobs through `dagster-slurm`.
+
+For additional information about VSC-5, see the [ASC documentation](https://docs.asc.ac.at/).

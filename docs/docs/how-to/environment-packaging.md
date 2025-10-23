@@ -11,8 +11,8 @@ The packaging tasks read your SSH credentials and remote destination from the en
 
 | Variable | Purpose | Notes |
 | --- | --- | --- |
-| `SLURM_EDGE_NODE_HOST` | SSH hostname of the edge/login node. | Example: `login.vsc5.tuwien.ac.at`. |
-| `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22`; Leonardo uses `2222`. |
+| `SLURM_EDGE_NODE_HOST` | SSH hostname of the edge/login node. | Example: `vsc5.vsc.ac.at`. |
+| `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22`. |
 | `SLURM_EDGE_NODE_USER` | Username for SSH and file uploads. | Must have write access to the deployment path. |
 | `SLURM_EDGE_NODE_KEY_PATH` | Path to the SSH private key (key-based auth). | Expandable paths like `~/.ssh/id_ed25519`. |
 | `SLURM_EDGE_NODE_PASSWORD` | Password for SSH (password auth). | Mutually exclusive with `SLURM_EDGE_NODE_KEY_PATH`. |

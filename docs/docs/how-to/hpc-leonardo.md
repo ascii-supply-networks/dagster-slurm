@@ -3,22 +3,32 @@ sidebar_position: 99
 title: HPC - Leonardo
 ---
 
-## Sample configuration: Leonardo (CINECA)
+## Sample configuration: CINECA Leonardo
 
 ```dotenv title=".env.leonardo"
-SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it
-SLURM_EDGE_NODE_PORT=22                     # Leonardo typically listens on 22; override if your project uses a custom port
-SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/usertrain/a08trb02/dagster-slurm
-SLURM_PARTITION=boost_usr_prod              # or boost_usr_dbg / dcgp_usr_prod depending on your entitlement
-SLURM_QOS=boost_qos_bprod
+# SSH / cluster login node access
+SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it  # valid login nodes are login01-ext, login02-ext, login05-ext, login07-ext
+SLURM_EDGE_NODE_PORT=22
+SLURM_EDGE_NODE_USER=your_leonardo_username
+# SLURM_EDGE_NODE_PASSWORD=password            # specify either password or ssh key path
+SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
+
+# Deployment settings
+SLURM_DEPLOYMENT_BASE_PATH=/leonardo/home/userexternal/your_leonardo_username/dagster-slurm
+SLURM_PARTITION=boost_usr_prod
+# SLURM_QOS=boost_qos_bprod                   # Queue for large jobs (65 to 256 nodes). Leave out for normal queue (for up to 64 nodes).
+# SLURM_QOS=boost_qos_dbg                     # Development queue with higher priority (max. 2 nodes, max. 30 minutes)
+# SLURM_RESERVATION=reservation_name          # optional reservation (if active)
 SLURM_SUPERCOMPUTER_SITE=leonardo
+
+# Dagster deployment selector
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
 Leonardo requires you to have an active project allocation; the permitted partitions depend on your account type. Verify your entitlements on the cluster:
 
 ```bash
-sacctmgr show assoc where user=$USER format=Cluster,Account,Partition,QOS%20
+sacctmgr show assoc where user=$USER format=Cluster,Account%20,Partition,QOS%60
 sinfo -s
 ```
 
@@ -37,3 +47,5 @@ pixi run start-production-supercomputer
 ```
 
 The production preset refuses to start if `CI_DEPLOYED_ENVIRONMENT_PATH` is missing, ensuring clusters never build environments during business-critical runs.
+
+For additional information about Leonardo, see the [Leonardo documentation](https://docs.hpc.cineca.it/hpc/leonardo.html).
