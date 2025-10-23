@@ -59,7 +59,7 @@ class RayLauncher(ComputeLauncher):
     use_head_ip: bool = Field(default=True, description="Use node IP instead of hostname for Ray head.")
     dashboard_host: str = Field(default="0.0.0.0", description="Bind host for Ray dashboard (e.g., 0.0.0.0 or 127.0.0.1).")
     port_strategy: Literal["fixed", "hash_jobid"] = Field(
-        default="fixed",
+        default="hash_jobid",
         description="'fixed' or 'hash_jobid' for head/dashboard ports."
     )
 
