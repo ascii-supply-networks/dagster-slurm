@@ -1,7 +1,7 @@
 """Ray cluster launcher with robust startup/shutdown."""
 
 import shlex
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 from pydantic import Field
 
@@ -44,7 +44,7 @@ class RayLauncher(ComputeLauncher):
         default=5, description="Seconds to wait for graceful shutdown"
     )
     head_startup_timeout: int = Field(
-        default=60, description="Seconds to wait for head to be ready"
+        default=120, description="Seconds to wait for head to be ready"
     )
     worker_startup_delay: int = Field(
         default=1, description="Seconds between worker starts"
@@ -55,6 +55,17 @@ class RayLauncher(ComputeLauncher):
             "Optional value for srun --cpu-bind when starting workers. "
             "Leave unset to inherit Slurm defaults."
         ),
+    )
+    use_head_ip: bool = Field(
+        default=True, description="Use node IP instead of hostname for Ray head."
+    )
+    dashboard_host: str = Field(
+        default="0.0.0.0",
+        description="Bind host for Ray dashboard (e.g., 0.0.0.0 or 127.0.0.1).",
+    )
+    port_strategy: Literal["fixed", "hash_jobid"] = Field(
+        default="hash_jobid",
+        description="'fixed' or 'hash_jobid' for head/dashboard ports.",
     )
 
     def prepare_execution(
@@ -183,6 +194,14 @@ class RayLauncher(ComputeLauncher):
     """
         # The rest of the function remains the same
         return f"""{activation_block}
+    # Compute ports (optionally hash by SLURM_JOB_ID)
+    port="{self.ray_port}"
+    dash_port="{self.dashboard_port}"
+    if [[ "{self.port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
+        off=$(( SLURM_JOB_ID % 1000 ))
+        port=$(( {self.ray_port} + off ))
+        dash_port=$(( {self.dashboard_port} + off ))
+    fi
     # Start local Ray cluster
     echo "[$({date_fmt})] Starting local Ray cluster"
     # Cleanup function - MUST be defined before trap
@@ -194,10 +213,12 @@ class RayLauncher(ComputeLauncher):
     # Set trap BEFORE starting Ray
     trap cleanup_ray EXIT SIGINT SIGTERM
     # Start Ray head
-    ray start --head --port={self.ray_port} \\
-      --dashboard-host=127.0.0.1 --dashboard-port={self.dashboard_port} \\
-      --num-gpus={self.num_gpus_per_node} {obj_store}
-    export RAY_ADDRESS="127.0.0.1:{self.ray_port}"
+    unset RAY_ADDRESS 2>/dev/null || true
+    export RAY_DASHBOARD_ADDRESS="http://127.0.0.1:$dash_port"
+    ray start --head --port=$port \
+        --dashboard-host={self.dashboard_host} --dashboard-port=$dash_port \
+        --num-gpus={self.num_gpus_per_node} {obj_store}
+    export RAY_ADDRESS="127.0.0.1:$port"
     # Wait for Ray to be ready
     echo "[$({date_fmt})] Waiting for Ray to be ready..."
     for i in $(seq 1 {self.head_startup_timeout}); do
@@ -250,10 +271,10 @@ class RayLauncher(ComputeLauncher):
         head_args = [
             "--head",
             "-v",
-            "--node-ip-address=$head_node_name",
-            f"--port={self.ray_port}",
-            "--dashboard-host=0.0.0.0",
-            f"--dashboard-port={self.dashboard_port}",
+            "--node-ip-address=$head_bind_addr",
+            "--port=$port",
+            f"--dashboard-host={self.dashboard_host}",
+            "--dashboard-port=$dash_port",
             f"--num-gpus={self.num_gpus_per_node}",
             "--redis-password=$redis_password",
             f"--temp-dir={temp_dir_path}",
@@ -299,9 +320,39 @@ class RayLauncher(ComputeLauncher):
     source "$activation_script"
 
     # Define all variables first
-    head_node_name=$(hostname)
-    port={self.ray_port}
-    ip_head="$head_node_name:$port" # This is now 'c1:6379'
+    # Figure out ports 
+    port="{self.ray_port}"
+    dash_port="{self.dashboard_port}"
+    if [[ "{self.port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
+        # keep in user space; avoid reserved/system ports 
+        off=$(( SLURM_JOB_ID % 1000 ))
+        port=$(( {self.ray_port} + off ))
+        dash_port=$(( {self.dashboard_port} + off ))
+    fi
+    
+    # Choose head node (first host in allocation)
+    head_node_name=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
+    # Resolve what Ray should BIND to (and what workers should CONNECT to)
+    head_bind_addr="$head_node_name"
+    if [[ "{str(self.use_head_ip).lower()}" == "true" ]]; then
+      # Prefer IPv4; fall back to IPv6; finally fall back to hostname
+      ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}')
+      if [[ -n "$ipv4" ]]; then
+          head_bind_addr="$ipv4"
+      else
+          ipv6=$(getent ahostsv6 "$head_node_name" | awk 'NR==1{{print $1}}')
+          if [[ -n "$ipv6" ]]; then head_bind_addr="$ipv6"; fi
+      fi
+    fi
+    # Bracketize IPv6 for Ray's --address / RAY_ADDRESS usage 
+    head_adv="$head_bind_addr"
+    if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
+    ip_head="$head_adv:$port"
+    unset RAY_ADDRESS 2>/dev/null || true
+    export RAY_ADDRESS="$ip_head"
+    export RAY_NODE_IP_ADDRESS="$head_bind_addr"
+    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
+
     redis_password="{redis_pw}"
     WORKER_PIDS=()
     worker_nodes=()
@@ -403,7 +454,7 @@ class RayLauncher(ComputeLauncher):
 
     # ===== 5. Run Payload =====
     echo "Executing user payload..."
-    export RAY_NODE_IP_ADDRESS="$head_node_name"
+    export RAY_NODE_IP_ADDRESS="$head_bind_addr"
     {shlex.quote(python_executable)} {shlex.quote(payload_path)}
     """
 
