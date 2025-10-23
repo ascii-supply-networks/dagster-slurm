@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.6.0-rc.3 (2025-10-23)
+
+### Bug Fixes
+
+- Refine readmes ([#67](https://github.com/ascii-supply-networks/dagster-slurm/pull/67),
+  [`f06fd8e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f06fd8e27c48742513f8e6e6450ed09740d3ec52))
+
+### Features
+
+- Refine 8 ([#67](https://github.com/ascii-supply-networks/dagster-slurm/pull/67),
+  [`f06fd8e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f06fd8e27c48742513f8e6e6450ed09740d3ec52))
+
+
 ## v1.6.0-rc.2 (2025-10-22)
 
 ### Chores
