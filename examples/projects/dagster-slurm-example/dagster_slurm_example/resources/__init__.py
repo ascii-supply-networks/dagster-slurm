@@ -96,7 +96,7 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "compute_config": {
         "auto_detect_platform": False,
         "pack_platform": "linux-64",
-        "debug_mode": True,
+        "debug_mode": False,
     },
     "launchers": {
         "bash": {},
