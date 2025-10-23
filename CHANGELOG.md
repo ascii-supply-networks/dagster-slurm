@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.7.0 (2025-10-23)
+
+### Bug Fixes
+
+- Refine slides ([#69](https://github.com/ascii-supply-networks/dagster-slurm/pull/69),
+  [`50a054b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/50a054bfe82f441942f84582142eeab6a68087af))
+
+- Revert -see comment ([#65](https://github.com/ascii-supply-networks/dagster-slurm/pull/65),
+  [`d9e39a0`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d9e39a036d4a542da47066d474cb5686c7c108ef))
+
+### Chores
+
+- After merge ([#65](https://github.com/ascii-supply-networks/dagster-slurm/pull/65),
+  [`d9e39a0`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d9e39a036d4a542da47066d474cb5686c7c108ef))
+
+### Features
+
+- Issue 42 ([#65](https://github.com/ascii-supply-networks/dagster-slurm/pull/65),
+  [`d9e39a0`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d9e39a036d4a542da47066d474cb5686c7c108ef))
+
+
 ## v1.6.0-rc.3 (2025-10-23)
 
 ### Bug Fixes
