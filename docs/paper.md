@@ -19,6 +19,9 @@ authors:
   - name: Georg Heiler
     orcid: 0000-0002-8684-1163
     affiliation: "1, 2"
+  - name: Maximilian Heß
+    orcid: 0009-0007-8093-7117
+    affiliation: "2"
 affiliations:
  - name: Complexity Science Hub Vienna (CSH)
    index: 1
@@ -112,7 +115,7 @@ We validate the approach along three dimensions:
 dagster-slurm lowers the barrier for research teams to adopt modern data orchestration on top of established HPC schedulers. By eliminating duplicated scripts and surfacing rich observability, the integration reduces operational toil and shortens iteration loops. Future work focuses on:
 
 - Deepening heterogeneous job support (automatic fusion of dependent assets, richer allocation policies).
-- Exploring pilot-job back-ends (e.g., RADICAL-Pilot, QCG) for even finer-grained scheduling inside allocations, and non-interactive OTP integrations for environments with strict MFA policies.
+- Exploring pilot-job back ends (e.g., RADICAL-Pilot, QCG) for even finer-grained scheduling inside allocations, and non-interactive OTP integrations for environments with strict MFA policies.
 - Extending language/runtime coverage via additional launchers (MPI, GPU-accelerated frameworks) and multi-language Pipes integrations.
 
 Community contributions—issue reports, cluster-specific recipes, and new launchers—are actively encouraged at <https://github.com/ascii-supply-networks/dagster-slurm>.
