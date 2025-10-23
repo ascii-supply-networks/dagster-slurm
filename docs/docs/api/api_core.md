@@ -80,7 +80,7 @@ Bases: `ConfigurableResource`
 Unified compute resource - adapts to deployment.
 
 This is the main facade that assets depend on.
-Hides complexity of local and Slurm execution today while leaving hooks for future session reuse.
+Hides complexity of local vs Slurm vs session execution.
 
 Usage:
 : @asset
@@ -102,7 +102,25 @@ Slurm per-asset mode (staging):
 : slurm = SlurmResource.from_env()
   compute = ComputeResource(mode=”slurm”, slurm=slurm)
 
-Planned enhancements (session reuse, heterogeneous jobs) will reuse the same facade once they stabilise. Early adopters can explore the experimental classes in the repository, but the documented surface area focuses on the `local` and `slurm` modes.
+Slurm session mode with cluster reuse (prod):
+: slurm = SlurmResource.from_env()
+  session = SlurmSessionResource(slurm=slurm, num_nodes=10)
+  compute = ComputeResource(
+  <br/>
+  > mode=”slurm-session”,
+  > slurm=slurm,
+  > session=session,
+  > enable_cluster_reuse=True,
+  > cluster_reuse_tolerance=0.2,
+  <br/>
+  )
+
+Heterogeneous job mode (optimal resource allocation):
+: compute = ComputeResource(
+  : mode=”slurm-hetjob”,
+    slurm=slurm,
+  <br/>
+  )
 
 * **Parameters:**
   **data** (`Any`)
@@ -567,8 +585,8 @@ Works in two modes:
   * **slurm_resource** ([`SlurmResource`](#id19))
   * **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
   * **session_resource** (`Optional`[[`SlurmSessionResource`](#id43)])
-  * **cleanup_on_failure** (`bool`) – Delete run artefacts even when the run fails. The removal happens asynchronously so Dagster does not block on large directories.
-  * **debug_mode** (`bool`) – Keep uploaded bundles and logs on the edge node (disables the asynchronous cleanup). Useful while debugging remote runs.
+  * **cleanup_on_failure** (`bool`)
+  * **debug_mode** (`bool`)
   * **auto_detect_platform** (`bool`)
   * **pack_platform** (`Optional`[`str`])
   * **pre_deployed_env_path** (`Optional`[`str`])
@@ -601,17 +619,23 @@ These can be overridden per-asset via metadata or function arguments.
 * **Parameters:**
   **data** (`Any`)
 
+#### account *: `Optional`[`str`]*
+
 #### cpus *: `int`*
 
 #### gpus_per_node *: `int`*
 
-#### mem *: `str`*
+#### mem *: `Optional`[`str`]*
 
-#### mem_per_cpu *: `str`*
+#### mem_per_cpu *: `Optional`[`str`]*
 
 #### num_nodes *: `int`*
 
 #### partition *: `str`*
+
+#### qos *: `Optional`[`str`]*
+
+#### reservation *: `Optional`[`str`]*
 
 #### time_limit *: `str`*
 
@@ -642,7 +666,7 @@ but requires an explicit, pre-configured SSHConnectionResource to be provided.
 * **Return type:**
   [`SlurmResource`](#id19)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id55), `PartialResource`]]*
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id58), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
@@ -683,6 +707,8 @@ Thread-safe for parallel asset execution.
 * **Return type:**
   `int`
 
+#### gpus_per_node *: `int`*
+
 #### max_concurrent_jobs *: `int`*
 
 #### model_post_init(context,)
@@ -700,6 +726,10 @@ It takes context as an argument since that’s what pydantic-core passes when ca
 #### num_nodes *: `int`*
 
 #### partition *: `Optional`[`str`]*
+
+#### qos *: `Optional`[`str`]*
+
+#### reservation *: `Optional`[`str`]*
 
 #### setup_for_execution(context)
 
@@ -774,7 +804,7 @@ Bases: `ConfigurableResource`
 Unified compute resource - adapts to deployment.
 
 This is the main facade that assets depend on.
-Hides complexity of local and Slurm execution today while leaving hooks for future session reuse.
+Hides complexity of local vs Slurm vs session execution.
 
 Usage:
 : @asset
@@ -796,7 +826,25 @@ Slurm per-asset mode (staging):
 : slurm = SlurmResource.from_env()
   compute = ComputeResource(mode=”slurm”, slurm=slurm)
 
-Planned enhancements (session reuse, heterogeneous jobs) will reuse the same facade once they stabilise. Early adopters can explore the experimental classes in the repository, but the documented surface area focuses on the `local` and `slurm` modes.
+Slurm session mode with cluster reuse (prod):
+: slurm = SlurmResource.from_env()
+  session = SlurmSessionResource(slurm=slurm, num_nodes=10)
+  compute = ComputeResource(
+  <br/>
+  > mode=”slurm-session”,
+  > slurm=slurm,
+  > session=session,
+  > enable_cluster_reuse=True,
+  > cluster_reuse_tolerance=0.2,
+  <br/>
+  )
+
+Heterogeneous job mode (optimal resource allocation):
+: compute = ComputeResource(
+  : mode=”slurm-hetjob”,
+    slurm=slurm,
+  <br/>
+  )
 
 * **Parameters:**
   **data** (`Any`)
@@ -994,7 +1042,7 @@ but requires an explicit, pre-configured SSHConnectionResource to be provided.
 * **Return type:**
   [`SlurmResource`](#id19)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id55), `PartialResource`]]*
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id58), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
@@ -1176,6 +1224,8 @@ Thread-safe for parallel asset execution.
 * **Return type:**
   `int`
 
+#### gpus_per_node *: `int`*
+
 #### max_concurrent_jobs *: `int`*
 
 #### model_post_init(context,)
@@ -1193,6 +1243,10 @@ It takes context as an argument since that’s what pydantic-core passes when ca
 #### num_nodes *: `int`*
 
 #### partition *: `Optional`[`str`]*
+
+#### qos *: `Optional`[`str`]*
+
+#### reservation *: `Optional`[`str`]*
 
 #### setup_for_execution(context)
 
@@ -1228,16 +1282,22 @@ These can be overridden per-asset via metadata or function arguments.
 * **Parameters:**
   **data** (`Any`)
 
+#### account *: `Optional`[`str`]*
+
 #### cpus *: `int`*
 
 #### gpus_per_node *: `int`*
 
-#### mem *: `str`*
+#### mem *: `Optional`[`str`]*
 
-#### mem_per_cpu *: `str`*
+#### mem_per_cpu *: `Optional`[`str`]*
 
 #### num_nodes *: `int`*
 
 #### partition *: `str`*
+
+#### qos *: `Optional`[`str`]*
+
+#### reservation *: `Optional`[`str`]*
 
 #### time_limit *: `str`*
