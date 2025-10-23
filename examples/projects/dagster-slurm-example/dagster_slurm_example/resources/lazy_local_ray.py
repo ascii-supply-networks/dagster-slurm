@@ -1,7 +1,6 @@
 import os
-import re
 from functools import cached_property
-from typing import Literal
+from typing import Literal, Optional
 
 import dagster as dg
 from dagster_ray import PipesRayJobClient, RayResource
@@ -31,26 +30,33 @@ class PipesRayJobClientLazyLocalResource(dg.ConfigurableResource):
         # 1. Launcher exported the exact URL
         dash = os.getenv("RAY_DASHBOARD_ADDRESS")
         if dash:
-            if not re.match(r"^https?://", dash):
-                dash = f"http://{dash}"
-            return dash
-
+            return (
+                dash if dash.startswith(("http://", "https://")) else f"http://{dash}"
+            )
         # 2. derive host from RAY_ADDRESS
-        ray_addr = os.getenv("RAY_ADDRESS", "")
-        host = "127.0.0.1"
-        if ray_addr:
-            if "://" in ray_addr:
-                ray_addr = ray_addr.split("://", 1)[1]
-            host = ray_addr.rsplit(":", 1)[0].strip("[]") or "127.0.0.1"
-
+        host = self._host_from_ray_address(os.getenv("RAY_ADDRESS"))
         # 3. Decide port
-        port = int(self.dashboard_port)
-        if self.port_strategy == "hash_jobid":
-            jobid = os.getenv("SLURM_JOB_ID", "")
-            if jobid.isdigit():
-                port += int(jobid) % 1000
-
+        port = self._dashboard_port()
         return f"http://{host}:{port}"
+
+    @staticmethod
+    def _host_from_ray_address(
+        ray_addr: Optional[str], default: str = "127.0.0.1"
+    ) -> str:
+        if not ray_addr:
+            return default
+        no_scheme = ray_addr.split("://", 1)[-1]
+        host_part = no_scheme.rsplit(":", 1)[0]
+        host = host_part.strip("[]")
+        return host or default
+
+    def _dashboard_port(self) -> int:
+        port = int(self.dashboard_port)
+        if getattr(self, "port_strategy", "fixed") == "hash_jobid":
+            jobid = os.getenv("SLURM_JOB_ID")
+            if jobid and jobid.isdigit():
+                port += int(jobid) % 1000
+        return port
 
     def run(self, *args, **kwargs):
         return self.pipes_client.run(*args, **kwargs)
