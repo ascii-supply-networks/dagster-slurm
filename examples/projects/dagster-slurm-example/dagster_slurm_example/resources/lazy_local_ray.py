@@ -39,9 +39,8 @@ class PipesRayJobClientLazyLocalResource(dg.ConfigurableResource):
         port = self._dashboard_port()
         return f"http://{host}:{port}"
 
-    @staticmethod
     def _host_from_ray_address(
-        ray_addr: Optional[str], default: str = "127.0.0.1"
+        self, ray_addr: Optional[str], default: str = "127.0.0.1"
     ) -> str:
         if not ray_addr:
             return default
