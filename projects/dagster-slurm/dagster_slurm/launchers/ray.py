@@ -44,7 +44,7 @@ class RayLauncher(ComputeLauncher):
         default=5, description="Seconds to wait for graceful shutdown"
     )
     head_startup_timeout: int = Field(
-        default=60, description="Seconds to wait for head to be ready"
+        default=120, description="Seconds to wait for head to be ready"
     )
     worker_startup_delay: int = Field(
         default=1, description="Seconds between worker starts"

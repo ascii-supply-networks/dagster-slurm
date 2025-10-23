@@ -103,7 +103,6 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "ray": {
             "num_gpus_per_node": 0,
             "head_startup_timeout": 120,
-            "worker_cpu_bind": "_none_",
         },
         "spark": {"driver_memory": "8g", "executor_memory": "16g"},
     },
