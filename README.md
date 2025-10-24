@@ -74,6 +74,10 @@ Slurm Execution
 See [examples](./examples/) for a small tutorial which starts a slurm cluster in docker.
 To use your own full-blown HPC deployment you would have to adapt the SSH connection configuration accordingly.
 
+## Resources
+
+- 2025-11 introduction blog post https://georgheiler.com/post/dagster-slurm/
+- 2025-10 hackathon slides https://ascii-supply-networks.github.io/dagster-slurm/docs/slides
 
 ## Supporters
 
