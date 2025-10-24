@@ -20,6 +20,10 @@ See the [docs](https://ascii-supply-networks.github.io/dagster-slurm/) for instr
 
 ## ✨ features
 
+Hydrating supercomputers with Dagster and Slurm to enhance developer experience.
+
+![](docs/static/img/featured.png)
+
 - **Unified API**: Same asset code works in dev (local) for rapid prototyping but just as well on a massive HPC system via SLURM.
 - **Job launch**: One Slurm submission per Dagster asset keeps behaviour predictable. Operator-fusion/session reuse is on the roadmap (feedback welcome in [#22](https://github.com/ascii-supply-networks/dagster-slurm/issues/22)).
 - **Pluggable Launchers**: Bash, Ray, Spark (WIP) - easy to add more
@@ -69,3 +73,12 @@ Slurm Execution
 
 See [examples](./examples/) for a small tutorial which starts a slurm cluster in docker.
 To use your own full-blown HPC deployment you would have to adapt the SSH connection configuration accordingly.
+
+
+## Supporters
+
+This work was kindly supported by:
+- [ASCII](https://ascii.ac.at/)
+- [CSH](https://www.csh.ac.at/)
+- [EUROCC AI Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375): This work was completed in part at the EUROCC AI Hackathon, part of the Open Hackathons program. The authors would like to acknowledge OpenACC-Standard.org for their support.
+- [Austrian Scientific Computing (ASC)](https://asc.ac.at/home/)
