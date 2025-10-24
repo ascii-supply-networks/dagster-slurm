@@ -16,12 +16,12 @@ authors:
   - name: Hernan Picatto
     orcid: 0000-0002-8684-1163
     affiliation: "2"
-  - name: Georg Heiler
-    orcid: 0000-0002-8684-1163
-    affiliation: "1, 2"
   - name: Maximilian Heß
     orcid: 0009-0007-8093-7117
     affiliation: "2"
+  - name: Georg Heiler
+    orcid: 0000-0002-8684-1163
+    affiliation: "1, 2"
 affiliations:
  - name: Complexity Science Hub Vienna (CSH)
    index: 1
