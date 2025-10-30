@@ -57,7 +57,7 @@ This leads to duplicated logic, fragile deployments, and a loss of telemetry. **
 - Remove the need to rewrite orchestration glue when moving from development to production supercomputers.
 - Provide a batteries-included path for packaging Python environments reproducibly (Pixi https://pixi.sh/latest/ + pixi-pack, https://github.com/Quantco/pixi-pack) and deploying them in air-gapped environments.
 - Offer a clear path to advanced HPC patterns (session reuse for long-lived clusters, heterogeneous Slurm jobs) while keeping the current stable surface area intentionally small; these features are being iterated on in the open.
-- Encourage research software engineering best practices as outlined by [@eisty2025], covering planning, testing, documentation, and maintenance across the development lifecycle .
+- Encourage research software engineering best practices as outlined by [@eisty2025], covering planning, testing, documentation, and maintenance across the development lifecycle.
 
 # System Overview
 
@@ -89,7 +89,8 @@ from dagster_slurm import (
 ssh = SSHConnectionResource.from_env(prefix="SLURM_EDGE_NODE")
 slurm = SlurmResource(
     ssh=ssh,
-    queue=SlurmQueueConfig(partition="batch", time_limit="02:00:00", cpus=8, mem="32G"),
+    queue=SlurmQueueConfig(partition="batch",
+      time_limit="02:00:00", cpus=8, mem="32G"),
     remote_base=f"/home/{ssh.user}/dagster_runs",
 )
 
@@ -105,7 +106,8 @@ def train_model(context: dg.AssetExecutionContext):
     completed = context.resources.compute.run(
         context=context,
         payload_path=payload,
-        resource_requirements={"framework": "ray", "cpus": 32, "gpus": 1, "memory_gb": 120},
+        resource_requirements={"framework": "ray", 
+          "cpus": 32, "gpus": 1, "memory_gb": 120},
         extra_env={"EXPERIMENT": context.run.run_id},
     )
     yield from completed.get_results()
