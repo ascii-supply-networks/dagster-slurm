@@ -8,6 +8,13 @@ on:
     branches:
       - main
   workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ main ]
+    paths:
+      - 'docs/paper.bib'
+      - 'docs/paper.md'
+      - 'docs/paper/img/**'
 jobs:
   paper:
     runs-on: ubuntu-latest
