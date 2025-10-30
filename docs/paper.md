@@ -14,7 +14,7 @@ tags:
   - conda
 authors:
   - name: Hernan Picatto
-    orcid: 0000-0002-8684-1163
+    orcid: 0000-0001-6662-464X
     affiliation: "2"
   - name: Maximilian Heß
     orcid: 0009-0007-8093-7117
@@ -45,22 +45,33 @@ The key contribution is a unified compute resource (`ComputeResource`) that hide
 
 # Statement of Need
 
-Research software engineers and data scientists increasingly face cross-environment workflows: they prototype and test on local machines or small clusters, but final production runs must comply with HPC centre policies on large shared systems [@hettrick2013uk]. Existing solutions either ignore the orchestrator (hand-written Slurm scripts) or bypass the scheduler entirely (running ad-hoc services). This leads to duplicated logic, fragile deployments, and a loss of telemetry. **dagster-slurm** was created to:
+Research software engineers (RSE) and data scientists increasingly face cross-environment workflows on it's 22 edition the Research Software Engineering (RSE) International Survey [@hettrick_2022_7015772] every country marked HPC as important skill for RSE. 
+Reproducibility challenges in HPC environments are well-documented, [@ANTUNES2024100655] provided comprehensive coverage of issues unique to HPC in their survey.
+[@Courtes9882991] further examine the tension between reproducibility and performance, demonstrating that these goals need not be mutually exclusive.
+
+The 2024 Community Workshop on Practical Reproducibility in HPC produced a comprehensive report highlighting cost-effective reproducibility challenges and the need for tools that bridge development and production environments [@keahey_2025_15306610].
+Existing solutions either ignore the orchestrator (hand-written Slurm scripts) or bypass the scheduler entirely (running ad-hoc services).
+This leads to duplicated logic, fragile deployments, and a loss of telemetry. **dagster-slurm** was created to:
 
 - Preserve Dagster’s asset-based design, lineage tracking, and alerting for workloads that ultimately run on Slurm-managed hardware.
 - Remove the need to rewrite orchestration glue when moving from development to production supercomputers.
 - Provide a batteries-included path for packaging Python environments reproducibly (Pixi https://pixi.sh/latest/ + pixi-pack, https://github.com/Quantco/pixi-pack) and deploying them in air-gapped environments.
 - Offer a clear path to advanced HPC patterns (session reuse for long-lived clusters, heterogeneous Slurm jobs) while keeping the current stable surface area intentionally small; these features are being iterated on in the open.
+- Encourage research software engineering best practices as outlined by [@eisty2025], covering planning, testing, documentation, and maintenance across the development lifecycle .
 
 # System Overview
 
 The integration is composed of three layers:
 
 1. **Resource definitions** – `ComputeResource`, `SlurmResource`, `SlurmSessionResource`, and `SSHConnectionResource` are Dagster `ConfigurableResource` objects. They encapsulate queue defaults, SSH authentication (including ControlMaster fallback, password-based jump hosts, and interactive OTP prompts), and execution modes.
-2. **Launchers and Pipes clients** – Launchers (Bash, Ray, Spark—WIP, custom) translate payloads into execution plans. The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes [@dagsterpipes].
+2. **Launchers and Pipes clients** – Launchers (Bash, Ray) translate payloads into execution plans. 
+The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes [@dagsterpipes]. Spark and custom launchers are planned for near future release
 3. **Operational helpers** – Environment deployment scripts, heterogeneous job managers, metrics collectors, and SSH pooling utilities target HPC constraints such as login-node sandboxes, session allocations, and queue observability.
 
 This layered approach keeps Dagster’s user code agnostic to the underlying transport while retaining the full control plane visibility of the orchestrator.
+As illustrated in Figure \ref{fig:architecture}, the same scalable job can follow multiple paths: direct local execution for development, automated testing through CI/CD chains, or production deployment to HPC clusters via SSH-accessible edge nodes.
+
+![Architecture overview showing the progression from local development to production HPC deployment. The workflow enables researchers to code locally, test through CI/CD pipelines, and deploy to Slurm-enabled clusters with minimal changes.\label{fig:architecture}](../slides/public/img/arch-overview.png)
 
 # Minimal usage example
 
@@ -106,9 +117,11 @@ Local development simply swaps `ExecutionMode.SLURM` for `ExecutionMode.LOCAL`. 
 
 We validate the approach along three dimensions:
 
-- **Reproducibility** – Integration tests run inside GitHub Actions using a containerised Slurm cluster. The pipeline provisions the environment with Pixi, deploys it once via `pixi run deploy-prod-docker`, and then runs Dagster assets through all four execution modes.
+- **Reproducibility** – Integration tests run inside GitHub Actions using a containerised Slurm cluster. 
+The pipeline provisions the environment with Pixi, deploys it once via `pixi run deploy-prod-docker`, and then runs Dagster assets through all four execution modes.
+This continuous integration approach aligns with emerging best practices for reproducible HPC workflows [@hayotsasson2025address].
 - **HPC readiness** – The project has been exercised on academic clusters such as VSC-5 (Austria) and Leonardo (Italy). SSH ControlMaster fallbacks, password-based jump hosts, `.bashrc` hygiene, queue/QoS/reservation overrides, and verification snippets (`squeue`, `scontrol`) are documented for both sites.
-- **Observability** – Slurm job IDs, CPU efficiency, memory, and node-hours are exposed as Dagster metadata entries, while Ray and Spark (work in progress) clusters stream their stdout/stderr back through Pipes. This enables conventional Dagster asset checks and alerting to operate unchanged.
+- **Observability** – Slurm job IDs, CPU efficiency, memory, and node-hours are exposed as Dagster metadata entries, while Ray clusters stream their stdout/stderr back through Pipes. This enables conventional Dagster asset checks and alerting to operate unchanged.
 
 # Impact and Future Work
 
