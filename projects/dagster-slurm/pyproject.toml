@@ -26,9 +26,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://ascii-supply-networks.github.io/dagster-slurm/"
+Homepage = "https://dagster-slurm.geoheil.com/"
 Repository = "https://github.com/ascii-supply-networks/dagster-slurm"
-Documentation = "https://ascii-supply-networks.github.io/dagster-slurm/docs/intro"
+Documentation = "https://dagster-slurm.geoheil.com/docs/intro"
 "Bug Reports" = "https://github.com/ascii-supply-networks/dagster-slurm/issues"
 
 [tool.uv.build-backend]

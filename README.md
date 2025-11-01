@@ -14,7 +14,7 @@ Integration for running Dagster assets on Slurm HPC clusters.
 **An European sovereign GPU cloud does not come out of nowhere
 maybe this project can support making HPC systems more accessible**.
 
-See the [docs](https://ascii-supply-networks.github.io/dagster-slurm/) for instructions.
+See the [docs](https://dagster-slurm.geoheil.com/) for instructions.
 
 > **Status:** Local execution and one-job-per-asset Slurm runs are production-ready today. Session-based cluster reuse and heterogeneous jobs are actively being developed and will land in a future release.
 
@@ -79,7 +79,7 @@ To use your own full-blown HPC deployment you would have to adapt the SSH connec
 ## Resources
 
 - 2025-11 introduction blog post https://georgheiler.com/post/dagster-slurm/
-- 2025-10 hackathon slides https://ascii-supply-networks.github.io/dagster-slurm/docs/slides
+- 2025-10 hackathon slides https://dagster-slurm.geoheil.com/docs/slides
 
 ## Supporters
 

@@ -14,8 +14,10 @@ const config: Config = {
     v4: true, // Improve compatibility with the upcoming Docusaurus v4
   },
 
-  url: 'https://ascii-supply-networks.github.io',
-  baseUrl: '/dagster-slurm/',
+  // url: 'https://ascii-supply-networks.github.io',
+  // baseUrl: '/dagster-slurm/',
+  url: 'https://dagster-slurm.geoheil.com',
+  baseUrl: '/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
