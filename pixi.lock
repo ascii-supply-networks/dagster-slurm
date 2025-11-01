@@ -1663,8 +1663,8 @@ packages:
   - flaky ; extra == 'test'
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.7.0rc2
-  sha256: 3ac816ddef229af1e4417bd0862bbcdfd245050bba2339c69014876dea68b7ce
+  version: 1.7.0rc3
+  sha256: ac6b9aea7cb62f9fbf70ab9bc424350a76e9e3fb6e52910c753e876d65521dfe
   requires_dist:
   - dagster>=1.11.7
   - dagster-pipes>=1.11.7

@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.7.0-rc.3 (2025-11-01)
+
+### Bug Fixes
+
+- Linting after upgrade ([#80](https://github.com/ascii-supply-networks/dagster-slurm/pull/80),
+  [`48d976f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/48d976f953c848e54cf64edf26ebc7642f6d98c0))
+
+### Features
+
+- Change logo ([#79](https://github.com/ascii-supply-networks/dagster-slurm/pull/79),
+  [`3845b2c`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3845b2cf2c83884cdfe9bb12b001eb447e420a15))
+
+- Logo ([#79](https://github.com/ascii-supply-networks/dagster-slurm/pull/79),
+  [`3845b2c`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3845b2cf2c83884cdfe9bb12b001eb447e420a15))
+
+
 ## v1.7.0-rc.2 (2025-11-01)
 
 ### Bug Fixes
