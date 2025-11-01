@@ -344,6 +344,8 @@ Modes:
 * **Parameters:**
   **data** (`Any`)
 
+#### dashboard_host *: `str`*
+
 #### dashboard_port *: `int`*
 
 #### grace_period *: `int`*
@@ -353,6 +355,8 @@ Modes:
 #### num_gpus_per_node *: `int`*
 
 #### object_store_memory_gb *: `Optional`[`int`]*
+
+#### port_strategy *: `Literal`[`'fixed'`, `'hash_jobid'`]*
 
 #### prepare_execution(payload_path, python_executable, working_dir, pipes_context, extra_env=None, allocation_context=None, activation_script=None)
 
@@ -374,6 +378,10 @@ Generate Ray execution plan.
 #### ray_port *: `int`*
 
 #### redis_password *: `Optional`[`str`]*
+
+#### use_head_ip *: `bool`*
+
+#### worker_cpu_bind *: `Optional`[`str`]*
 
 #### worker_startup_delay *: `int`*
 
@@ -759,8 +767,7 @@ This is the proper Dagster resource lifecycle hook.
 
 Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
-Apache Spark launcher.  
-⚠️ **Work in progress:** Spark support is experimental and will change.
+Apache Spark launcher.
 
 Modes:
 - Local: Single-node Spark (no allocation_context)
