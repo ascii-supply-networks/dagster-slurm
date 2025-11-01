@@ -20,7 +20,7 @@ See the [docs](https://dagster-slurm.geoheil.com/) for instructions.
 
 <img referrerpolicy="no-referrer-when-downgrade" src="https://telemetry.dagster-slurm.geoheil.com/a.png?x-pxid=994a20b8-4be7-4297-9f42-657b0d1f1a07&page=README.md" />
 
-## ✨ features
+## features
 
 Hydrating supercomputers with Dagster and Slurm to enhance developer experience.
 

@@ -54,13 +54,13 @@ pyrefly = ">=0.27.2,<1"
 [tool.pixi.feature.ci-basics.pypi-dependencies]
 
 [tool.pixi.feature.dagster-basics.pypi-dependencies]
-dagster = "~=1.11.7"
-dagster-postgres = ">=0.27.0,<0.28"
-dagster-k8s = ">=0.27.0,<0.28"
-dagster-docker = ">=0.27.0,<0.28"
+dagster = "~=1.12.0"
+dagster-postgres = ">=0.28.0,<0.29"
+dagster-k8s = ">=0.28.0,<0.29"
+dagster-docker = ">=0.28.0,<0.29"
 
 [tool.pixi.feature.dagster-webserver.pypi-dependencies]
-dagster-webserver = "~=1.11.7"
+dagster-webserver = "~=1.12.0"
 
 [tool.pixi.feature.my-infrastructure.dependencies]
 pexpect = "~=4.9.0"
@@ -77,8 +77,8 @@ pandas = ">=2.3.1,<3"
 [tool.pixi.feature.cluster.pypi-dependencies]
 ray = { version = "~=2.50.0", extras = ["data", "default"] }
 dagster-ray = ">=0.4.0,<0.25"
-dagster-pipes = "~=1.11.7"
-dagster = "~=1.11.7"
+dagster-pipes = "~=1.12.0"
+dagster = "~=1.12.0"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
@@ -104,8 +104,8 @@ pixi-pack = ">=0.7.2,<1"
 yarn = "~=4.9.2"
 
 [tool.pixi.feature.dagster-scaffolding.pypi-dependencies]
-dagster-dg-cli = "~=1.11.7"
-create-dagster = "~=1.11.7"
+dagster-dg-cli = "~=1.12.0"
+create-dagster = "~=1.12.0"
 
 [tool.pixi.tasks]
 

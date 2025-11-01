@@ -75,12 +75,13 @@ const config: Config = {
 
   themeConfig: {
     // Replace with your project's social card
-    image: 'img/ascii-logo.jpg',
+    // image: 'img/ascii-logo.jpg',
+    image: 'img/featured.png',
     navbar: {
       title: 'dagster-slurm',
       logo: {
         alt: 'dagster-slurm Logo',
-        src: 'img/ascii-logo.png',
+        src: 'img/featured.png',
       },
       items: [
         {
