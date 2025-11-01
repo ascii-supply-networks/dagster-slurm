@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v1.7.0-rc.1 (2025-11-01)
+
+### Bug Fixes
+
+- Ci mmanualy ([#74](https://github.com/ascii-supply-networks/dagster-slurm/pull/74),
+  [`49f796a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/49f796ae4724330cdb78dae7ebc0aaf4edd783c9))
+
+- Code layout ([#74](https://github.com/ascii-supply-networks/dagster-slurm/pull/74),
+  [`49f796a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/49f796ae4724330cdb78dae7ebc0aaf4edd783c9))
+
+### Chores
+
+- Add resources
+  ([`e139a89`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e139a89b673e0a87a69567505dcbf4011a1bce58))
+
+- Readme
+  ([`d89e12a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d89e12aae58b702fa04ec8463388b1ad33642247))
+
+### Documentation
+
+- Docs suggestions ([#73](https://github.com/ascii-supply-networks/dagster-slurm/pull/73),
+  [`4c1df97`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4c1df97cd2e234803388e61d6e38d35f68b3a2fc))
+
+### Features
+
+- Also pypi ([#77](https://github.com/ascii-supply-networks/dagster-slurm/pull/77),
+  [`0c6f80b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0c6f80b63edbf6eef608412bec508db6214df270))
+
+- Analytics ([#77](https://github.com/ascii-supply-networks/dagster-slurm/pull/77),
+  [`0c6f80b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0c6f80b63edbf6eef608412bec508db6214df270))
+
+- Refine paper 1 ([#74](https://github.com/ascii-supply-networks/dagster-slurm/pull/74),
+  [`49f796a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/49f796ae4724330cdb78dae7ebc0aaf4edd783c9))
+
+
 ## v1.7.0 (2025-10-23)
 
 ### Bug Fixes
