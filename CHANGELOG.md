@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.7.0-rc.2 (2025-11-01)
+
+### Bug Fixes
+
+- Use custom dns ([#78](https://github.com/ascii-supply-networks/dagster-slurm/pull/78),
+  [`ec25dd8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ec25dd81a311ba4c487600e9295d1fa1e1565b0e))
+
+### Features
+
+- Change baseurl ([#78](https://github.com/ascii-supply-networks/dagster-slurm/pull/78),
+  [`ec25dd8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ec25dd81a311ba4c487600e9295d1fa1e1565b0e))
+
+- Refine telemetry ([#78](https://github.com/ascii-supply-networks/dagster-slurm/pull/78),
+  [`ec25dd8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ec25dd81a311ba4c487600e9295d1fa1e1565b0e))
+
+
 ## v1.7.0-rc.1 (2025-11-01)
 
 ### Bug Fixes
