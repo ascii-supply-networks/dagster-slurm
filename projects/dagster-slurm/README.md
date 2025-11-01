@@ -159,3 +159,5 @@ The `Partition`, `QOS`, and `Reservation` columns should match your `.env`.
 
 See Details here: [docs](docs) for how to contribute!
 Help building and maintaining this project is welcome.
+
+<img referrerpolicy="no-referrer" src="https://static.scarf.sh/a.png?x-pxid=02e4ad6e-79c4-4ba8-b751-4833af626868&page=README-Pypi.md" />

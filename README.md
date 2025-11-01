@@ -86,3 +86,6 @@ This work was kindly supported by:
 - [CSH](https://www.csh.ac.at/)
 - [EUROCC AI Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375): This work was completed in part at the EUROCC AI Hackathon, part of the Open Hackathons program. The authors would like to acknowledge OpenACC-Standard.org for their support.
 - [Austrian Scientific Computing (ASC)](https://asc.ac.at/home/)
+
+<!-- Scarf analytics pixel -->
+<img referrerpolicy="no-referrer" src="https://static.scarf.sh/a.png?x-pxid=02e4ad6e-79c4-4ba8-b751-4833af626868&page=README.md" />
