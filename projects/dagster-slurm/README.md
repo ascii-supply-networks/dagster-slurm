@@ -7,6 +7,9 @@ Integrating dagster to orchestrate slurm jobs for HPC systems and frameworks for
 **An European sovereign GPU cloud does not come out of nowhere
 maybe this project can support making HPC systems more accessible**.
 
+<img referrerpolicy="no-referrer-when-downgrade" src="https://telemetry.dagster-slurm.geoheil.com/a.png?x-pxid=994a20b8-4be7-4297-9f42-657b0d1f1a07&page=README-Pypi.md" />
+
+
 ## Basic example
 
 https://github.com/ascii-supply-networks/dagster-slurm/tree/main/examples
@@ -159,5 +162,3 @@ The `Partition`, `QOS`, and `Reservation` columns should match your `.env`.
 
 See Details here: [docs](docs) for how to contribute!
 Help building and maintaining this project is welcome.
-
-<img referrerpolicy="no-referrer" src="https://static.scarf.sh/a.png?x-pxid=02e4ad6e-79c4-4ba8-b751-4833af626868&page=README-Pypi.md" />

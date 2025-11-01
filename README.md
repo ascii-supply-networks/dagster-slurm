@@ -14,9 +14,11 @@ Integration for running Dagster assets on Slurm HPC clusters.
 **An European sovereign GPU cloud does not come out of nowhere
 maybe this project can support making HPC systems more accessible**.
 
-See the [docs](https://ascii-supply-networks.github.io/dagster-slurm/) for instructions.
+See the [docs](https://dagster-slurm.geoheil.com/) for instructions.
 
 > **Status:** Local execution and one-job-per-asset Slurm runs are production-ready today. Session-based cluster reuse and heterogeneous jobs are actively being developed and will land in a future release.
+
+<img referrerpolicy="no-referrer-when-downgrade" src="https://telemetry.dagster-slurm.geoheil.com/a.png?x-pxid=994a20b8-4be7-4297-9f42-657b0d1f1a07&page=README.md" />
 
 ## ✨ features
 
@@ -77,7 +79,7 @@ To use your own full-blown HPC deployment you would have to adapt the SSH connec
 ## Resources
 
 - 2025-11 introduction blog post https://georgheiler.com/post/dagster-slurm/
-- 2025-10 hackathon slides https://ascii-supply-networks.github.io/dagster-slurm/docs/slides
+- 2025-10 hackathon slides https://dagster-slurm.geoheil.com/docs/slides
 
 ## Supporters
 
@@ -86,6 +88,3 @@ This work was kindly supported by:
 - [CSH](https://www.csh.ac.at/)
 - [EUROCC AI Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375): This work was completed in part at the EUROCC AI Hackathon, part of the Open Hackathons program. The authors would like to acknowledge OpenACC-Standard.org for their support.
 - [Austrian Scientific Computing (ASC)](https://asc.ac.at/home/)
-
-<!-- Scarf analytics pixel -->
-<img referrerpolicy="no-referrer" src="https://static.scarf.sh/a.png?x-pxid=02e4ad6e-79c4-4ba8-b751-4833af626868&page=README.md" />
