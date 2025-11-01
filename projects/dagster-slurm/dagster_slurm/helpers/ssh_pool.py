@@ -6,7 +6,7 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Pattern, Union, cast
 
 from dagster import get_dagster_logger
 from typing import TYPE_CHECKING
@@ -199,17 +199,27 @@ class SSHConnectionPool:
             effective_timeout = timeout or 60
             child = pexpect.spawn(cmd_str, timeout=effective_timeout, encoding="utf-8")
             child.delaybeforesend = 0
-            prompt_timeout = max(30, min(effective_timeout, 180))
+            prompt_timeout = float(max(30, min(effective_timeout, 180)))
             stdout_chunks: list[str] = []
 
-            prompts = [
-                r"(?i)password:",
-                r"(?i)passphrase",
-                r"(?i)verification code",
-                r"(?i)otp",
-                pexpect.EOF,
-                pexpect.TIMEOUT,
+            ExpectPattern = Union[
+                Pattern[str],
+                Pattern[bytes],
+                bytes,
+                str,
+                type[pexpect.EOF | pexpect.TIMEOUT],
             ]
+            prompts = cast(
+                list[ExpectPattern],
+                [
+                    r"(?i)password:",
+                    r"(?i)passphrase",
+                    r"(?i)verification code",
+                    r"(?i)otp",
+                    pexpect.EOF,
+                    pexpect.TIMEOUT,
+                ],
+            )
 
             while True:
                 index = child.expect(prompts, timeout=prompt_timeout)
