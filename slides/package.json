@@ -9,12 +9,12 @@
     "export": "slidev export --timeout 120000"
   },
   "dependencies": {
-    "@slidev/cli": "^52.1.0",
+    "@slidev/cli": "^52.6.0",
     "@slidev/theme-default": "latest",
     "@slidev/theme-seriph": "latest",
-    "vue": "^3.5.18"
+    "vue": "^3.5.22"
   },
   "devDependencies": {
-    "playwright-chromium": "^1.55.0"
+    "playwright-chromium": "^1.56.1"
   }
 }
