@@ -294,6 +294,7 @@ layout: center
 - Same Dagster asset runs locally or on Slurm; only configuration changes.
 - Compute resource wraps payload execution with observability and retries.
 
+````md magic-move {lines: true}
 ```python
 import dagster as dg
 from dagster_slurm import BashLauncher, ComputeResource
@@ -312,6 +313,27 @@ def train_pytorch(context: dg.AssetExecutionContext, compute: ComputeResource):
     )
     yield from completed.get_results()
 ```
+```python
+def main():
+    context = PipesContext.get()
+    num_epochs = context.extras["epochs"]
+    context.log.debug(f"Number of epochs: {num_epochs}")
+    input_path = os.environ.get("INPUT_DATA")
+    context.log.info(f"Input: {input_path}")
+    # Your processing logic here (pytorch, ...)
+    result = {"rows_processed": 1000}
+    context.report_asset_materialization(
+        metadata={
+            "rows": result["rows_processed"],
+            "processing_time": "10s",
+        }
+    )
+
+if __name__ == "__main__":
+    with open_dagster_pipes() as context:
+        main()
+```
+````
 
 ---
 transition: slide-left
@@ -379,6 +401,7 @@ layout: default
 
 ### Bridge
 - dagster-slurm lets Dagster plan the work while Slurm owns the physical execution.
+- One orchestrator spans tools silos (HPC and non-HPC) for unified visibility
 
 
 
@@ -414,7 +437,7 @@ layout: two-cols
 
 # dagster-slurm in one slide
 
-- **Keep the Dagster control plane** — asset logic, schedules, and policies stay in Dagster regardless of where you run.
+- **Keep the Dagster control plane** — asset logic, schedules, and policies stay in Dagster regardless of where you run (HPC and non-HPC).
 - **Package once, run anywhere** — pixi/pixi-pack builds reproducible environments that deploy to login nodes, edge VMs, or compute partitions.
 - **Delegate execution to Slurm** — dagster-slurm translates runs into `sbatch`/`squeue` interactions while respecting quotas and placement rules.
 - **See everything in Dagster UI** — queue state, Slurm metrics, and Pipes logs stream back for a single operational console.
@@ -561,8 +584,9 @@ layout: default
 # Results and Final Profile
 
 - Accomplished connecting our solution to 2 real HPC systems (Leonardo, VSC5).
-- This allows for a single pane of glass
-- This streamlines and simplfies working with HPC systems
+- This delivers a single pane of glass across HPC and non-HPC workloads.
+- This streamlines and simplifies working with HPC systems
+- Unified asset definitions now span laptops, cloud GPUs, and sovereign EU infrastructure.
 - Slurm in CI is possible
 
 
