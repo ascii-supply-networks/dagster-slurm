@@ -14,7 +14,7 @@ SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_datalab
 
 # Deployment settings
 SLURM_DEPLOYMENT_BASE_PATH=/home/your_user/dagster-slurm
-SLURM_PARTITION=GPU-l40s                           # default partition with 1x L40S GPU per node
+SLURM_PARTITION=GPU-l40s
 # SLURM_RESERVATION=...                            # optional reservation if provided by admins
 SLURM_SUPERCOMPUTER_SITE=datalab
 
