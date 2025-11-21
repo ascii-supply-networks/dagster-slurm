@@ -169,6 +169,26 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             }
         },
     },
+    "datalab": {
+        "ssh_config": {
+            "host": "cluster.datalab.tuwien.ac.at",
+            "port": 22,
+            "user": "georg.heiler",
+            "key_path": os.path.expanduser("~/.ssh/id_datalab"),
+        },
+        "slurm_queue_config": {
+            "partition": "GPU-l40s",
+            "time_limit": "00:10:00",
+            "num_nodes": 1,
+            "gpus_per_node": 1,
+        },
+        "slurm_session_config": {
+            "partition": "GPU-l40s",
+            "time_limit": "00:10:00",
+            "num_nodes": 1,
+            "gpus_per_node": 1,
+        },
+    },
 }
 
 
