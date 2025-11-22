@@ -53,6 +53,11 @@ The last comment block of each slide will be treated as slide notes. It will be 
 -->
 
 ---
+layout: image
+image: /img/featured.png
+backgroundSize: contain
+---
+---
 transition: slide-up
 level: 2
 class: bg-white text-black
