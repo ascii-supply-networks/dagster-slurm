@@ -97,11 +97,11 @@ depends-on = ["build-lib"]
 description = "Publish the library"
 
 [tool.pixi.tasks.pre-commit-install]
-cmd = "pre-commit install"
+cmd = "prek install"
 description = "install pre-commit hooks"
 
 [tool.pixi.tasks.pre-commit-run]
-cmd = "pre-commit run --all-files"
+cmd = "prek run --all-files"
 description = "run pre-commit on all files"
 
 [tool.pixi.tasks.start]
