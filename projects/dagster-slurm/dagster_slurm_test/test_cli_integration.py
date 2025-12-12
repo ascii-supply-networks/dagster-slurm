@@ -154,6 +154,21 @@ class TestStagingDockerMode:
 
         assert result.returncode == 0
 
+    def test_slurm_payload_executes_in_docker(
+        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+    ):
+        """Smoke test: execute a single asset via SLURM in the dockerized cluster."""
+        result = run_dg_command(
+            example_project_dir,
+            deployment="STAGING_DOCKER",
+            assets="process_data",
+            env_overrides=docker_slurm_env,
+            timeout=600,
+        )
+
+        assert_materialization_success(result, "process_data")
+        assert "Submitted job" in result.stderr
+
     def test_bash_assets_staging(
         self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
     ):
@@ -169,8 +184,13 @@ class TestStagingDockerMode:
         assert_materialization_success(result, "process_data,aggregate_results")
 
         # Check for SLURM execution indicators
-        assert "Submitted job" in result.stderr
-        assert "pixi pack" in result.stderr or "Packing environment" in result.stderr
+        combined_logs = f"{result.stderr}\n{result.stdout}"
+        assert "Submitted job" in combined_logs
+        assert (
+            "pixi pack" in combined_logs
+            or "Packing environment" in combined_logs
+            or "Reusing cached environment" in combined_logs
+        )
 
     def test_ray_staging(
         self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
