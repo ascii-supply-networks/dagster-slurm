@@ -312,7 +312,10 @@ class DummySlurmClient(SlurmPipesClient):
         pre_deployed_env_path_override=None,
         **kwargs,
     ):
-        self.kwargs = kwargs
+        captured = dict(kwargs)
+        captured["pack_cmd_override"] = pack_cmd_override
+        captured["pre_deployed_env_path_override"] = pre_deployed_env_path_override
+        self.kwargs = captured
         # Return a shape similar to real client
         return SimpleNamespace()
 
