@@ -262,6 +262,72 @@ class ComputeResource(ConfigurableResource):
 
         return override
 
+    def _should_force_env_push(self, context, explicit: Optional[bool]) -> bool:
+        """Determine whether to force uploading the environment for this execution."""
+        if explicit is not None:
+            return explicit
+
+        try:
+            has_assets_def = getattr(context, "has_assets_def", False)
+            if callable(has_assets_def):
+                has_assets_def = has_assets_def()
+
+            if has_assets_def and getattr(context, "assets_def", None):
+                asset_key = getattr(context, "asset_key", None)
+                if asset_key is None:
+                    return False
+                metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+                metadata = metadata_by_key.get(asset_key, {}) if metadata_by_key else {}
+                if isinstance(metadata, dict):
+                    return bool(metadata.get("force_slurm_env_push"))
+        except Exception as exc:  # pragma: no cover - best effort
+            get_dagster_logger().debug(
+                f"Could not resolve force_env_push from asset metadata: {exc}"
+            )
+
+        return False
+
+    def _resolve_payload_strategy(
+        self,
+        context,
+        skip_upload_explicit: Optional[bool],
+        remote_path_explicit: Optional[str],
+    ) -> tuple[bool, Optional[str]]:
+        """Decide payload upload behavior and remote path, with asset metadata fallback."""
+        if skip_upload_explicit is not None:
+            skip_upload = skip_upload_explicit
+        else:
+            skip_upload = False
+            try:
+                has_assets_def = getattr(context, "has_assets_def", False)
+                if callable(has_assets_def):
+                    has_assets_def = has_assets_def()
+                if has_assets_def and getattr(context, "assets_def", None):
+                    asset_key = getattr(context, "asset_key", None)
+                    if asset_key is not None:
+                        metadata_by_key = getattr(
+                            context.assets_def, "metadata_by_key", {}
+                        )  # type: ignore[attr-defined]
+                        metadata = (
+                            metadata_by_key.get(asset_key, {})
+                            if metadata_by_key
+                            else {}
+                        )
+                        if isinstance(metadata, dict):
+                            skip_upload = bool(
+                                metadata.get("skip_slurm_payload_upload")
+                            )
+                            if remote_path_explicit is None:
+                                remote_path_explicit = metadata.get(
+                                    "slurm_payload_path"
+                                )
+            except Exception as exc:  # pragma: no cover - best effort
+                get_dagster_logger().debug(
+                    f"Could not resolve payload strategy from asset metadata: {exc}"
+                )
+
+        return skip_upload, remote_path_explicit
+
     def run(
         self,
         context,
@@ -269,6 +335,9 @@ class ComputeResource(ConfigurableResource):
         launcher: Optional[ComputeLauncher] = None,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
         resource_requirements: Optional[Dict[str, Any]] = None,
+        force_env_push: Optional[bool] = None,
+        skip_payload_upload: Optional[bool] = None,
+        remote_payload_path: Optional[str] = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute asset with optional resource overrides.
@@ -288,6 +357,13 @@ class ComputeResource(ConfigurableResource):
                 - gpus: int
                 - memory_gb: int
                 - framework: str ("ray" or "spark")
+            force_env_push: Force repacking and uploading the environment for this run.
+                If not provided, falls back to asset metadata key 'force_slurm_env_push'.
+            skip_payload_upload: If True, do not upload the payload script; expects the
+                remote payload to already exist. Can be set via asset metadata key
+                'skip_slurm_payload_upload'.
+            remote_payload_path: Remote path to an existing payload when skipping upload.
+                Can be set via asset metadata key 'slurm_payload_path'.
             **kwargs: Passed to client.run()
 
         Yields:
@@ -353,6 +429,17 @@ class ComputeResource(ConfigurableResource):
                         update={"master_url": cluster_address}
                     )
 
+        resolved_force_env_push = self._should_force_env_push(
+            context=context, explicit=force_env_push
+        )
+        skip_payload_upload, resolved_remote_payload_path = (
+            self._resolve_payload_strategy(
+                context=context,
+                skip_upload_explicit=skip_payload_upload,
+                remote_path_explicit=remote_payload_path,
+            )
+        )
+
         # Create client with effective launcher (default or override)
         client = self.get_pipes_client(context, launcher=effective_launcher)
 
@@ -360,6 +447,16 @@ class ComputeResource(ConfigurableResource):
         if extra_slurm_opts:
             kwargs["extra_slurm_opts"] = extra_slurm_opts
             logger.debug(f"Passing extra_slurm_opts to client: {extra_slurm_opts}")
+
+        if isinstance(client, SlurmPipesClient):
+            kwargs["force_env_push"] = resolved_force_env_push
+            kwargs["skip_payload_upload"] = skip_payload_upload
+            if resolved_remote_payload_path:
+                kwargs["remote_payload_path"] = resolved_remote_payload_path
+        elif resolved_force_env_push:
+            logger.debug(
+                "force_env_push requested but ignored because execution is not using Slurm"
+            )
 
         # Add use_session flag for session mode
         if self.mode == ExecutionMode.SLURM_SESSION:

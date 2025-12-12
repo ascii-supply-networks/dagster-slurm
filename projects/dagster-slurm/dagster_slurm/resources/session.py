@@ -77,7 +77,7 @@ class SlurmSessionResource(ConfigurableResource):
             self._ssh_pool.__enter__()  # type: ignore
 
             # Create allocation
-            self._allocation = self._create_allocation()  # type: ignore
+            self._allocation = self._create_allocation(context)  # type: ignore
             self.logger.info(
                 f"Session resource initialized with allocation {self._allocation.slurm_job_id}"  # type: ignore
             )
@@ -149,9 +149,20 @@ class SlurmSessionResource(ConfigurableResource):
                 ssh_pool=self._ssh_pool,  # type: ignore
             )
 
-    def _create_allocation(self) -> "SlurmAllocation":
+    def _resolve_run_id(self, context) -> str:
+        """Prefer DagsterRun.run_id to avoid deprecated InitResourceContext.run_id."""
+        if context.run:
+            run_id = context.run.run_id
+        else:
+            self.logger.warning(
+                "Context is not part of a Dagster run, generating a temporary run_id."
+            )
+            run_id = uuid.uuid4().hex
+        return run_id
+
+    def _create_allocation(self, context) -> "SlurmAllocation":
         """Start new Slurm allocation."""
-        allocation_id = f"dagster_{self.context.run_id}"
+        allocation_id = f"dagster_{self._resolve_run_id(context)}"
         working_dir = f"{self.slurm.remote_base}/allocations/{allocation_id}"
 
         # Create working directory

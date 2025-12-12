@@ -71,7 +71,21 @@ def aggregate_results(
     ).get_results()
 
 
-@dg.multi_asset(specs=[dg.AssetSpec(key=["myprefix", "orders"]), dg.AssetSpec("users")])
+asset_metadata = {
+    # Reuse the cached environment by default but still upload the script each run.
+    # Set to True to force a fresh env push if needed.
+    "force_slurm_env_push": False,
+    # Keep payload upload enabled so code changes are shipped without repacking the env.
+    "skip_slurm_payload_upload": False,
+}
+
+
+@dg.multi_asset(
+    specs=[
+        dg.AssetSpec(key=["myprefix", "orders"], metadata=asset_metadata),
+        dg.AssetSpec("users", metadata=dict(asset_metadata)),
+    ],
+)
 def subprocess_asset(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,

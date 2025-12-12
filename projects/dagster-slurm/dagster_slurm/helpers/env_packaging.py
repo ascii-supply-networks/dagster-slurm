@@ -4,7 +4,9 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
+
+import hashlib
 
 from dagster import get_dagster_logger
 
@@ -136,6 +138,30 @@ def pack_environment_with_pixi(
         f"Packed environment: {pack_file} ({_format_size(pack_file.stat().st_size)})"
     )
     return pack_file
+
+
+def compute_env_cache_key(
+    pack_cmd: Sequence[str], lockfile: Path = Path("pixi.lock")
+) -> Optional[str]:
+    """Compute a stable cache key for the packed environment.
+
+    Uses the pixi lockfile contents and the pack command (which captures target platform)
+    to derive a short, reproducible identifier. Returns None if the lockfile is missing.
+    """
+    logger = get_dagster_logger()
+
+    if not lockfile.exists():
+        logger.debug(
+            "Skipping environment cache key computation: lockfile %s does not exist",
+            lockfile,
+        )
+        return None
+
+    digest = hashlib.sha256()
+    digest.update(lockfile.read_bytes())
+    digest.update("::".join(pack_cmd).encode())
+    # Shorten for readable directory names
+    return digest.hexdigest()[:16]
 
 
 def _extract_pack_path_from_output(output: str, base_dir: Path) -> Optional[Path]:

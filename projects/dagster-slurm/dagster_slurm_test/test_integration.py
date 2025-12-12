@@ -2,6 +2,7 @@
 
 from dagster import AssetExecutionContext, asset, materialize
 from dagster_slurm import ComputeResource
+import pytest
 
 
 def test_local_asset_execution(temp_dir, local_compute_resource):
@@ -55,6 +56,34 @@ with open_dagster_pipes() as context:
     result = materialize(
         [bash_asset],
         resources={"compute": local_compute_resource},
+    )
+
+    assert result.success
+
+
+@pytest.mark.needs_slurm_docker
+def test_slurm_payload_executes_in_docker(
+    temp_dir, slurm_bash_compute_resource, slurm_cluster_ready
+):
+    """Smoke test: execute a payload through Slurm in the dockerized cluster."""
+    payload = temp_dir / "slurm_payload.py"
+    payload.write_text(
+        """
+from dagster_pipes import open_dagster_pipes
+
+with open_dagster_pipes() as context:
+    context.log.info("Slurm payload executed")
+    context.report_asset_materialization(metadata={"marker": "slurm-docker"})
+"""
+    )
+
+    @asset
+    def slurm_asset(context: AssetExecutionContext, compute: ComputeResource):
+        yield from compute.run(context=context, payload_path=str(payload)).get_results()
+
+    result = materialize(
+        [slurm_asset],
+        resources={"compute": slurm_bash_compute_resource},
     )
 
     assert result.success
