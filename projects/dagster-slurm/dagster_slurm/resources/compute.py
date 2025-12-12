@@ -263,43 +263,46 @@ class ComputeResource(ConfigurableResource):
 
         return override
 
+    def _get_metadata_by_key(self, context) -> Dict[Any, Dict[str, Any]]:
+        """Return asset metadata mapping if available, otherwise {}."""
+        has_assets_def = getattr(context, "has_assets_def", False)
+        if callable(has_assets_def):
+            has_assets_def = has_assets_def()
+        if not has_assets_def:
+            return {}
+        assets_def = getattr(context, "assets_def", None)
+        if not assets_def:
+            return {}
+        return getattr(assets_def, "metadata_by_key", {}) or {}
+
+    def _get_output_names(self, context) -> list[str]:
+        """Return output names for the current op (supports multi-asset)."""
+        names = getattr(context, "selected_output_names", None) or getattr(
+            context, "output_names", None
+        )
+        if names:
+            return list(names)
+        op_def = getattr(context, "op_def", None)
+        output_defs = getattr(op_def, "output_defs", None) if op_def else None
+        if output_defs:
+            return [od.name for od in output_defs]
+        return []
+
     def _extract_asset_keys(self, context) -> list[Any]:
         """Best-effort extraction of asset keys, including multi-asset outputs."""
         asset_keys: list[Any] = []
 
-        # Primary asset key if available
-        try:
-            asset_key = getattr(context, "asset_key", None)
-            if asset_key:
-                asset_keys.append(asset_key)
-        except Exception:
-            pass
+        asset_key = getattr(context, "asset_key", None)
+        if asset_key:
+            asset_keys.append(asset_key)
 
-        # Output names for multi-asset scenarios
-        output_names: list[str] = []
-        try:
-            output_names = list(
-                getattr(context, "selected_output_names", [])
-                or getattr(context, "output_names", [])
-            )
-        except Exception:
-            output_names = []
-
-        if not output_names:
-            try:
-                op_def = getattr(context, "op_def", None)
-                if op_def and getattr(op_def, "output_defs", None):
-                    output_names = [od.name for od in op_def.output_defs]
-            except Exception:
-                output_names = []
-
-        for output_name in output_names:
+        for output_name in self._get_output_names(context):
             try:
                 key = context.asset_key_for_output(output_name)
-                if key:
-                    asset_keys.append(key)
             except Exception:
                 continue
+            if key:
+                asset_keys.append(key)
 
         # Deduplicate while preserving order
         seen = set()
@@ -321,20 +324,7 @@ class ComputeResource(ConfigurableResource):
         if explicit is not None:
             return explicit
 
-        # Check if context has asset definition
-        if not hasattr(context, "has_assets_def"):
-            return False
-
-        has_assets_def = context.has_assets_def
-        if callable(has_assets_def):
-            has_assets_def = has_assets_def()
-
-        if not (
-            has_assets_def and hasattr(context, "assets_def") and context.assets_def
-        ):
-            return False
-
-        metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+        metadata_by_key = self._get_metadata_by_key(context)
         if not metadata_by_key:
             return False
 
@@ -360,33 +350,17 @@ class ComputeResource(ConfigurableResource):
         else:
             skip_upload = False
 
-            # Check if context has asset definition
-            if hasattr(context, "has_assets_def"):
-                has_assets_def = context.has_assets_def
-                if callable(has_assets_def):
-                    has_assets_def = has_assets_def()
-
-                if (
-                    has_assets_def
-                    and hasattr(context, "assets_def")
-                    and context.assets_def
-                ):
-                    metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
-                    asset_keys = self._extract_asset_keys(context)
-
-                    # Check metadata for each asset key
-                    for key in asset_keys:
-                        metadata = (
-                            metadata_by_key.get(key, {}) if metadata_by_key else {}
+            metadata_by_key = self._get_metadata_by_key(context)
+            if metadata_by_key:
+                asset_keys = self._extract_asset_keys(context)
+                for key in asset_keys:
+                    metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
+                    if isinstance(metadata, dict):
+                        skip_upload = skip_upload or bool(
+                            metadata.get("skip_slurm_payload_upload")
                         )
-                        if isinstance(metadata, dict):
-                            skip_upload = skip_upload or bool(
-                                metadata.get("skip_slurm_payload_upload")
-                            )
-                            if remote_path_explicit is None:
-                                remote_path_explicit = metadata.get(
-                                    "slurm_payload_path"
-                                )
+                        if remote_path_explicit is None:
+                            remote_path_explicit = metadata.get("slurm_payload_path")
 
         return skip_upload, remote_path_explicit
 
@@ -398,11 +372,8 @@ class ComputeResource(ConfigurableResource):
         pre_deployed_env_path: Optional[str] = None
 
         try:
-            has_assets_def = getattr(context, "has_assets_def", False)
-            if callable(has_assets_def):
-                has_assets_def = has_assets_def()
-            if has_assets_def and getattr(context, "assets_def", None):
-                metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+            metadata_by_key = self._get_metadata_by_key(context)
+            if metadata_by_key:
                 asset_keys = self._extract_asset_keys(context)
 
                 pack_cmd_values = []

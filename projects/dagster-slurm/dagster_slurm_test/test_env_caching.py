@@ -296,8 +296,24 @@ class DummySlurmClient(SlurmPipesClient):
         # Skip parent init; we only need isinstance checks to pass.
         self.kwargs = None
 
-    def run(self, *, context, payload_path, **kwargs):
+    def run(  # type: ignore[override]
+        self,
+        context,
+        *,
+        payload_path: str,
+        extra_env=None,
+        extras=None,
+        use_session=False,
+        extra_slurm_opts=None,
+        force_env_push=None,
+        skip_payload_upload=None,
+        remote_payload_path=None,
+        pack_cmd_override=None,
+        pre_deployed_env_path_override=None,
+        **kwargs,
+    ):
         self.kwargs = kwargs
+        # Return a shape similar to real client
         return SimpleNamespace()
 
 

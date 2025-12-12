@@ -283,39 +283,25 @@ class SlurmPipesClient(PipesClient):
                         # Multi-asset executions require specifying the output name.
                         output_names = []
 
-                        # First try to get selected output names from context
-                        if (
-                            hasattr(context, "selected_output_names")
-                            and context.selected_output_names
-                        ):
-                            output_names = [
-                                name
-                                for name in context.selected_output_names
-                                if name is not None
-                            ]
-                        elif (
-                            hasattr(context, "op_execution_context")
-                            and context.op_execution_context
-                            and hasattr(
-                                context.op_execution_context, "selected_output_names"
+                        selected = getattr(context, "selected_output_names", None)
+                        if selected:
+                            output_names = [name for name in selected if name]
+                        elif getattr(context, "op_execution_context", None):
+                            nested = getattr(
+                                context.op_execution_context,
+                                "selected_output_names",
+                                None,
                             )
-                            and context.op_execution_context.selected_output_names
-                        ):
-                            output_names = [
-                                name
-                                for name in context.op_execution_context.selected_output_names
-                                if name is not None
-                            ]
+                            if nested:
+                                output_names = [name for name in nested if name]
 
-                        if (
-                            not output_names
-                            and hasattr(context, "op_def")
-                            and context.op_def
-                        ):
-                            if hasattr(context.op_def, "output_defs"):
+                        if not output_names:
+                            op_def = getattr(context, "op_def", None)
+                            output_defs = getattr(op_def, "output_defs", None)
+                            if output_defs:
                                 output_names = [
                                     str(output_def.name)
-                                    for output_def in context.op_def.output_defs
+                                    for output_def in output_defs
                                     if output_def.name is not None
                                 ]
 
@@ -438,7 +424,7 @@ class SlurmPipesClient(PipesClient):
                 f"Could not determine remote home directory from output: {raw!r}"
             )
 
-        if hasattr(self.slurm, "remote_base") and self.slurm.remote_base:
+        if self.slurm.remote_base:
             remote_base = self.slurm.remote_base
         else:
             home_raw = ssh_pool.run("echo $HOME").strip()
