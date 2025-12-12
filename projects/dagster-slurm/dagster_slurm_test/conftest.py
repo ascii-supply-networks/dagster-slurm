@@ -278,9 +278,10 @@ def _ensure_remote_deployment(
     deployment_path: str,
     example_project_dir: Path,
     prep_cmd: list[str],
-    env: dict[str, str],
 ) -> str:
     """Verify the remote environment exists; recreate it if missing."""
+
+    pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
 
     def _check(path: str) -> bool:
         check_cmd = [
@@ -307,7 +308,7 @@ def _ensure_remote_deployment(
         cwd=example_project_dir,
         check=True,
         capture_output=True,
-        env=env,
+        env=pixi_env,
     )
 
     with open(metadata_file) as f:
@@ -325,16 +326,12 @@ def _ensure_remote_deployment(
 
 
 @pytest.fixture
-def deployment_metadata(
-    example_project_dir: Path, docker_slurm_env: Dict[str, str]
-) -> Dict[str, Any]:
+def deployment_metadata(example_project_dir: Path) -> Dict[str, Any]:
     """Read deployment metadata for PRODUCTION_DOCKER mode."""
 
     metadata_file = example_project_dir / "deployment_metadata.json"
     prep_cmd = _detect_deploy_command(example_project_dir)
-    pixi_env = {
-        k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"
-    } | docker_slurm_env
+    pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
 
     if not metadata_file.exists():
         subprocess.run(
@@ -351,11 +348,7 @@ def deployment_metadata(
     deployment_path = metadata.get("deployment_path")
     if deployment_path:
         new_path = _ensure_remote_deployment(
-            metadata_file,
-            deployment_path,
-            example_project_dir,
-            prep_cmd,
-            pixi_env,
+            metadata_file, deployment_path, example_project_dir, prep_cmd
         )
         if new_path != deployment_path:
             with open(metadata_file) as f:
