@@ -42,7 +42,7 @@ def main():  # noqa: C901
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             try:
-                ray.init(**init_kwargs)
+                ray.init(**init_kwargs)  # type: ignore
                 context.log.info("Connected to Ray cluster.")
                 break
             except Exception as e:

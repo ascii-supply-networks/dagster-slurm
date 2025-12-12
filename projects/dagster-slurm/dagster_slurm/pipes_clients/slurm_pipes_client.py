@@ -95,6 +95,8 @@ class SlurmPipesClient(PipesClient):
         force_env_push: Optional[bool] = None,
         skip_payload_upload: Optional[bool] = None,
         remote_payload_path: Optional[str] = None,
+        pack_cmd_override: Optional[list[str]] = None,
+        pre_deployed_env_path_override: Optional[str] = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute payload on Slurm cluster with real-time log streaming.
@@ -164,6 +166,8 @@ class SlurmPipesClient(PipesClient):
                     remote_base=remote_base,
                     run_dir=run_dir,
                     force_env_push=force_env_push,
+                    pack_cmd_override=pack_cmd_override,
+                    pre_deployed_env_path_override=pre_deployed_env_path_override,
                 )
 
                 # Check for cancellation
@@ -278,28 +282,42 @@ class SlurmPipesClient(PipesClient):
 
                         # Multi-asset executions require specifying the output name.
                         output_names = []
-                        try:
-                            selected = getattr(context, "selected_output_names", None)
-                            if selected is None:
-                                selected = getattr(
-                                    getattr(context, "op_execution_context", None),
-                                    "selected_output_names",
-                                    None,
-                                )
-                            output_names = list(selected) if selected else []
-                        except Exception:
-                            output_names = []
 
-                        if not output_names:
-                            try:
-                                op_def = getattr(context, "op_def", None)
-                                if op_def and getattr(op_def, "output_defs", None):
-                                    output_names = [
-                                        output_def.name
-                                        for output_def in op_def.output_defs
-                                    ]
-                            except Exception:
-                                output_names = []
+                        # First try to get selected output names from context
+                        if (
+                            hasattr(context, "selected_output_names")
+                            and context.selected_output_names
+                        ):
+                            output_names = [
+                                name
+                                for name in context.selected_output_names
+                                if name is not None
+                            ]
+                        elif (
+                            hasattr(context, "op_execution_context")
+                            and context.op_execution_context
+                            and hasattr(
+                                context.op_execution_context, "selected_output_names"
+                            )
+                            and context.op_execution_context.selected_output_names
+                        ):
+                            output_names = [
+                                name
+                                for name in context.op_execution_context.selected_output_names
+                                if name is not None
+                            ]
+
+                        if (
+                            not output_names
+                            and hasattr(context, "op_def")
+                            and context.op_def
+                        ):
+                            if hasattr(context.op_def, "output_defs"):
+                                output_names = [
+                                    str(output_def.name)
+                                    for output_def in context.op_def.output_defs
+                                    if output_def.name is not None
+                                ]
 
                         if not output_names:
                             context.add_output_metadata(metadata)
@@ -380,8 +398,10 @@ class SlurmPipesClient(PipesClient):
         except Exception as e:
             self.logger.error(f"Failed to cancel Slurm job {job_id}: {e}")
 
-    def _get_pack_command(self) -> list[str]:
-        """Determine the appropriate pack command based on platform."""
+    def _get_pack_command(self, override: Optional[list[str]] = None) -> list[str]:
+        """Determine the appropriate pack command based on platform or override."""
+        if override:
+            return override
         if self.pack_platform:
             platform_map = {
                 "linux-64": ["pixi", "run", "--frozen", "pack"],
@@ -460,19 +480,24 @@ class SlurmPipesClient(PipesClient):
         remote_base: str,
         run_dir: str,
         force_env_push: bool,
+        pack_cmd_override: Optional[list[str]] = None,
+        pre_deployed_env_path_override: Optional[str] = None,
     ) -> tuple[str, str]:
         """Ensure a usable Python environment exists and return activation + python paths."""
-        if self.pre_deployed_env_path:
+        pre_deployed_env_path = (
+            pre_deployed_env_path_override or self.pre_deployed_env_path
+        )
+        if pre_deployed_env_path:
             self.logger.info(
-                f"PROD mode: Using pre-deployed environment at: {self.pre_deployed_env_path}"
+                f"PROD mode: Using pre-deployed environment at: {pre_deployed_env_path}"
             )
-            env_base_dir = self.pre_deployed_env_path
+            env_base_dir = pre_deployed_env_path
             env_dir = f"{env_base_dir}/env"
             activation_script = f"{env_base_dir}/activate.sh"
             python_executable = f"{env_dir}/bin/python"
             return activation_script, python_executable
 
-        pack_cmd = self._get_pack_command()
+        pack_cmd = self._get_pack_command(override=pack_cmd_override)
         cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd)
         if cache_key:
             env_base_dir = f"{remote_base}/env-cache/{cache_key}"

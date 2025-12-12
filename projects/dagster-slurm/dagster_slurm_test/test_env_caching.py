@@ -289,3 +289,100 @@ def test_force_env_push_read_from_metadata():
 
     assert resource._should_force_env_push(DummyContext(True), None) is True
     assert resource._should_force_env_push(DummyContext(False), None) is False
+
+
+class DummySlurmClient(SlurmPipesClient):
+    def __init__(self):
+        # Skip parent init; we only need isinstance checks to pass.
+        self.kwargs = None
+
+    def run(self, *, context, payload_path, **kwargs):
+        self.kwargs = kwargs
+        return SimpleNamespace()
+
+
+def test_pack_cmd_override_from_metadata(monkeypatch):
+    slurm_resource = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=BashLauncher(),
+    )
+
+    class DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.assets_def = SimpleNamespace(
+                metadata_by_key={
+                    self.asset_key: {
+                        "slurm_pack_cmd": ["pixi", "run", "--frozen", "pack-ml"]
+                    }
+                }
+            )
+
+        def has_assets_def(self):
+            return True
+
+    fake_client = DummySlurmClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    resource.run(context=DummyContext(), payload_path="script.py")
+
+    assert fake_client.kwargs is not None
+    assert fake_client.kwargs["pack_cmd_override"] == [
+        "pixi",
+        "run",
+        "--frozen",
+        "pack-ml",
+    ]
+
+
+def test_predeployed_env_override_from_metadata(monkeypatch):
+    slurm_resource = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=BashLauncher(),
+    )
+
+    class DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.assets_def = SimpleNamespace(
+                metadata_by_key={
+                    self.asset_key: {"slurm_pre_deployed_env_path": "/prebuilt/envs/ml"}
+                }
+            )
+
+        def has_assets_def(self):
+            return True
+
+    fake_client = DummySlurmClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    resource.run(context=DummyContext(), payload_path="script.py")
+
+    assert fake_client.kwargs is not None
+    assert fake_client.kwargs["pre_deployed_env_path_override"] == "/prebuilt/envs/ml"

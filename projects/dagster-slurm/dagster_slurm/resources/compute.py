@@ -1,5 +1,6 @@
 """Unified compute resource - main facade."""
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
@@ -262,67 +263,88 @@ class ComputeResource(ConfigurableResource):
 
         return override
 
+    def _extract_asset_keys(self, context) -> list[Any]:
+        """Best-effort extraction of asset keys, including multi-asset outputs."""
+        asset_keys: list[Any] = []
+
+        # Primary asset key if available
+        try:
+            asset_key = getattr(context, "asset_key", None)
+            if asset_key:
+                asset_keys.append(asset_key)
+        except Exception:
+            pass
+
+        # Output names for multi-asset scenarios
+        output_names: list[str] = []
+        try:
+            output_names = list(
+                getattr(context, "selected_output_names", [])
+                or getattr(context, "output_names", [])
+            )
+        except Exception:
+            output_names = []
+
+        if not output_names:
+            try:
+                op_def = getattr(context, "op_def", None)
+                if op_def and getattr(op_def, "output_defs", None):
+                    output_names = [od.name for od in op_def.output_defs]
+            except Exception:
+                output_names = []
+
+        for output_name in output_names:
+            try:
+                key = context.asset_key_for_output(output_name)
+                if key:
+                    asset_keys.append(key)
+            except Exception:
+                continue
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_keys = []
+        for key in asset_keys:
+            try:
+                if key in seen:
+                    continue
+                seen.add(key)
+            except Exception:
+                # Non-hashable keys: keep them
+                pass
+            unique_keys.append(key)
+
+        return unique_keys
+
     def _should_force_env_push(self, context, explicit: Optional[bool]) -> bool:
         """Determine whether to force uploading the environment for this execution."""
         if explicit is not None:
             return explicit
 
-        try:
-            has_assets_def = getattr(context, "has_assets_def", False)
-            if callable(has_assets_def):
-                has_assets_def = has_assets_def()
+        # Check if context has asset definition
+        if not hasattr(context, "has_assets_def"):
+            return False
 
-            if has_assets_def and getattr(context, "assets_def", None):
-                metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
-                if not metadata_by_key:
-                    return False
+        has_assets_def = context.has_assets_def
+        if callable(has_assets_def):
+            has_assets_def = has_assets_def()
 
-                def _safe_asset_key() -> Optional[Any]:
-                    try:
-                        return getattr(context, "asset_key", None)
-                    except Exception:
-                        return None
+        if not (
+            has_assets_def and hasattr(context, "assets_def") and context.assets_def
+        ):
+            return False
 
-                asset_keys = []
-                asset_key = _safe_asset_key()
-                if asset_key:
-                    asset_keys.append(asset_key)
+        metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+        if not metadata_by_key:
+            return False
 
-                output_names = []
-                try:
-                    output_names = list(
-                        getattr(context, "selected_output_names", [])
-                        or getattr(context, "output_names", [])
-                    )
-                except Exception:
-                    output_names = []
+        asset_keys = self._extract_asset_keys(context)
 
-                if not output_names:
-                    try:
-                        op_def = getattr(context, "op_def", None)
-                        if op_def and getattr(op_def, "output_defs", None):
-                            output_names = [od.name for od in op_def.output_defs]
-                    except Exception:
-                        output_names = []
-
-                for output_name in output_names:
-                    try:
-                        key = context.asset_key_for_output(output_name)
-                        if key:
-                            asset_keys.append(key)
-                    except Exception:
-                        continue
-
-                for key in asset_keys:
-                    metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
-                    if isinstance(metadata, dict) and metadata.get(
-                        "force_slurm_env_push"
-                    ):
-                        return True
-        except Exception as exc:  # pragma: no cover - best effort
-            get_dagster_logger().debug(
-                f"Could not resolve force_env_push from asset metadata: {exc}"
-            )
+        # Check metadata for each asset key
+        for key in asset_keys:
+            metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
+            if isinstance(metadata, dict) and metadata.get("force_slurm_env_push"):
+                return True
 
         return False
 
@@ -337,49 +359,22 @@ class ComputeResource(ConfigurableResource):
             skip_upload = skip_upload_explicit
         else:
             skip_upload = False
-            try:
-                has_assets_def = getattr(context, "has_assets_def", False)
+
+            # Check if context has asset definition
+            if hasattr(context, "has_assets_def"):
+                has_assets_def = context.has_assets_def
                 if callable(has_assets_def):
                     has_assets_def = has_assets_def()
-                if has_assets_def and getattr(context, "assets_def", None):
+
+                if (
+                    has_assets_def
+                    and hasattr(context, "assets_def")
+                    and context.assets_def
+                ):
                     metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+                    asset_keys = self._extract_asset_keys(context)
 
-                    def _safe_asset_key() -> Optional[Any]:
-                        try:
-                            return getattr(context, "asset_key", None)
-                        except Exception:
-                            return None
-
-                    asset_keys = []
-                    asset_key = _safe_asset_key()
-                    if asset_key:
-                        asset_keys.append(asset_key)
-
-                    output_names = []
-                    try:
-                        output_names = list(
-                            getattr(context, "selected_output_names", [])
-                            or getattr(context, "output_names", [])
-                        )
-                    except Exception:
-                        output_names = []
-
-                    if not output_names:
-                        try:
-                            op_def = getattr(context, "op_def", None)
-                            if op_def and getattr(op_def, "output_defs", None):
-                                output_names = [od.name for od in op_def.output_defs]
-                        except Exception:
-                            output_names = []
-
-                    for output_name in output_names:
-                        try:
-                            key = context.asset_key_for_output(output_name)
-                            if key:
-                                asset_keys.append(key)
-                        except Exception:
-                            continue
-
+                    # Check metadata for each asset key
                     for key in asset_keys:
                         metadata = (
                             metadata_by_key.get(key, {}) if metadata_by_key else {}
@@ -392,12 +387,86 @@ class ComputeResource(ConfigurableResource):
                                 remote_path_explicit = metadata.get(
                                     "slurm_payload_path"
                                 )
-            except Exception as exc:  # pragma: no cover - best effort
-                get_dagster_logger().debug(
-                    f"Could not resolve payload strategy from asset metadata: {exc}"
-                )
 
         return skip_upload, remote_path_explicit
+
+    def _resolve_env_overrides(
+        self, context
+    ) -> tuple[Optional[list[str]], Optional[str]]:
+        """Read per-asset environment overrides from metadata."""
+        pack_cmd_override: Optional[list[str]] = None
+        pre_deployed_env_path: Optional[str] = None
+
+        try:
+            has_assets_def = getattr(context, "has_assets_def", False)
+            if callable(has_assets_def):
+                has_assets_def = has_assets_def()
+            if has_assets_def and getattr(context, "assets_def", None):
+                metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+                asset_keys = self._extract_asset_keys(context)
+
+                pack_cmd_values = []
+                env_path_values = []
+
+                for key in asset_keys:
+                    metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
+                    if not isinstance(metadata, dict):
+                        continue
+                    if "slurm_pack_cmd" in metadata:
+                        pack_cmd_values.append(metadata["slurm_pack_cmd"])
+                    if "slurm_pre_deployed_env_path" in metadata:
+                        env_path_values.append(metadata["slurm_pre_deployed_env_path"])
+
+                def _normalize_pack_cmd(value: Any) -> Optional[list[str]]:
+                    if value is None:
+                        return None
+                    if isinstance(value, list) and all(
+                        isinstance(item, str) for item in value
+                    ):
+                        return value
+                    return None
+
+                normalized_pack_cmds = [
+                    cmd
+                    for cmd in (_normalize_pack_cmd(v) for v in pack_cmd_values)
+                    if cmd
+                ]
+
+                unique_pack_cmds = []
+                seen_cmds = set()
+                for cmd in normalized_pack_cmds:
+                    key = tuple(cmd)
+                    if key in seen_cmds:
+                        continue
+                    seen_cmds.add(key)
+                    unique_pack_cmds.append(cmd)
+
+                if len(unique_pack_cmds) > 1:
+                    raise ValueError(
+                        "Conflicting slurm_pack_cmd values found across asset outputs."
+                    )
+                if unique_pack_cmds:
+                    pack_cmd_override = unique_pack_cmds[0]
+
+                env_paths = [
+                    str(v) for v in env_path_values if isinstance(v, (str, Path))
+                ]
+                unique_env_paths = []
+                seen_paths = set(env_paths)
+                if env_paths:
+                    unique_env_paths.append(env_paths[0])
+                if len(seen_paths) > 1:
+                    raise ValueError(
+                        "Conflicting slurm_pre_deployed_env_path values found across asset outputs."
+                    )
+                if unique_env_paths:
+                    pre_deployed_env_path = unique_env_paths[0]
+        except Exception as exc:  # pragma: no cover - best effort
+            get_dagster_logger().debug(
+                f"Could not resolve env overrides from asset metadata: {exc}"
+            )
+
+        return pack_cmd_override, pre_deployed_env_path
 
     def run(
         self,
@@ -510,6 +579,9 @@ class ComputeResource(ConfigurableResource):
                 remote_path_explicit=remote_payload_path,
             )
         )
+        pack_cmd_override, pre_deployed_env_override = self._resolve_env_overrides(
+            context
+        )
 
         # Create client with effective launcher (default or override)
         client = self.get_pipes_client(context, launcher=effective_launcher)
@@ -524,6 +596,10 @@ class ComputeResource(ConfigurableResource):
             kwargs["skip_payload_upload"] = skip_payload_upload
             if resolved_remote_payload_path:
                 kwargs["remote_payload_path"] = resolved_remote_payload_path
+            if pack_cmd_override:
+                kwargs["pack_cmd_override"] = pack_cmd_override
+            if pre_deployed_env_override:
+                kwargs["pre_deployed_env_path_override"] = pre_deployed_env_override
         elif resolved_force_env_push:
             logger.debug(
                 "force_env_push requested but ignored because execution is not using Slurm"
