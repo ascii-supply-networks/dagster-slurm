@@ -273,13 +273,52 @@ class ComputeResource(ConfigurableResource):
                 has_assets_def = has_assets_def()
 
             if has_assets_def and getattr(context, "assets_def", None):
-                asset_key = getattr(context, "asset_key", None)
-                if asset_key is None:
-                    return False
                 metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
-                metadata = metadata_by_key.get(asset_key, {}) if metadata_by_key else {}
-                if isinstance(metadata, dict):
-                    return bool(metadata.get("force_slurm_env_push"))
+                if not metadata_by_key:
+                    return False
+
+                def _safe_asset_key() -> Optional[Any]:
+                    try:
+                        return getattr(context, "asset_key", None)
+                    except Exception:
+                        return None
+
+                asset_keys = []
+                asset_key = _safe_asset_key()
+                if asset_key:
+                    asset_keys.append(asset_key)
+
+                output_names = []
+                try:
+                    output_names = list(
+                        getattr(context, "selected_output_names", [])
+                        or getattr(context, "output_names", [])
+                    )
+                except Exception:
+                    output_names = []
+
+                if not output_names:
+                    try:
+                        op_def = getattr(context, "op_def", None)
+                        if op_def and getattr(op_def, "output_defs", None):
+                            output_names = [od.name for od in op_def.output_defs]
+                    except Exception:
+                        output_names = []
+
+                for output_name in output_names:
+                    try:
+                        key = context.asset_key_for_output(output_name)
+                        if key:
+                            asset_keys.append(key)
+                    except Exception:
+                        continue
+
+                for key in asset_keys:
+                    metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
+                    if isinstance(metadata, dict) and metadata.get(
+                        "force_slurm_env_push"
+                    ):
+                        return True
         except Exception as exc:  # pragma: no cover - best effort
             get_dagster_logger().debug(
                 f"Could not resolve force_env_push from asset metadata: {exc}"
@@ -303,18 +342,50 @@ class ComputeResource(ConfigurableResource):
                 if callable(has_assets_def):
                     has_assets_def = has_assets_def()
                 if has_assets_def and getattr(context, "assets_def", None):
-                    asset_key = getattr(context, "asset_key", None)
-                    if asset_key is not None:
-                        metadata_by_key = getattr(
-                            context.assets_def, "metadata_by_key", {}
-                        )  # type: ignore[attr-defined]
+                    metadata_by_key = getattr(context.assets_def, "metadata_by_key", {})  # type: ignore[attr-defined]
+
+                    def _safe_asset_key() -> Optional[Any]:
+                        try:
+                            return getattr(context, "asset_key", None)
+                        except Exception:
+                            return None
+
+                    asset_keys = []
+                    asset_key = _safe_asset_key()
+                    if asset_key:
+                        asset_keys.append(asset_key)
+
+                    output_names = []
+                    try:
+                        output_names = list(
+                            getattr(context, "selected_output_names", [])
+                            or getattr(context, "output_names", [])
+                        )
+                    except Exception:
+                        output_names = []
+
+                    if not output_names:
+                        try:
+                            op_def = getattr(context, "op_def", None)
+                            if op_def and getattr(op_def, "output_defs", None):
+                                output_names = [od.name for od in op_def.output_defs]
+                        except Exception:
+                            output_names = []
+
+                    for output_name in output_names:
+                        try:
+                            key = context.asset_key_for_output(output_name)
+                            if key:
+                                asset_keys.append(key)
+                        except Exception:
+                            continue
+
+                    for key in asset_keys:
                         metadata = (
-                            metadata_by_key.get(asset_key, {})
-                            if metadata_by_key
-                            else {}
+                            metadata_by_key.get(key, {}) if metadata_by_key else {}
                         )
                         if isinstance(metadata, dict):
-                            skip_upload = bool(
+                            skip_upload = skip_upload or bool(
                                 metadata.get("skip_slurm_payload_upload")
                             )
                             if remote_path_explicit is None:

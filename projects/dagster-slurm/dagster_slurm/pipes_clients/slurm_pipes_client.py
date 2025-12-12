@@ -266,17 +266,52 @@ class SlurmPipesClient(PipesClient):
                         metrics = self.metrics_collector.collect_job_metrics(
                             job_id, ssh_pool
                         )
-                        context.add_output_metadata(
-                            {
-                                "slurm_job_id": job_id,
-                                "node_hours": metrics.node_hours,
-                                "cpu_efficiency_pct": round(
-                                    metrics.cpu_efficiency * 100, 2
-                                ),
-                                "max_memory_mb": round(metrics.max_rss_mb, 2),
-                                "elapsed_seconds": round(metrics.elapsed_seconds, 2),
-                            }
-                        )
+                        metadata = {
+                            "slurm_job_id": job_id,
+                            "node_hours": metrics.node_hours,
+                            "cpu_efficiency_pct": round(
+                                metrics.cpu_efficiency * 100, 2
+                            ),
+                            "max_memory_mb": round(metrics.max_rss_mb, 2),
+                            "elapsed_seconds": round(metrics.elapsed_seconds, 2),
+                        }
+
+                        # Multi-asset executions require specifying the output name.
+                        output_names = []
+                        try:
+                            selected = getattr(context, "selected_output_names", None)
+                            if selected is None:
+                                selected = getattr(
+                                    getattr(context, "op_execution_context", None),
+                                    "selected_output_names",
+                                    None,
+                                )
+                            output_names = list(selected) if selected else []
+                        except Exception:
+                            output_names = []
+
+                        if not output_names:
+                            try:
+                                op_def = getattr(context, "op_def", None)
+                                if op_def and getattr(op_def, "output_defs", None):
+                                    output_names = [
+                                        output_def.name
+                                        for output_def in op_def.output_defs
+                                    ]
+                            except Exception:
+                                output_names = []
+
+                        if not output_names:
+                            context.add_output_metadata(metadata)
+                        elif len(output_names) == 1:
+                            context.add_output_metadata(
+                                metadata, output_name=output_names[0]
+                            )
+                        else:
+                            for output_name in output_names:
+                                context.add_output_metadata(
+                                    metadata, output_name=output_name
+                                )
                     except Exception as e:
                         self.logger.warning(f"Failed to collect metrics: {e}")
 
