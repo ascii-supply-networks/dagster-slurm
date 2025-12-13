@@ -14,6 +14,7 @@ from dagster_slurm import (
     SSHConnectionResource,
     SlurmQueueConfig,
     SlurmResource,
+    SlurmRunConfig,
 )
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.helpers.env_packaging import compute_env_cache_key
@@ -112,6 +113,102 @@ def test_compute_env_cache_key_changes_with_lock(tmp_path: Path):
     assert key1 is not None
     assert key2 is not None
     assert key1 != key2
+
+
+def test_compute_env_cache_key_hashes_inject_files(tmp_path: Path):
+    """Cache key should change when inject file contents change."""
+    lockfile = tmp_path / "pixi.lock"
+    lockfile.write_text("lockfile content")
+
+    inject_file = tmp_path / "my_package.whl"
+    inject_file.write_text("package v1")
+
+    pack_cmd = ["pixi-pack", "--inject", str(inject_file)]
+    key1 = compute_env_cache_key(pack_cmd, lockfile=lockfile)
+
+    # Change inject file content
+    inject_file.write_text("package v2")
+    key2 = compute_env_cache_key(pack_cmd, lockfile=lockfile)
+
+    assert key1 is not None
+    assert key2 is not None
+    assert key1 != key2, "Cache key should change when inject file contents change"
+
+
+def test_compute_env_cache_key_with_cache_inject_globs(tmp_path: Path):
+    """cache_inject_globs should filter which inject files affect the cache key."""
+    lockfile = tmp_path / "pixi.lock"
+    lockfile.write_text("lockfile content")
+
+    # Base package (should affect cache)
+    base_pkg = tmp_path / "base_pkg.whl"
+    base_pkg.write_text("base v1")
+
+    # Workload package (should NOT affect cache when excluded)
+    workload_pkg = tmp_path / "workload_pkg.whl"
+    workload_pkg.write_text("workload v1")
+
+    pack_cmd = [
+        "pixi-pack",
+        "--inject",
+        str(base_pkg),
+        "--inject",
+        str(workload_pkg),
+    ]
+
+    # Only include base_pkg in cache key
+    cache_inject_globs = [str(base_pkg)]
+
+    key1 = compute_env_cache_key(
+        pack_cmd, lockfile=lockfile, cache_inject_globs=cache_inject_globs
+    )
+
+    # Change workload_pkg - should NOT affect cache key
+    workload_pkg.write_text("workload v2")
+    key2 = compute_env_cache_key(
+        pack_cmd, lockfile=lockfile, cache_inject_globs=cache_inject_globs
+    )
+
+    assert key1 == key2, "Workload package change should not affect cache key"
+
+    # Change base_pkg - SHOULD affect cache key
+    base_pkg.write_text("base v2")
+    key3 = compute_env_cache_key(
+        pack_cmd, lockfile=lockfile, cache_inject_globs=cache_inject_globs
+    )
+
+    assert key1 != key3, "Base package change should affect cache key"
+
+
+def test_compute_env_cache_key_extracts_inject_args(tmp_path: Path):
+    """Test that --inject arguments are correctly extracted from pack command."""
+    lockfile = tmp_path / "pixi.lock"
+    lockfile.write_text("lockfile content")
+
+    inject1 = tmp_path / "pkg1.whl"
+    inject1.write_text("pkg1")
+    inject2 = tmp_path / "pkg2.conda"
+    inject2.write_text("pkg2")
+
+    # Test both --inject forms
+    pack_cmd = [
+        "pixi-pack",
+        "--environment",
+        "myenv",
+        "--inject",
+        str(inject1),
+        f"--inject={inject2}",
+        "--create-executable",
+    ]
+
+    key = compute_env_cache_key(pack_cmd, lockfile=lockfile)
+    assert key is not None
+
+    # Change one inject file
+    inject1.write_text("pkg1 modified")
+    key_changed = compute_env_cache_key(pack_cmd, lockfile=lockfile)
+
+    assert key != key_changed, "Key should change when inject file changes"
 
 
 def test_prepare_environment_reuses_cached_env(monkeypatch):
@@ -315,6 +412,9 @@ class DummySlurmClient(SlurmPipesClient):
         captured = dict(kwargs)
         captured["pack_cmd_override"] = pack_cmd_override
         captured["pre_deployed_env_path_override"] = pre_deployed_env_path_override
+        captured["force_env_push"] = force_env_push
+        captured["skip_payload_upload"] = skip_payload_upload
+        captured["remote_payload_path"] = remote_payload_path
         self.kwargs = captured
         # Return a shape similar to real client
         return SimpleNamespace()
@@ -405,3 +505,128 @@ def test_predeployed_env_override_from_metadata(monkeypatch):
 
     assert fake_client.kwargs is not None
     assert fake_client.kwargs["pre_deployed_env_path_override"] == "/prebuilt/envs/ml"
+
+
+def test_slurm_run_config_sets_force_env_push(monkeypatch):
+    """SlurmRunConfig should set force_env_push when passed to compute.run()."""
+    slurm_resource = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=BashLauncher(),
+    )
+
+    class DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.assets_def = SimpleNamespace(metadata_by_key={})
+
+        def has_assets_def(self):
+            return True
+
+    fake_client = DummySlurmClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    # Test with force_env_push=True in config
+    config = SlurmRunConfig(force_env_push=True)
+    resource.run(context=DummyContext(), payload_path="script.py", config=config)
+
+    assert fake_client.kwargs is not None
+    assert fake_client.kwargs["force_env_push"] is True
+
+
+def test_slurm_run_config_sets_skip_payload_upload(monkeypatch):
+    """SlurmRunConfig should set skip_payload_upload when passed to compute.run()."""
+    slurm_resource = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=BashLauncher(),
+    )
+
+    class DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.assets_def = SimpleNamespace(metadata_by_key={})
+
+        def has_assets_def(self):
+            return True
+
+    fake_client = DummySlurmClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    # Test with skip_payload_upload=True and remote_payload_path in config
+    config = SlurmRunConfig(
+        skip_payload_upload=True, remote_payload_path="/remote/script.py"
+    )
+    resource.run(context=DummyContext(), payload_path="script.py", config=config)
+
+    assert fake_client.kwargs is not None
+    assert fake_client.kwargs["skip_payload_upload"] is True
+    assert fake_client.kwargs["remote_payload_path"] == "/remote/script.py"
+
+
+def test_explicit_params_override_config(monkeypatch):
+    """Explicit parameters should override SlurmRunConfig values."""
+    slurm_resource = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=BashLauncher(),
+    )
+
+    class DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.assets_def = SimpleNamespace(metadata_by_key={})
+
+        def has_assets_def(self):
+            return True
+
+    fake_client = DummySlurmClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    # Config says force=False, but explicit param says force=True
+    config = SlurmRunConfig(force_env_push=False)
+    resource.run(
+        context=DummyContext(),
+        payload_path="script.py",
+        config=config,
+        force_env_push=True,  # Explicit param should win
+    )
+
+    assert fake_client.kwargs is not None
+    assert fake_client.kwargs["force_env_push"] is True

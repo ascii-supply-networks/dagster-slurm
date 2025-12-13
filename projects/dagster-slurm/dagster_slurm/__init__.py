@@ -8,6 +8,9 @@ Run Dagster assets on Slurm clusters with support for:
 - Multiple launchers (Bash, Ray, Spark—WIP)
 """
 
+# Config classes
+from .config.runtime import SlurmRunConfig
+
 # Core resources
 from .launchers.ray import RayLauncher
 
@@ -27,6 +30,8 @@ from .resources.ssh import SSHConnectionResource
 __all__ = [
     # Main facade (most users only need this)
     "ComputeResource",
+    # Run-time config (for launchpad configuration)
+    "SlurmRunConfig",
     # Configuration resources
     "SlurmResource",
     "SlurmQueueConfig",

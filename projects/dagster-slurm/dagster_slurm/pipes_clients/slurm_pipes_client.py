@@ -56,6 +56,7 @@ class SlurmPipesClient(PipesClient):
         auto_detect_platform: bool = True,
         pack_platform: Optional[str] = None,
         pre_deployed_env_path: Optional[str] = None,
+        cache_inject_globs: Optional[list[str]] = None,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -65,6 +66,10 @@ class SlurmPipesClient(PipesClient):
         debug_mode: If True, never cleanup files (for debugging)
         auto_detect_platform: Auto-detect platform (ARM vs x86) for pixi pack
         pack_platform: Override platform ('linux-64', 'linux-aarch64', 'osx-arm64').
+        cache_inject_globs: Optional list of --inject glob patterns whose file contents
+            should affect the environment cache key. If None, all --inject patterns
+            from the pack command are hashed. Use this to exclude workload-specific
+            packages from cache invalidation (e.g., only include base libraries).
 
         """
         super().__init__()
@@ -82,6 +87,7 @@ class SlurmPipesClient(PipesClient):
         self._ssh_pool = None
         self._cancellation_requested = False
         self.pre_deployed_env_path = pre_deployed_env_path
+        self.cache_inject_globs = cache_inject_globs
 
     def run(  # type: ignore[override]
         self,
@@ -440,9 +446,12 @@ class SlurmPipesClient(PipesClient):
         return remote_base
 
     def _compute_environment_cache_key(self, pack_cmd: list[str]) -> Optional[str]:
-        """Return a cache key derived from the lockfile and pack command."""
+        """Return a cache key derived from the lockfile, pack command, and inject files."""
         try:
-            return compute_env_cache_key(pack_cmd=pack_cmd)
+            return compute_env_cache_key(
+                pack_cmd=pack_cmd,
+                cache_inject_globs=self.cache_inject_globs,
+            )
         except Exception as exc:  # pragma: no cover - best effort
             self.logger.debug(f"Could not compute environment cache key: {exc}")
             return None

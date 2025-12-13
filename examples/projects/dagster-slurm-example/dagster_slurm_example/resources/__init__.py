@@ -48,6 +48,12 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "compute_config": {
         "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
         "debug_mode": False,
+        # Only base packages affect cache key - workload-specific packages excluded
+        # so changes to dagster_slurm_example_hpc_workload don't invalidate the cache
+        "cache_inject_globs": [
+            "../dist/dagster_slurm-*-py3-none-any.whl",
+            "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+        ],
     },
     "launchers": {
         "bash": {},
@@ -97,6 +103,12 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "auto_detect_platform": False,
         "pack_platform": "linux-64",
         "debug_mode": False,
+        # Only base packages affect cache key - workload-specific packages excluded
+        # so changes to dagster_slurm_example_hpc_workload don't invalidate the cache
+        "cache_inject_globs": [
+            "../dist/dagster_slurm-*-py3-none-any.whl",
+            "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+        ],
     },
     "launchers": {
         "bash": {},

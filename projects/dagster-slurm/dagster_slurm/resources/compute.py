@@ -8,6 +8,7 @@ from pydantic import Field, PrivateAttr, model_validator
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 
 from ..config.environment import ExecutionMode
+from ..config.runtime import SlurmRunConfig
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..managers.hetjob import HeterogeneousJobManager, HetJobComponent
@@ -99,6 +100,16 @@ class ComputeResource(ConfigurableResource):
     pre_deployed_env_path: Optional[str] = Field(
         default=None,
         description="If set, uses a pre-deployed environment at this path instead of live packaging.",
+    )
+
+    cache_inject_globs: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "List of --inject glob patterns whose file contents should affect the "
+            "environment cache key. If None, all --inject patterns from the pack command "
+            "are hashed. Use this to exclude workload-specific packages from cache "
+            "invalidation. Example: ['../dist/dagster_slurm-*.whl', 'projects/shared/dist/*.conda']"
+        ),
     )
 
     # Cluster reuse settings (session mode only)
@@ -211,6 +222,7 @@ class ComputeResource(ConfigurableResource):
                 auto_detect_platform=self.auto_detect_platform,
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
+                cache_inject_globs=self.cache_inject_globs,
             )
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
@@ -228,6 +240,7 @@ class ComputeResource(ConfigurableResource):
                 auto_detect_platform=self.auto_detect_platform,
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
+                cache_inject_globs=self.cache_inject_globs,
             )
 
         else:  # ExecutionMode.SLURM_HETJOB
@@ -241,6 +254,7 @@ class ComputeResource(ConfigurableResource):
                 auto_detect_platform=self.auto_detect_platform,
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
+                cache_inject_globs=self.cache_inject_globs,
             )
 
     def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:
@@ -449,6 +463,7 @@ class ComputeResource(ConfigurableResource):
         force_env_push: Optional[bool] = None,
         skip_payload_upload: Optional[bool] = None,
         remote_payload_path: Optional[str] = None,
+        config: Optional[SlurmRunConfig] = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute asset with optional resource overrides.
@@ -469,12 +484,14 @@ class ComputeResource(ConfigurableResource):
                 - memory_gb: int
                 - framework: str ("ray" or "spark")
             force_env_push: Force repacking and uploading the environment for this run.
-                If not provided, falls back to asset metadata key 'force_slurm_env_push'.
+                If not provided, falls back to config.force_env_push or asset metadata.
             skip_payload_upload: If True, do not upload the payload script; expects the
-                remote payload to already exist. Can be set via asset metadata key
-                'skip_slurm_payload_upload'.
+                remote payload to already exist. Falls back to config.skip_payload_upload
+                or asset metadata key 'skip_slurm_payload_upload'.
             remote_payload_path: Remote path to an existing payload when skipping upload.
-                Can be set via asset metadata key 'slurm_payload_path'.
+                Falls back to config.remote_payload_path or asset metadata.
+            config: Optional SlurmRunConfig for run-time configuration via launchpad.
+                Values from config are used as defaults, but explicit parameters take precedence.
             **kwargs: Passed to client.run()
 
         Yields:
@@ -485,6 +502,21 @@ class ComputeResource(ConfigurableResource):
 
                 # Simple execution with default resources
                 yield from compute.run(context, "script.py")
+
+            .. code-block:: python
+
+                # Using SlurmRunConfig for launchpad-configurable options
+                @dg.asset
+                def my_asset(
+                    context: dg.AssetExecutionContext,
+                    compute: ComputeResource,
+                    config: SlurmRunConfig,
+                ):
+                    return compute.run(
+                        context=context,
+                        payload_path="script.py",
+                        config=config,
+                    ).get_results()
 
             .. code-block:: python
 
@@ -515,6 +547,19 @@ class ComputeResource(ConfigurableResource):
         self._log_configuration_once()
         logger = get_dagster_logger()
 
+        # Merge config values with explicit parameters (explicit takes precedence)
+        effective_force_env_push = force_env_push
+        effective_skip_payload_upload = skip_payload_upload
+        effective_remote_payload_path = remote_payload_path
+
+        if config is not None:
+            if effective_force_env_push is None:
+                effective_force_env_push = config.force_env_push
+            if effective_skip_payload_upload is None:
+                effective_skip_payload_upload = config.skip_payload_upload
+            if effective_remote_payload_path is None:
+                effective_remote_payload_path = config.remote_payload_path
+
         # Determine effective launcher
         effective_launcher = self._resolve_launcher(launcher)
 
@@ -541,13 +586,13 @@ class ComputeResource(ConfigurableResource):
                     )
 
         resolved_force_env_push = self._should_force_env_push(
-            context=context, explicit=force_env_push
+            context=context, explicit=effective_force_env_push
         )
-        skip_payload_upload, resolved_remote_payload_path = (
+        skip_payload_upload_resolved, resolved_remote_payload_path = (
             self._resolve_payload_strategy(
                 context=context,
-                skip_upload_explicit=skip_payload_upload,
-                remote_path_explicit=remote_payload_path,
+                skip_upload_explicit=effective_skip_payload_upload,
+                remote_path_explicit=effective_remote_payload_path,
             )
         )
         pack_cmd_override, pre_deployed_env_override = self._resolve_env_overrides(
@@ -564,7 +609,7 @@ class ComputeResource(ConfigurableResource):
 
         if isinstance(client, SlurmPipesClient):
             kwargs["force_env_push"] = resolved_force_env_push
-            kwargs["skip_payload_upload"] = skip_payload_upload
+            kwargs["skip_payload_upload"] = skip_payload_upload_resolved
             if resolved_remote_payload_path:
                 kwargs["remote_payload_path"] = resolved_remote_payload_path
             if pack_cmd_override:
