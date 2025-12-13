@@ -112,6 +112,17 @@ class ComputeResource(ConfigurableResource):
         ),
     )
 
+    # Production mode settings (pre-deployed payloads)
+    default_skip_payload_upload: bool = Field(
+        default=False,
+        description=(
+            "If True, skip uploading the payload script by default. Use this in production "
+            "when payloads are pre-deployed alongside the environment. When enabled, the "
+            "remote payload path is derived as {pre_deployed_env_path}/scripts/{filename}. "
+            "Can be overridden per-run via SlurmRunConfig or per-asset via metadata."
+        ),
+    )
+
     # Cluster reuse settings (session mode only)
     enable_cluster_reuse: bool = Field(
         default=False,
@@ -357,26 +368,54 @@ class ComputeResource(ConfigurableResource):
         context,
         skip_upload_explicit: Optional[bool],
         remote_path_explicit: Optional[str],
+        payload_path: Optional[str] = None,
+        effective_env_path: Optional[str] = None,
     ) -> tuple[bool, Optional[str]]:
-        """Decide payload upload behavior and remote path, with asset metadata fallback."""
+        """Decide payload upload behavior and remote path, with asset metadata fallback.
+
+        Resolution order for skip_upload:
+        1. Explicit parameter
+        2. SlurmRunConfig (handled by caller before this)
+        3. Asset metadata (skip_slurm_payload_upload)
+        4. ComputeResource default (default_skip_payload_upload)
+
+        Resolution order for remote_path:
+        1. Explicit parameter
+        2. SlurmRunConfig (handled by caller before this)
+        3. Asset metadata (slurm_payload_path)
+        4. Derived from pre_deployed_env_path: {env_path}/scripts/{filename}
+        """
+        skip_upload: Optional[bool] = None
+        remote_path: Optional[str] = remote_path_explicit
+
+        # Check explicit parameter first
         if skip_upload_explicit is not None:
             skip_upload = skip_upload_explicit
-        else:
-            skip_upload = False
 
-            metadata_by_key = self._get_metadata_by_key(context)
-            if metadata_by_key:
-                asset_keys = self._extract_asset_keys(context)
-                for key in asset_keys:
-                    metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
-                    if isinstance(metadata, dict):
-                        skip_upload = skip_upload or bool(
-                            metadata.get("skip_slurm_payload_upload")
-                        )
-                        if remote_path_explicit is None:
-                            remote_path_explicit = metadata.get("slurm_payload_path")
+        # Check asset metadata
+        metadata_by_key = self._get_metadata_by_key(context)
+        if metadata_by_key:
+            asset_keys = self._extract_asset_keys(context)
+            for key in asset_keys:
+                metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
+                if isinstance(metadata, dict):
+                    if skip_upload is None and metadata.get(
+                        "skip_slurm_payload_upload"
+                    ):
+                        skip_upload = True
+                    if remote_path is None:
+                        remote_path = metadata.get("slurm_payload_path")
 
-        return skip_upload, remote_path_explicit
+        # Fall back to ComputeResource defaults
+        if skip_upload is None:
+            skip_upload = self.default_skip_payload_upload
+
+        # Derive remote path from pre_deployed_env_path if skipping upload
+        if remote_path is None and skip_upload and effective_env_path and payload_path:
+            payload_filename = Path(payload_path).name
+            remote_path = f"{effective_env_path}/scripts/{payload_filename}"
+
+        return skip_upload, remote_path
 
     def _resolve_env_overrides(
         self, context
@@ -588,15 +627,19 @@ class ComputeResource(ConfigurableResource):
         resolved_force_env_push = self._should_force_env_push(
             context=context, explicit=effective_force_env_push
         )
+        pack_cmd_override, pre_deployed_env_override = self._resolve_env_overrides(
+            context
+        )
+        # Determine effective env path for payload path derivation
+        effective_env_path = pre_deployed_env_override or self.pre_deployed_env_path
         skip_payload_upload_resolved, resolved_remote_payload_path = (
             self._resolve_payload_strategy(
                 context=context,
                 skip_upload_explicit=effective_skip_payload_upload,
                 remote_path_explicit=effective_remote_payload_path,
+                payload_path=payload_path,
+                effective_env_path=effective_env_path,
             )
-        )
-        pack_cmd_override, pre_deployed_env_override = self._resolve_env_overrides(
-            context
         )
 
         # Create client with effective launcher (default or override)

@@ -434,6 +434,10 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
             )
         config["compute_config"]["pre_deployed_env_path"] = pre_deployed_env_path
 
+        # In production, both environment AND payloads are pre-deployed via CI/CD
+        # Skip payload upload - paths will be derived as {pre_deployed_env_path}/scripts/{filename}
+        config["compute_config"]["default_skip_payload_upload"] = True
+
     # Step 2.3: Apply execution mode modifiers based on environment name
     # Priority order: hetjob > cluster_reuse > session > default
 
