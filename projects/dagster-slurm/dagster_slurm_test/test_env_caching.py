@@ -377,6 +377,7 @@ def test_force_env_push_read_from_metadata():
     class DummyContext:
         def __init__(self, force: bool):
             self.asset_key = AssetKey("demo")
+            self.selected_asset_keys = {self.asset_key}
             self.assets_def = SimpleNamespace(
                 metadata_by_key={self.asset_key: {"force_slurm_env_push": force}}
             )
@@ -438,6 +439,7 @@ def test_pack_cmd_override_from_metadata(monkeypatch):
     class DummyContext:
         def __init__(self):
             self.asset_key = AssetKey("demo")
+            self.selected_asset_keys = {self.asset_key}
             self.assets_def = SimpleNamespace(
                 metadata_by_key={
                     self.asset_key: {
@@ -485,6 +487,7 @@ def test_predeployed_env_override_from_metadata(monkeypatch):
     class DummyContext:
         def __init__(self):
             self.asset_key = AssetKey("demo")
+            self.selected_asset_keys = {self.asset_key}
             self.assets_def = SimpleNamespace(
                 metadata_by_key={
                     self.asset_key: {"slurm_pre_deployed_env_path": "/prebuilt/envs/ml"}

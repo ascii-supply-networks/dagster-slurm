@@ -390,33 +390,48 @@ class SlurmPipesClient(PipesClient):
         except Exception as e:
             self.logger.error(f"Failed to cancel Slurm job {job_id}: {e}")
 
-    def _get_pack_command(self, override: Optional[list[str]] = None) -> list[str]:
-        """Determine the appropriate pack command based on platform or override."""
+    def _get_pack_command(
+        self, override: Optional[list[str]] = None, full_build: bool = False
+    ) -> list[str]:
+        """Determine the appropriate pack command based on platform or override.
+
+        Args:
+            override: Custom pack command to use instead of defaults
+            full_build: If True, use 'pack' (with builds). If False, use 'pack-only'.
+                       Set to True on cache miss or when force_env_push is enabled.
+
+        Cache strategy:
+        - Cache key computation: uses 'pack-only' for stable keys
+        - Cache hit: skip packing entirely
+        - Cache miss or force: use 'pack' (with builds) to ensure artifacts exist
+        """
         if override:
             return override
-        if self.pack_platform:
-            platform_map = {
-                "linux-64": ["pixi", "run", "--frozen", "pack"],
-                "linux-aarch64": ["pixi", "run", "--frozen", "pack-aarch"],
-                "osx-arm64": ["pixi", "run", "--frozen", "pack-aarch"],
-            }
-            cmd = platform_map.get(self.pack_platform)
-            if not cmd:
-                raise ValueError(f"Unknown pack_platform: {self.pack_platform}")
-            return cmd
 
-        if self.auto_detect_platform:
+        # Determine if this is ARM architecture
+        is_aarch = False
+        if self.pack_platform:
+            is_aarch = self.pack_platform in ("linux-aarch64", "osx-arm64")
+        elif self.auto_detect_platform:
             system = platform.system().lower()
             machine = platform.machine().lower()
+            is_aarch = (system == "darwin" and "arm" in machine) or (
+                system == "linux" and ("aarch64" in machine or "arm" in machine)
+            )
+            if is_aarch:
+                self.logger.debug(f"Auto-detected ARM platform: {system}/{machine}")
 
-            self.logger.info(f"Auto-detected platform: {system}/{machine}")
-
-            if system == "darwin" and "arm" in machine:
+        if full_build:
+            # Cache miss or force push: use full pack with builds
+            self.logger.info("Using full 'pack' task (with builds)")
+            if is_aarch:
                 return ["pixi", "run", "--frozen", "pack-aarch"]
-            elif system == "linux" and ("aarch64" in machine or "arm" in machine):
-                return ["pixi", "run", "--frozen", "pack-aarch"]
-
-        return ["pixi", "run", "--frozen", "pack"]
+            return ["pixi", "run", "--frozen", "pack"]
+        else:
+            # Use pack-only for cache key computation (stable keys)
+            if is_aarch:
+                return ["pixi", "run", "--frozen", "pack-only-aarch"]
+            return ["pixi", "run", "--frozen", "pack-only"]
 
     def _get_remote_base(self, run_id: str, ssh_pool: SSHConnectionPool) -> str:
         """Get remote base directory with proper expansion of $HOME."""
@@ -492,8 +507,11 @@ class SlurmPipesClient(PipesClient):
             python_executable = f"{env_dir}/bin/python"
             return activation_script, python_executable
 
-        pack_cmd = self._get_pack_command(override=pack_cmd_override)
-        cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd)
+        # Use pack-only command for cache key computation (stable keys)
+        pack_cmd_for_cache = self._get_pack_command(
+            override=pack_cmd_override, full_build=False
+        )
+        cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd_for_cache)
         if cache_key:
             env_base_dir = f"{remote_base}/env-cache/{cache_key}"
         else:
@@ -503,22 +521,49 @@ class SlurmPipesClient(PipesClient):
         activation_script = f"{env_base_dir}/activate.sh"
         python_executable = f"{env_dir}/bin/python"
 
+        self.logger.debug(
+            f"Cache check: cache_key={cache_key}, force_env_push={force_env_push}"
+        )
         if not force_env_push and cache_key:
-            if self._cached_env_ready(
+            cache_exists = self._cached_env_ready(
                 ssh_pool=ssh_pool,
                 activation_script=activation_script,
                 python_executable=python_executable,
-            ):
+            )
+            self.logger.debug(
+                f"Remote cache check: exists={cache_exists}, "
+                f"checking {activation_script} and {python_executable}"
+            )
+            if cache_exists:
                 self.logger.info(
                     f"Reusing cached environment ({cache_key}) at: {env_base_dir}"
                 )
                 return activation_script, python_executable
 
-        # Pack and upload environment
+        # Cache miss or force push: use full pack (with builds) to ensure artifacts exist
+        pack_cmd = self._get_pack_command(override=pack_cmd_override, full_build=True)
+
         if force_env_push:
             self.logger.info("Force pushing environment for this asset run")
+        elif not cache_key:
+            self.logger.info("No cache key available, packing environment...")
+        else:
+            self.logger.info(f"Cache miss for {cache_key}, packing environment...")
         self.logger.info("Packing environment with pixi...")
         pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+
+        # Re-compute cache key AFTER building, since pack may have rebuilt artifacts
+        # This ensures the upload path matches what future runs will compute
+        new_cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd_for_cache)
+        if new_cache_key and new_cache_key != cache_key:
+            self.logger.debug(
+                f"Cache key changed after build: {cache_key} -> {new_cache_key}"
+            )
+            cache_key = new_cache_key
+            env_base_dir = f"{remote_base}/env-cache/{cache_key}"
+            env_dir = f"{env_base_dir}/env"
+            activation_script = f"{env_base_dir}/activate.sh"
+            python_executable = f"{env_dir}/bin/python"
 
         self.logger.debug(f"Preparing remote environment directory: {env_dir}")
         ssh_pool.run(f"mkdir -p {env_dir}")

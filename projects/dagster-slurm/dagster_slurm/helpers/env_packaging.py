@@ -25,7 +25,7 @@ def pack_environment_with_pixi(
 
     Args:
         project_dir: Path to run pixi from (uses CWD if None, pixi walks up to find pixi.toml)
-        pack_cmd: Custom pack command (defaults to ["pixi", "run", "--frozen", "pack"])
+        pack_cmd: Custom pack command (defaults to ["pixi", "run", "--frozen", "pack-only"])
         timeout: Command timeout in seconds (default: 600)
 
     Returns:
@@ -41,7 +41,7 @@ def pack_environment_with_pixi(
     logger = get_dagster_logger()
 
     if pack_cmd is None:
-        pack_cmd = ["pixi", "run", "--frozen", "pack"]
+        pack_cmd = ["pixi", "run", "--frozen", "pack-only"]
 
     # Use provided directory or current working directory
     # pixi will automatically walk up to find pixi.toml
@@ -163,27 +163,40 @@ def _resolve_and_hash_inject_files(
     digest: "hashlib._Hash",
     logger,
 ) -> int:
-    """Resolve glob patterns and hash file contents. Returns count of files hashed."""
+    """Resolve glob patterns and hash file contents. Returns count of files hashed.
+
+    For each pattern, only the most recently modified file is hashed to ensure
+    stable cache keys when multiple versions exist (e.g., old wheel files in dist/).
+    """
     files_hashed = 0
     for pattern in patterns:
-        matched_files = sorted(glob.glob(pattern))
+        matched_files = glob.glob(pattern)
         if not matched_files:
             logger.debug(f"No files matched inject pattern: {pattern}")
             # Still include the pattern itself so different patterns yield different keys
             digest.update(f"pattern:{pattern}".encode())
             continue
 
-        for file_path in matched_files:
-            path = Path(file_path)
-            if path.is_file():
-                try:
-                    digest.update(path.read_bytes())
-                    files_hashed += 1
-                    logger.debug(f"Hashed inject file: {file_path}")
-                except OSError as e:
-                    logger.warning(f"Could not read inject file {file_path}: {e}")
-                    # Include path so missing files don't silently match
-                    digest.update(f"unreadable:{file_path}".encode())
+        # Only hash the most recent file per pattern to avoid cache instability
+        # when old versions accumulate (e.g., multiple wheel versions in dist/)
+        paths = [Path(f) for f in matched_files if Path(f).is_file()]
+        if not paths:
+            digest.update(f"pattern:{pattern}".encode())
+            continue
+
+        most_recent = max(paths, key=lambda p: p.stat().st_mtime)
+        try:
+            digest.update(most_recent.read_bytes())
+            files_hashed += 1
+            logger.debug(f"Hashed inject file (most recent): {most_recent}")
+            if len(paths) > 1:
+                logger.debug(
+                    f"  Skipped {len(paths) - 1} older file(s) matching pattern: {pattern}"
+                )
+        except OSError as e:
+            logger.warning(f"Could not read inject file {most_recent}: {e}")
+            # Include path so missing files don't silently match
+            digest.update(f"unreadable:{most_recent}".encode())
     return files_hashed
 
 

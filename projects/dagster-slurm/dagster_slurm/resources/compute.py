@@ -740,7 +740,9 @@ class ComputeResource(ConfigurableResource):
             from ..helpers.env_packaging import pack_environment_with_pixi
 
             pack_cmd = getattr(
-                self, "_get_pack_command", lambda: ["pixi", "run", "--frozen", "pack"]
+                self,
+                "_get_pack_command",
+                lambda: ["pixi", "run", "--frozen", "pack-only"],
             )()
             pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
 
