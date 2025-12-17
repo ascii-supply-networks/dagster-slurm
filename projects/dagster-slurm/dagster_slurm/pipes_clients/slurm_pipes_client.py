@@ -605,9 +605,16 @@ class SlurmPipesClient(PipesClient):
         # For session mode, we use srun which doesn't create separate log files
         # Logs go directly to the session allocation's output
         # The session resource handles execution
+        # Handle multi-assets: use selected_asset_keys joined, or single asset_key
+        selected_keys = context.selected_asset_keys
+        asset_key_str = (
+            "/".join(str(k) for k in sorted(selected_keys))
+            if len(selected_keys) > 1
+            else str(next(iter(selected_keys)))
+        )
         return self.session.execute_in_session(
             execution_plan=execution_plan,
-            asset_key=str(context.asset_key),
+            asset_key=asset_key_str,
         )
 
     def _execute_standalone(

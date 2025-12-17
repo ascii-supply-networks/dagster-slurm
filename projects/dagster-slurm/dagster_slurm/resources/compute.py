@@ -315,12 +315,14 @@ class ComputeResource(ConfigurableResource):
 
     def _extract_asset_keys(self, context) -> list[Any]:
         """Best-effort extraction of asset keys, including multi-asset outputs."""
+        # Use selected_asset_keys which works for both single and multi-assets
+        # Avoid context.asset_key which raises for multi-assets
+        selected_keys = getattr(context, "selected_asset_keys", None)
+        if selected_keys:
+            return list(selected_keys)
+
+        # Fallback: try to get keys from output definitions
         asset_keys: list[Any] = []
-
-        asset_key = getattr(context, "asset_key", None)
-        if asset_key:
-            asset_keys.append(asset_key)
-
         for output_name in self._get_output_names(context):
             try:
                 key = context.asset_key_for_output(output_name)
