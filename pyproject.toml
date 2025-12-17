@@ -200,3 +200,11 @@ markers = [
   "needs_slurm_docker: integration tests which need a real slurm cluster",
   "slow: particularly slow tests",
 ]
+
+[tool.ty.environment]
+python = ".pixi/envs/build"
+python-version = "3.12"
+root = ["projects"]
+
+[tool.ty.src]
+exclude = ["**/.pixi/**", "**/.venv/**", "**/.ruff_cache/**", "**/build/**", "**/dist/**"]
