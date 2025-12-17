@@ -737,11 +737,9 @@ class ComputeResource(ConfigurableResource):
             logger.info("Packing environment with pixi...")
             from ..helpers.env_packaging import pack_environment_with_pixi
 
-            pack_cmd = (
-                self._get_pack_command()
-                if hasattr(self, "_get_pack_command")
-                else ["pixi", "run", "--frozen", "pack"]
-            )
+            pack_cmd = getattr(
+                self, "_get_pack_command", lambda: ["pixi", "run", "--frozen", "pack"]
+            )()
             pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
 
             # Upload packed environment

@@ -25,7 +25,7 @@ dev = [
   "pytest-mock>=3.14.0,<4",
   "pytest-cov~=7.0.0",
   "ruff>=0.12.8,<1",
-  "pyrefly>=0.27.2,<1",
+  "ty>=0.0.2,<1",
   "python-semantic-release~=10.3.1",
   "commitizen~=4.8.3",
 ]
@@ -65,7 +65,7 @@ clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
 fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
-lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- pyrefly check projects --python-interpreter-path $PIXI_PROJECT_ROOT/.pixi/envs/build/bin/python3.12", description = "Lint" }
+lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && uv run -- ty check projects", description = "Lint" }
 test = { cmd = "uv run -- pytest -m 'not (needs_slurm_docker or slow)' projects", description = "Run all unit tests" }
 testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
 
