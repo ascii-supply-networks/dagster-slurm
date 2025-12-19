@@ -2,6 +2,94 @@
 
 <!-- version list -->
 
+## v1.8.0-rc.1 (2025-12-19)
+
+### Bug Fixes
+
+- A) configurable cache b) selective cache invalidation
+  ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Address reviewers comments ([#81](https://github.com/ascii-supply-networks/dagster-slurm/pull/81),
+  [`e37d6fc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e37d6fc23476e1edf27ec0c2b259f6e6f7f8d2fe))
+
+- Caching and cache invalidation
+  ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Multi asset subselection ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- New testing ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Ray lint; feat: allow asset specific ENV overrides
+  ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Reduce hasattr ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Refine for multi-asset ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Try fixing tests? ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+### Features
+
+- Agent definitions ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Agent definitions ([#84](https://github.com/ascii-supply-networks/dagster-slurm/pull/84),
+  [`983d6ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/983d6adcef8ed8bfa6fc64b5165c353aaf023794))
+
+- Deps upgrades ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Deps upgrades ([#84](https://github.com/ascii-supply-networks/dagster-slurm/pull/84),
+  [`983d6ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/983d6adcef8ed8bfa6fc64b5165c353aaf023794))
+
+- Direct submission ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Enable TU Wien datalab ([#83](https://github.com/ascii-supply-networks/dagster-slurm/pull/83),
+  [`5e4ad71`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5e4ad7168ddcb2b06edef451787e5cf939dfe623))
+
+- Refine slides ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Refine slides ([#84](https://github.com/ascii-supply-networks/dagster-slurm/pull/84),
+  [`983d6ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/983d6adcef8ed8bfa6fc64b5165c353aaf023794))
+
+- Refine slides ([#81](https://github.com/ascii-supply-networks/dagster-slurm/pull/81),
+  [`e37d6fc`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e37d6fc23476e1edf27ec0c2b259f6e6f7f8d2fe))
+
+- Refine slides v2 ([#84](https://github.com/ascii-supply-networks/dagster-slurm/pull/84),
+  [`983d6ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/983d6adcef8ed8bfa6fc64b5165c353aaf023794))
+
+- Tu datalab ([#83](https://github.com/ascii-supply-networks/dagster-slurm/pull/83),
+  [`5e4ad71`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5e4ad7168ddcb2b06edef451787e5cf939dfe623))
+
+- Up upgrade ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Up upgrade ([#84](https://github.com/ascii-supply-networks/dagster-slurm/pull/84),
+  [`983d6ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/983d6adcef8ed8bfa6fc64b5165c353aaf023794))
+
+- Upgrade deps ([#83](https://github.com/ascii-supply-networks/dagster-slurm/pull/83),
+  [`5e4ad71`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5e4ad7168ddcb2b06edef451787e5cf939dfe623))
+
+- Use prek ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+- Use prek ([#84](https://github.com/ascii-supply-networks/dagster-slurm/pull/84),
+  [`983d6ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/983d6adcef8ed8bfa6fc64b5165c353aaf023794))
+
+- Use ty instead of pyright ([#85](https://github.com/ascii-supply-networks/dagster-slurm/pull/85),
+  [`97204ad`](https://github.com/ascii-supply-networks/dagster-slurm/commit/97204ad7ede6bbefd4db3048da42628d315ad294))
+
+
 ## v1.8.0 (2025-11-01)
 
 
