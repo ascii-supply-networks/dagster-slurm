@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.9.0 (2025-12-19)
+
+### Bug Fixes
+
+- Add ty directly from pixi
+  ([`45673ce`](https://github.com/ascii-supply-networks/dagster-slurm/commit/45673ce7af680709b1319d9402b5de781a99bd0d))
+
+- Direct lint env path ([#87](https://github.com/ascii-supply-networks/dagster-slurm/pull/87),
+  [`3e3dbd7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3e3dbd7645c6b2a8d905877137db7f473fe94308))
+
+- Try pre-creating env
+  ([`b3f803a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b3f803a234370b1add420f6b3def4eb266fcc856))
+
+- Uv without pixi
+  ([`0b0cb3e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0b0cb3ef891936bf0282132134b49ab37b83470a))
+
+### Features
+
+- Update deps ([#86](https://github.com/ascii-supply-networks/dagster-slurm/pull/86),
+  [`6b75b3a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6b75b3a9fb60f341e19b55a8a4eb60dc0c19218d))
+
+
 ## v1.8.0-rc.1 (2025-12-19)
 
 ### Bug Fixes
