@@ -1,7 +1,7 @@
 """Simple assets using Bash launcher."""
 
 import dagster as dg
-from dagster_slurm import ComputeResource
+from dagster_slurm import ComputeResource, SlurmRunConfig
 
 
 @dg.asset
@@ -19,6 +19,7 @@ from dagster_slurm import ComputeResource
 def process_data(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
+    config: SlurmRunConfig,
 ):
     """Process data using bash script.
     Works in all modes (dev/staging/prod) without code changes.
@@ -32,6 +33,7 @@ def process_data(
     completed_run = compute.run(
         context=context,
         payload_path=script_path,
+        config=config,
         extra_env={
             "INPUT_DATA": "/path/to/input",
             "OUTPUT_DATA": "/path/to/output",
@@ -55,6 +57,7 @@ def process_data(
 def aggregate_results(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
+    config: SlurmRunConfig,
 ):
     """Aggregate results from processing."""
     script_path = dg.file_relative_path(
@@ -65,18 +68,28 @@ def aggregate_results(
     return compute.run(
         context=context,
         payload_path=script_path,
+        config=config,
         extra_env={
             "PROCESSED_DATA": "/path/to/processed",
         },
     ).get_results()
 
 
-@dg.multi_asset(specs=[dg.AssetSpec(key=["myprefix", "orders"]), dg.AssetSpec("users")])
+@dg.multi_asset(
+    specs=[
+        dg.AssetSpec(key=["myprefix", "orders"]),
+        dg.AssetSpec("users"),
+    ],
+)
 def subprocess_asset(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
+    config: SlurmRunConfig,
 ):
-    """Multi asset example with tests"""
+    """Multi asset example with tests.
+
+    Uses SlurmRunConfig for launchpad-configurable options instead of hardcoded metadata.
+    """
     script_path = dg.file_relative_path(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/multi_asset_example.py",
@@ -84,6 +97,7 @@ def subprocess_asset(
     return compute.run(
         context=context,
         payload_path=script_path,
+        config=config,
         extras={"foo": "bar"},
         extra_env={
             "MY_ENV_VAR_IN_SUBPROCESS": "my_value",

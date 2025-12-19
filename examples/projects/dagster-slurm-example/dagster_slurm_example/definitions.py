@@ -36,7 +36,7 @@ def defs():
         ]
     )
 
-    all_asset_checks = [*dg.load_asset_checks_from_package_module(example_defs)]
+    all_asset_checks = [*dg.load_asset_checks_from_package_module(example_defs)]  # ty: ignore[invalid-argument-type]
 
     all_assets = dg.link_code_references_to_git(
         assets_defs=all_assets,

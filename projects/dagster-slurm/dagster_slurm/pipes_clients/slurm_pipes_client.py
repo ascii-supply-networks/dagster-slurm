@@ -21,7 +21,7 @@ from dagster import (
 )
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 
-from ..helpers.env_packaging import pack_environment_with_pixi
+from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
 from ..helpers.metrics import SlurmMetricsCollector
 from ..helpers.ssh_helpers import TERMINAL_STATES
@@ -56,6 +56,7 @@ class SlurmPipesClient(PipesClient):
         auto_detect_platform: bool = True,
         pack_platform: Optional[str] = None,
         pre_deployed_env_path: Optional[str] = None,
+        cache_inject_globs: Optional[list[str]] = None,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -65,6 +66,10 @@ class SlurmPipesClient(PipesClient):
         debug_mode: If True, never cleanup files (for debugging)
         auto_detect_platform: Auto-detect platform (ARM vs x86) for pixi pack
         pack_platform: Override platform ('linux-64', 'linux-aarch64', 'osx-arm64').
+        cache_inject_globs: Optional list of --inject glob patterns whose file contents
+            should affect the environment cache key. If None, all --inject patterns
+            from the pack command are hashed. Use this to exclude workload-specific
+            packages from cache invalidation (e.g., only include base libraries).
 
         """
         super().__init__()
@@ -82,6 +87,7 @@ class SlurmPipesClient(PipesClient):
         self._ssh_pool = None
         self._cancellation_requested = False
         self.pre_deployed_env_path = pre_deployed_env_path
+        self.cache_inject_globs = cache_inject_globs
 
     def run(  # type: ignore[override]
         self,
@@ -92,6 +98,11 @@ class SlurmPipesClient(PipesClient):
         extras: Optional[Dict[str, Any]] = None,
         use_session: bool = False,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
+        force_env_push: Optional[bool] = None,
+        skip_payload_upload: Optional[bool] = None,
+        remote_payload_path: Optional[str] = None,
+        pack_cmd_override: Optional[list[str]] = None,
+        pre_deployed_env_path_override: Optional[str] = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute payload on Slurm cluster with real-time log streaming.
@@ -104,6 +115,12 @@ class SlurmPipesClient(PipesClient):
             extras: Extra data to pass via Pipes
             use_session: If True and session_resource provided, use shared allocation
             extra_slurm_opts: Override Slurm options (non-session mode)
+            force_env_push: If True, always repack and upload the environment even when
+                a cached copy exists for the current lockfile/pack command.
+            skip_payload_upload: If True, do not upload the payload script (assumes
+                it already exists remotely).
+            remote_payload_path: Optional pre-existing remote payload path to use when
+                skipping upload.
             **kwargs: Additional arguments (ignored, for forward compatibility)
 
         Yields:
@@ -117,6 +134,10 @@ class SlurmPipesClient(PipesClient):
                 "Context is not part of a Dagster run, generating a temporary run_id."
             )
             run_id = uuid.uuid4().hex
+        force_env_push = bool(force_env_push) if force_env_push is not None else False
+        skip_payload_upload = (
+            bool(skip_payload_upload) if skip_payload_upload is not None else False
+        )
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
@@ -140,63 +161,42 @@ class SlurmPipesClient(PipesClient):
                 # Store control path for log streaming
                 self._control_path = ssh_pool.control_path  # type: ignore
 
-                if self.pre_deployed_env_path:
-                    self.logger.info(
-                        f"PROD mode: Using pre-deployed environment at: {self.pre_deployed_env_path}"
-                    )
+                remote_base = self._get_remote_base(run_id, ssh_pool)
+                run_dir = f"{remote_base}/runs/{run_id}"
+                messages_path = f"{run_dir}/messages.jsonl"
+                self.logger.debug(f"Creating remote run directory: {run_dir}")
+                ssh_pool.run(f"mkdir -p {run_dir}")
 
-                    # Define paths based on the pre-deployed location
-                    env_base_dir = self.pre_deployed_env_path
-                    env_dir = f"{env_base_dir}/env"
-                    activation_script = f"{env_base_dir}/activate.sh"
-                    python_executable = f"{env_dir}/bin/python"
+                activation_script, python_executable = self._prepare_environment(
+                    ssh_pool=ssh_pool,
+                    remote_base=remote_base,
+                    run_dir=run_dir,
+                    force_env_push=force_env_push,
+                    pack_cmd_override=pack_cmd_override,
+                    pre_deployed_env_path_override=pre_deployed_env_path_override,
+                )
 
-                    # We still need a run-specific directory for logs, payload, etc.
-                    remote_base = self._get_remote_base(run_id, ssh_pool)
-                    run_dir = f"{remote_base}/runs/{run_id}"
-                    messages_path = f"{run_dir}/messages.jsonl"
-                    self.logger.debug(f"Creating remote run directory: {run_dir}")
-                    ssh_pool.run(f"mkdir -p {run_dir}")
-                else:
-                    # Pack environment using pixi
-                    self.logger.info("Packing environment with pixi...")
-                    pack_cmd = self._get_pack_command()
-                    pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+                # Check for cancellation
+                if self._cancellation_requested:
+                    raise RuntimeError("Execution cancelled before job submission")
 
-                    # Setup remote directories
-                    remote_base = self._get_remote_base(run_id, ssh_pool)
-                    run_dir = f"{remote_base}/runs/{run_id}"
-                    messages_path = f"{run_dir}/messages.jsonl"
-                    env_dir = f"{run_dir}/env"
-
-                    self.logger.debug(f"Creating remote directory: {run_dir}")
-                    ssh_pool.run(f"mkdir -p {run_dir}")
-                    ssh_pool.run(f"mkdir -p {env_dir}")
-
-                    # Check for cancellation
-                    if self._cancellation_requested:
-                        raise RuntimeError("Execution cancelled before job submission")
-
-                    # Upload packed environment
-                    self.logger.debug(f"Uploading environment to {run_dir}...")
-                    remote_pack_file = f"{run_dir}/{pack_file.name}"
-                    ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file)
-
-                    # Extract environment
-                    self.logger.debug("Extracting environment on remote host...")
-                    activation_script = self._extract_environment(
-                        ssh_pool=ssh_pool,
-                        pack_file_path=remote_pack_file,
-                        extract_dir=env_dir,
-                    )
-
-                    # Python executable from extracted environment
-                    python_executable = f"{env_dir}/bin/python"
-
-                # Upload payload
+                # Upload payload unless instructed to reuse an existing remote copy
                 payload_name = Path(payload_path).name
-                remote_payload = f"{run_dir}/{payload_name}"
-                ssh_pool.upload_file(payload_path, remote_payload)
+                remote_payload = remote_payload_path or f"{run_dir}/{payload_name}"
+
+                if skip_payload_upload:
+                    self.logger.info(
+                        f"Skipping payload upload; using remote payload at {remote_payload}"
+                    )
+                    try:
+                        ssh_pool.run(f"test -f {remote_payload}")
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"skip_payload_upload is enabled but remote payload "
+                            f"was not found at {remote_payload}"
+                        ) from exc
+                else:
+                    ssh_pool.upload_file(payload_path, remote_payload)
 
                 # Setup Pipes communication
                 context_injector = PipesEnvContextInjector()
@@ -276,17 +276,52 @@ class SlurmPipesClient(PipesClient):
                         metrics = self.metrics_collector.collect_job_metrics(
                             job_id, ssh_pool
                         )
-                        context.add_output_metadata(
-                            {
-                                "slurm_job_id": job_id,
-                                "node_hours": metrics.node_hours,
-                                "cpu_efficiency_pct": round(
-                                    metrics.cpu_efficiency * 100, 2
-                                ),
-                                "max_memory_mb": round(metrics.max_rss_mb, 2),
-                                "elapsed_seconds": round(metrics.elapsed_seconds, 2),
-                            }
-                        )
+                        metadata = {
+                            "slurm_job_id": job_id,
+                            "node_hours": metrics.node_hours,
+                            "cpu_efficiency_pct": round(
+                                metrics.cpu_efficiency * 100, 2
+                            ),
+                            "max_memory_mb": round(metrics.max_rss_mb, 2),
+                            "elapsed_seconds": round(metrics.elapsed_seconds, 2),
+                        }
+
+                        # Multi-asset executions require specifying the output name.
+                        output_names = []
+
+                        selected = getattr(context, "selected_output_names", None)
+                        if selected:
+                            output_names = [name for name in selected if name]
+                        elif getattr(context, "op_execution_context", None):
+                            nested = getattr(
+                                context.op_execution_context,
+                                "selected_output_names",
+                                None,
+                            )
+                            if nested:
+                                output_names = [name for name in nested if name]
+
+                        if not output_names:
+                            op_def = getattr(context, "op_def", None)
+                            output_defs = getattr(op_def, "output_defs", None)
+                            if output_defs:
+                                output_names = [
+                                    str(output_def.name)
+                                    for output_def in output_defs
+                                    if output_def.name is not None
+                                ]
+
+                        if not output_names:
+                            context.add_output_metadata(metadata)
+                        elif len(output_names) == 1:
+                            context.add_output_metadata(
+                                metadata, output_name=output_names[0]
+                            )
+                        else:
+                            for output_name in output_names:
+                                context.add_output_metadata(
+                                    metadata, output_name=output_name
+                                )
                     except Exception as e:
                         self.logger.warning(f"Failed to collect metrics: {e}")
 
@@ -355,31 +390,48 @@ class SlurmPipesClient(PipesClient):
         except Exception as e:
             self.logger.error(f"Failed to cancel Slurm job {job_id}: {e}")
 
-    def _get_pack_command(self) -> list[str]:
-        """Determine the appropriate pack command based on platform."""
-        if self.pack_platform:
-            platform_map = {
-                "linux-64": ["pixi", "run", "--frozen", "pack"],
-                "linux-aarch64": ["pixi", "run", "--frozen", "pack-aarch"],
-                "osx-arm64": ["pixi", "run", "--frozen", "pack-aarch"],
-            }
-            cmd = platform_map.get(self.pack_platform)
-            if not cmd:
-                raise ValueError(f"Unknown pack_platform: {self.pack_platform}")
-            return cmd
+    def _get_pack_command(
+        self, override: Optional[list[str]] = None, full_build: bool = False
+    ) -> list[str]:
+        """Determine the appropriate pack command based on platform or override.
 
-        if self.auto_detect_platform:
+        Args:
+            override: Custom pack command to use instead of defaults
+            full_build: If True, use 'pack' (with builds). If False, use 'pack-only'.
+                       Set to True on cache miss or when force_env_push is enabled.
+
+        Cache strategy:
+        - Cache key computation: uses 'pack-only' for stable keys
+        - Cache hit: skip packing entirely
+        - Cache miss or force: use 'pack' (with builds) to ensure artifacts exist
+        """
+        if override:
+            return override
+
+        # Determine if this is ARM architecture
+        is_aarch = False
+        if self.pack_platform:
+            is_aarch = self.pack_platform in ("linux-aarch64", "osx-arm64")
+        elif self.auto_detect_platform:
             system = platform.system().lower()
             machine = platform.machine().lower()
+            is_aarch = (system == "darwin" and "arm" in machine) or (
+                system == "linux" and ("aarch64" in machine or "arm" in machine)
+            )
+            if is_aarch:
+                self.logger.debug(f"Auto-detected ARM platform: {system}/{machine}")
 
-            self.logger.info(f"Auto-detected platform: {system}/{machine}")
-
-            if system == "darwin" and "arm" in machine:
+        if full_build:
+            # Cache miss or force push: use full pack with builds
+            self.logger.info("Using full 'pack' task (with builds)")
+            if is_aarch:
                 return ["pixi", "run", "--frozen", "pack-aarch"]
-            elif system == "linux" and ("aarch64" in machine or "arm" in machine):
-                return ["pixi", "run", "--frozen", "pack-aarch"]
-
-        return ["pixi", "run", "--frozen", "pack"]
+            return ["pixi", "run", "--frozen", "pack"]
+        else:
+            # Use pack-only for cache key computation (stable keys)
+            if is_aarch:
+                return ["pixi", "run", "--frozen", "pack-only-aarch"]
+            return ["pixi", "run", "--frozen", "pack-only"]
 
     def _get_remote_base(self, run_id: str, ssh_pool: SSHConnectionPool) -> str:
         """Get remote base directory with proper expansion of $HOME."""
@@ -393,7 +445,7 @@ class SlurmPipesClient(PipesClient):
                 f"Could not determine remote home directory from output: {raw!r}"
             )
 
-        if hasattr(self.slurm, "remote_base") and self.slurm.remote_base:
+        if self.slurm.remote_base:
             remote_base = self.slurm.remote_base
         else:
             home_raw = ssh_pool.run("echo $HOME").strip()
@@ -407,6 +459,127 @@ class SlurmPipesClient(PipesClient):
             remote_base = remote_base.replace("$HOME", home_dir)
 
         return remote_base
+
+    def _compute_environment_cache_key(self, pack_cmd: list[str]) -> Optional[str]:
+        """Return a cache key derived from the lockfile, pack command, and inject files."""
+        try:
+            return compute_env_cache_key(
+                pack_cmd=pack_cmd,
+                cache_inject_globs=self.cache_inject_globs,
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            self.logger.debug(f"Could not compute environment cache key: {exc}")
+            return None
+
+    def _cached_env_ready(
+        self,
+        ssh_pool: SSHConnectionPool,
+        activation_script: str,
+        python_executable: str,
+    ) -> bool:
+        """Check if a cached environment is already present on the remote host."""
+        try:
+            ssh_pool.run(f"test -f {activation_script} && test -f {python_executable}")
+            return True
+        except Exception:
+            return False
+
+    def _prepare_environment(
+        self,
+        ssh_pool: SSHConnectionPool,
+        remote_base: str,
+        run_dir: str,
+        force_env_push: bool,
+        pack_cmd_override: Optional[list[str]] = None,
+        pre_deployed_env_path_override: Optional[str] = None,
+    ) -> tuple[str, str]:
+        """Ensure a usable Python environment exists and return activation + python paths."""
+        pre_deployed_env_path = (
+            pre_deployed_env_path_override or self.pre_deployed_env_path
+        )
+        if pre_deployed_env_path:
+            self.logger.info(
+                f"PROD mode: Using pre-deployed environment at: {pre_deployed_env_path}"
+            )
+            env_base_dir = pre_deployed_env_path
+            env_dir = f"{env_base_dir}/env"
+            activation_script = f"{env_base_dir}/activate.sh"
+            python_executable = f"{env_dir}/bin/python"
+            return activation_script, python_executable
+
+        # Use pack-only command for cache key computation (stable keys)
+        pack_cmd_for_cache = self._get_pack_command(
+            override=pack_cmd_override, full_build=False
+        )
+        cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd_for_cache)
+        if cache_key:
+            env_base_dir = f"{remote_base}/env-cache/{cache_key}"
+        else:
+            # Fall back to run-scoped environment when we cannot compute a cache key.
+            env_base_dir = f"{run_dir}/env_runtime"
+        env_dir = f"{env_base_dir}/env"
+        activation_script = f"{env_base_dir}/activate.sh"
+        python_executable = f"{env_dir}/bin/python"
+
+        self.logger.debug(
+            f"Cache check: cache_key={cache_key}, force_env_push={force_env_push}"
+        )
+        if not force_env_push and cache_key:
+            cache_exists = self._cached_env_ready(
+                ssh_pool=ssh_pool,
+                activation_script=activation_script,
+                python_executable=python_executable,
+            )
+            self.logger.debug(
+                f"Remote cache check: exists={cache_exists}, "
+                f"checking {activation_script} and {python_executable}"
+            )
+            if cache_exists:
+                self.logger.info(
+                    f"Reusing cached environment ({cache_key}) at: {env_base_dir}"
+                )
+                return activation_script, python_executable
+
+        # Cache miss or force push: use full pack (with builds) to ensure artifacts exist
+        pack_cmd = self._get_pack_command(override=pack_cmd_override, full_build=True)
+
+        if force_env_push:
+            self.logger.info("Force pushing environment for this asset run")
+        elif not cache_key:
+            self.logger.info("No cache key available, packing environment...")
+        else:
+            self.logger.info(f"Cache miss for {cache_key}, packing environment...")
+        self.logger.info("Packing environment with pixi...")
+        pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+
+        # Re-compute cache key AFTER building, since pack may have rebuilt artifacts
+        # This ensures the upload path matches what future runs will compute
+        new_cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd_for_cache)
+        if new_cache_key and new_cache_key != cache_key:
+            self.logger.debug(
+                f"Cache key changed after build: {cache_key} -> {new_cache_key}"
+            )
+            cache_key = new_cache_key
+            env_base_dir = f"{remote_base}/env-cache/{cache_key}"
+            env_dir = f"{env_base_dir}/env"
+            activation_script = f"{env_base_dir}/activate.sh"
+            python_executable = f"{env_dir}/bin/python"
+
+        self.logger.debug(f"Preparing remote environment directory: {env_dir}")
+        ssh_pool.run(f"mkdir -p {env_dir}")
+
+        remote_pack_file = f"{env_base_dir}/{pack_file.name}"
+        self.logger.debug(f"Uploading environment to {remote_pack_file}...")
+        ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file)
+
+        self.logger.debug("Extracting environment on remote host...")
+        activation_script = self._extract_environment(
+            ssh_pool=ssh_pool,
+            pack_file_path=remote_pack_file,
+            extract_dir=env_dir,
+        )
+
+        return activation_script, python_executable
 
     def _extract_environment(
         self,
@@ -477,9 +650,16 @@ class SlurmPipesClient(PipesClient):
         # For session mode, we use srun which doesn't create separate log files
         # Logs go directly to the session allocation's output
         # The session resource handles execution
+        # Handle multi-assets: use selected_asset_keys joined, or single asset_key
+        selected_keys = context.selected_asset_keys
+        asset_key_str = (
+            "/".join(str(k) for k in sorted(selected_keys))
+            if len(selected_keys) > 1
+            else str(next(iter(selected_keys)))
+        )
         return self.session.execute_in_session(
             execution_plan=execution_plan,
-            asset_key=str(context.asset_key),
+            asset_key=asset_key_str,
         )
 
     def _execute_standalone(

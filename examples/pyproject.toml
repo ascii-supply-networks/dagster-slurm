@@ -50,7 +50,7 @@ pytest = ">=8.3.4,<9"
 pytest-mock = ">=3.14.0,<4"
 pytest-cov = "~=6.0.0"
 ruff = ">=0.12.8,<1"
-pyrefly = ">=0.27.2,<1"
+ty = ">=0.0.2,<1"
 [tool.pixi.feature.ci-basics.pypi-dependencies]
 
 [tool.pixi.feature.dagster-basics.pypi-dependencies]
@@ -189,7 +189,6 @@ cwd = "./projects/dagster-slurm-example"
 # For now, deliberately not inject workload here (fast mode)
 cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
 description = "Pack dev environment"
-
 depends-on = [
   "build-shared-library",
   "build-integrations",
@@ -197,14 +196,24 @@ depends-on = [
   "build-example",
 ]
 
+[tool.pixi.tasks.pack-only]
+# Same as pack but without rebuilding - for cache-friendly repeated runs
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
+description = "Pack dev environment (no rebuild, cache-friendly)"
+
 [tool.pixi.tasks.pack-aarch]
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable  --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch"
 depends-on = [
   "build-shared-library",
   "build-integrations",
   "build-hpc-workload",
 ]
+
+[tool.pixi.tasks.pack-only-aarch]
+# Same as pack-aarch but without rebuilding - for cache-friendly repeated runs
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
+description = "Pack dev environment for aarch (no rebuild, cache-friendly)"
 
 [tool.pixi.tasks.clean]
 cmd = "pixi run -e opstooling --frozen ./scripts/cleanup_all.sh"
@@ -228,7 +237,7 @@ description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && pyrefly check projects --project-excludes 'projects/*/.pixi' --python-interpreter-path $PIXI_PROJECT_ROOT/.pixi/envs/dev/bin/python3.12"
+cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && ty check ./projects"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]
@@ -277,22 +286,12 @@ filterwarnings = [
 markers = ["data: tests using real input data"]
 
 
-[tool.pyrefly]
-project-includes = [
-  "projects/dagster-slurm-example/dagster_slurm_example",
-  "projects/dagster-slurm-example-shared/dagster_slurm_example_shared",
-  "projects/dagster-slurm-example/dagster_slurm_example_tests",
-]
-project-excludes = [
-  "**/build/**",
-  "**/.ruff_cache/**",
-  "**/.pixi/**",
-  "**/dist/**",
-]
-
-search-path = [
+[tool.ty.environment]
+python-version = "3.12"
+root = [
   "projects/dagster-slurm-example",
   "projects/dagster-slurm-example-shared",
 ]
 
-python-version = "3.12.11"
+[tool.ty.src]
+exclude = ["**/build/**", "**/.ruff_cache/**", "**/.pixi/**", "**/dist/**"]

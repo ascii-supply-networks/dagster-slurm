@@ -48,6 +48,12 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "compute_config": {
         "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
         "debug_mode": False,
+        # Only base packages affect cache key - workload-specific packages excluded
+        # so changes to dagster_slurm_example_hpc_workload don't invalidate the cache
+        "cache_inject_globs": [
+            "../dist/dagster_slurm-*-py3-none-any.whl",
+            "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+        ],
     },
     "launchers": {
         "bash": {},
@@ -97,6 +103,12 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "auto_detect_platform": False,
         "pack_platform": "linux-64",
         "debug_mode": False,
+        # Only base packages affect cache key - workload-specific packages excluded
+        # so changes to dagster_slurm_example_hpc_workload don't invalidate the cache
+        "cache_inject_globs": [
+            "../dist/dagster_slurm-*-py3-none-any.whl",
+            "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+        ],
     },
     "launchers": {
         "bash": {},
@@ -421,6 +433,10 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
                 "CI_DEPLOYED_ENVIRONMENT_PATH to be set"
             )
         config["compute_config"]["pre_deployed_env_path"] = pre_deployed_env_path
+
+        # In production, both environment AND payloads are pre-deployed via CI/CD
+        # Skip payload upload - paths will be derived as {pre_deployed_env_path}/scripts/{filename}
+        config["compute_config"]["default_skip_payload_upload"] = True
 
     # Step 2.3: Apply execution mode modifiers based on environment name
     # Priority order: hetjob > cluster_reuse > session > default

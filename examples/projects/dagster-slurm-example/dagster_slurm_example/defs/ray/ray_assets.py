@@ -1,13 +1,14 @@
 """Assets using Ray launcher for distributed compute."""
 
 import dagster as dg
-from dagster_slurm import ComputeResource, RayLauncher
+from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
 
 
 @dg.asset
 def distributed_training(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
+    config: SlurmRunConfig,
 ):
     """Train model using Ray for distributed compute.
     In dev: starts local Ray
@@ -26,6 +27,7 @@ def distributed_training(
     completed_run = compute_ray.run(
         context=context,
         payload_path=script_path,
+        config=config,
         launcher=ray_launcher,
         extra_env={
             "MODEL_CONFIG": "config.yaml",
@@ -44,6 +46,7 @@ def distributed_training(
 def distributed_inference(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
+    config: SlurmRunConfig,
 ):
     """Run inference using Ray.
     In session mode, this reuses the same Ray cluster from training!
@@ -82,6 +85,7 @@ def distributed_inference(
     completed_run = compute_ray.run(
         context=context,
         payload_path=script_path,
+        config=config,
         launcher=ray_launcher,
         extra_env={
             "MODEL_PATH": model_path,

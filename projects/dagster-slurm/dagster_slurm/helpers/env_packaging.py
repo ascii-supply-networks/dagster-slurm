@@ -1,10 +1,13 @@
 """Environment packaging using pixi pack."""
 
+import glob
 import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
+
+import hashlib
 
 from dagster import get_dagster_logger
 
@@ -22,7 +25,7 @@ def pack_environment_with_pixi(
 
     Args:
         project_dir: Path to run pixi from (uses CWD if None, pixi walks up to find pixi.toml)
-        pack_cmd: Custom pack command (defaults to ["pixi", "run", "--frozen", "pack"])
+        pack_cmd: Custom pack command (defaults to ["pixi", "run", "--frozen", "pack-only"])
         timeout: Command timeout in seconds (default: 600)
 
     Returns:
@@ -38,7 +41,7 @@ def pack_environment_with_pixi(
     logger = get_dagster_logger()
 
     if pack_cmd is None:
-        pack_cmd = ["pixi", "run", "--frozen", "pack"]
+        pack_cmd = ["pixi", "run", "--frozen", "pack-only"]
 
     # Use provided directory or current working directory
     # pixi will automatically walk up to find pixi.toml
@@ -136,6 +139,127 @@ def pack_environment_with_pixi(
         f"Packed environment: {pack_file} ({_format_size(pack_file.stat().st_size)})"
     )
     return pack_file
+
+
+def _extract_inject_patterns(pack_cmd: Sequence[str]) -> list[str]:
+    """Extract --inject argument values from a pack command."""
+    patterns = []
+    i = 0
+    while i < len(pack_cmd):
+        arg = pack_cmd[i]
+        if arg == "--inject" and i + 1 < len(pack_cmd):
+            patterns.append(pack_cmd[i + 1])
+            i += 2
+        elif arg.startswith("--inject="):
+            patterns.append(arg[len("--inject=") :])
+            i += 1
+        else:
+            i += 1
+    return patterns
+
+
+def _resolve_and_hash_inject_files(
+    patterns: Sequence[str],
+    digest: "hashlib._Hash",
+    logger,
+) -> int:
+    """Resolve glob patterns and hash file contents. Returns count of files hashed.
+
+    For each pattern, only the most recently modified file is hashed to ensure
+    stable cache keys when multiple versions exist (e.g., old wheel files in dist/).
+    """
+    files_hashed = 0
+    for pattern in patterns:
+        matched_files = glob.glob(pattern)
+        if not matched_files:
+            logger.debug(f"No files matched inject pattern: {pattern}")
+            # Still include the pattern itself so different patterns yield different keys
+            digest.update(f"pattern:{pattern}".encode())
+            continue
+
+        # Only hash the most recent file per pattern to avoid cache instability
+        # when old versions accumulate (e.g., multiple wheel versions in dist/)
+        paths = [Path(f) for f in matched_files if Path(f).is_file()]
+        if not paths:
+            digest.update(f"pattern:{pattern}".encode())
+            continue
+
+        most_recent = max(paths, key=lambda p: p.stat().st_mtime)
+        try:
+            digest.update(most_recent.read_bytes())
+            files_hashed += 1
+            logger.debug(f"Hashed inject file (most recent): {most_recent}")
+            if len(paths) > 1:
+                logger.debug(
+                    f"  Skipped {len(paths) - 1} older file(s) matching pattern: {pattern}"
+                )
+        except OSError as e:
+            logger.warning(f"Could not read inject file {most_recent}: {e}")
+            # Include path so missing files don't silently match
+            digest.update(f"unreadable:{most_recent}".encode())
+    return files_hashed
+
+
+def compute_env_cache_key(
+    pack_cmd: Sequence[str],
+    lockfile: Path = Path("pixi.lock"),
+    cache_inject_globs: Optional[Sequence[str]] = None,
+) -> Optional[str]:
+    """Compute a stable cache key for the packed environment.
+
+    Uses the pixi lockfile contents, the pack command, and the contents of
+    injected files to derive a short, reproducible identifier.
+
+    Args:
+        pack_cmd: The pixi-pack command (e.g., ["pixi-pack", "--inject", "dist/*.whl", ...])
+        lockfile: Path to the pixi.lock file (default: pixi.lock in current directory)
+        cache_inject_globs: Optional list of inject patterns whose file contents should
+            affect the cache key. If None, all --inject patterns from pack_cmd are hashed.
+            Use this to exclude workload-specific packages that change frequently but
+            shouldn't invalidate the base environment cache.
+
+            Example: To only cache-invalidate on base library changes:
+                cache_inject_globs=["../dist/dagster_slurm-*.whl",
+                                    "projects/shared/dist/*.conda"]
+
+    Returns:
+        A 16-character hex string cache key, or None if lockfile is missing.
+    """
+    logger = get_dagster_logger()
+
+    if not lockfile.exists():
+        logger.debug(
+            "Skipping environment cache key computation: lockfile %s does not exist",
+            lockfile,
+        )
+        return None
+
+    digest = hashlib.sha256()
+
+    # 1. Hash lockfile contents
+    digest.update(lockfile.read_bytes())
+
+    # 2. Hash the pack command (captures platform, environment name, etc.)
+    digest.update("::".join(pack_cmd).encode())
+
+    # 3. Hash contents of inject files
+    if cache_inject_globs is not None:
+        # User specified which inject patterns should affect cache
+        inject_patterns = list(cache_inject_globs)
+        logger.debug(
+            f"Using explicit cache_inject_globs: {inject_patterns} "
+            f"(other --inject args won't affect cache key)"
+        )
+    else:
+        # Default: hash all --inject files from the pack command
+        inject_patterns = _extract_inject_patterns(pack_cmd)
+
+    if inject_patterns:
+        files_hashed = _resolve_and_hash_inject_files(inject_patterns, digest, logger)
+        logger.debug(f"Hashed {files_hashed} inject file(s) for cache key")
+
+    # Shorten for readable directory names
+    return digest.hexdigest()[:16]
 
 
 def _extract_pack_path_from_output(output: str, base_dir: Path) -> Optional[Path]:
