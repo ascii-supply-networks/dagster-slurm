@@ -302,7 +302,7 @@ dev = [
     { name = "python-semantic-release", specifier = "~=10.3.1" },
     { name = "ruff", specifier = ">=0.12.8,<1" },
     { name = "taplo", specifier = ">=0.9.3,<0.10" },
-    { name = "ty", specifier = ">=0.0.2,<1" },
+    { name = "ty", specifier = ">=0.0.4,<1" },
     { name = "yamllint", specifier = ">=1.35.1,<2" },
 ]
 
