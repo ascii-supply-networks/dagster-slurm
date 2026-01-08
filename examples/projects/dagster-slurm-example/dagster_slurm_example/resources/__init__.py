@@ -160,6 +160,20 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "num_nodes": 1,
         },
     },
+    "musica": {
+        "slurm_queue_config": {
+            "partition": "zen4_0768_h100x4",
+            "qos": "zen4_0768_h100x4",
+            "gpus_per_node": 1,
+            "num_nodes": 1,
+        },
+        "slurm_session_config": {
+            "partition": "zen4_0768_h100x4",
+            "qos": "zen4_0768_h100x4",
+            "gpus_per_node": 1,
+            "num_nodes": 1,
+        },
+    },
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
         "slurm_queue_config": {
