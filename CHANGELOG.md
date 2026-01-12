@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.0-rc.1 (2026-01-12)
+
+### Features
+
+- Musica ([#88](https://github.com/ascii-supply-networks/dagster-slurm/pull/88),
+  [`40b6065`](https://github.com/ascii-supply-networks/dagster-slurm/commit/40b6065b85a09cb998af5526de15fc299cdf9c31))
+
+
 ## v1.9.0 (2025-12-19)
 
 ### Bug Fixes

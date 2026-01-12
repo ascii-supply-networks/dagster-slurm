@@ -1663,8 +1663,8 @@ packages:
   - flaky ; extra == 'test'
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.9.0
-  sha256: a6cf2e70092b337563b373d68d994161d013239f98c7cd3ab6ebecfa886e829d
+  version: 1.9.0rc1
+  sha256: 929b99c2c50d1d22c8e391d74eb74dfe447358b94c489f5333ee93872a88afa5
   requires_dist:
   - dagster>=1.11.7
   - dagster-pipes>=1.11.7
@@ -1672,6 +1672,7 @@ packages:
   - pexpect~=4.9.0
   - ray>=2.48.0 ; extra == 'ray'
   requires_python: '>=3.12,<3.13'
+  editable: true
 - pypi: https://files.pythonhosted.org/packages/55/e2/2537ebcff11c1ee1ff17d8d0b6f4db75873e3b0fb32c2d4a2ee31ecb310a/docstring_parser-0.17.0-py3-none-any.whl
   name: docstring-parser
   version: 0.17.0
