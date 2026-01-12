@@ -157,6 +157,22 @@ ssh -J <<your_user>>@vmos.vsc.ac.at <<your_user>>@vsc5.vsc.ac.at \
 
 The `Partition`, `QOS`, and `Reservation` columns should match your `.env`.
 
+#### Ray launcher overrides
+
+If your cluster needs OS-level tweaks before Ray starts (for example, higher file-descriptor limits), configure `pre_start_commands` on the Ray launcher. To pass extra arguments to `ray start` (for example, disabling the dashboard), use `ray_start_args`:
+
+```python
+"launchers": {
+    "ray": {
+        "pre_start_commands": [
+            "ulimit -n 65536",
+        ],
+    },
+}
+```
+
+You can attach these overrides inside a site profile (see `SUPERCOMPUTER_SITE_OVERRIDES` in the example resources).
+
 
 ## contributing
 

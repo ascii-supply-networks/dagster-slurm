@@ -208,4 +208,10 @@ python-version = "3.12"
 root = ["projects"]
 
 [tool.ty.src]
-exclude = ["**/.pixi/**", "**/.venv/**", "**/.ruff_cache/**", "**/build/**", "**/dist/**"]
+exclude = [
+  "**/.pixi/**",
+  "**/.venv/**",
+  "**/.ruff_cache/**",
+  "**/build/**",
+  "**/dist/**",
+]
