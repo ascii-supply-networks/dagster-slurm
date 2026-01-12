@@ -36,6 +36,10 @@ class RayLauncher(ComputeLauncher):
     object_store_memory_gb: Optional[int] = Field(
         default=None, description="Object store size (None = auto)"
     )
+    ray_start_args: list[str] = Field(
+        default_factory=list,
+        description="Extra arguments to pass to ray start on the head node.",
+    )
     redis_password: Optional[str] = Field(
         default=None, description="Redis password (None = auto-generate with uuidgen)"
     )
@@ -48,6 +52,10 @@ class RayLauncher(ComputeLauncher):
     )
     worker_startup_delay: int = Field(
         default=1, description="Seconds between worker starts"
+    )
+    pre_start_commands: list[str] = Field(
+        default_factory=list,
+        description="Optional shell commands to run before ray start (e.g., ulimit).",
     )
     worker_cpu_bind: Optional[str] = Field(
         default=None,
@@ -67,6 +75,17 @@ class RayLauncher(ComputeLauncher):
         default="hash_jobid",
         description="'fixed' or 'hash_jobid' for head/dashboard ports.",
     )
+
+    def _render_override_block(self, date_fmt: str) -> str:
+        if not self.pre_start_commands:
+            return ""
+        lines = []
+        for command in self.pre_start_commands:
+            lines.append(
+                f'echo "[$({date_fmt})] Applying pre-start command: {command}"'
+            )
+            lines.append(command)
+        return "\n    ".join(lines)
 
     def prepare_execution(
         self,
@@ -152,7 +171,9 @@ class RayLauncher(ComputeLauncher):
     else
         echo "[$({date_fmt})] Single-node mode detected. Starting local Ray cluster..."
     """
-            local_lines = self._generate_local_template(date_fmt, activation_script)
+            local_lines = self._generate_local_template(
+                date_fmt, activation_script, working_dir
+            )
             script += local_lines
 
             script += f"""
@@ -175,9 +196,12 @@ class RayLauncher(ComputeLauncher):
         )
 
     def _generate_local_template(
-        self, date_fmt: str, activation_script: Optional[str]
+        self, date_fmt: str, activation_script: Optional[str], working_dir: str
     ) -> str:
         """Generate Ray startup for local (single-node) mode."""
+        override_block = self._render_override_block(date_fmt)
+        if override_block:
+            override_block = f"    {override_block}\n"
         # Build object store argument if specified
         obj_store = ""
         if self.object_store_memory_gb is not None:
@@ -202,7 +226,34 @@ class RayLauncher(ComputeLauncher):
         port=$(( {self.ray_port} + off ))
         dash_port=$(( {self.dashboard_port} + off ))
     fi
-    # Start local Ray cluster
+    # Resolve head address for local mode (prefer Slurm node IP when available)
+    head_bind_addr="127.0.0.1"
+    if [[ -n "${{SLURM_JOB_ID:-}}" && "{str(self.use_head_ip).lower()}" == "true" ]]; then
+      head_node_name="$(hostname)"
+      if command -v getent >/dev/null 2>&1; then
+        ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}')
+        if [[ -n "$ipv4" ]]; then
+          head_bind_addr="$ipv4"
+        else
+          ipv6=$(getent ahostsv6 "$head_node_name" | awk 'NR==1{{print $1}}')
+          if [[ -n "$ipv6" ]]; then head_bind_addr="$ipv6"; fi
+        fi
+      elif command -v hostname >/dev/null 2>&1; then
+        ipv4=$(hostname -I 2>/dev/null | awk '{{print $1}}')
+        if [[ -n "$ipv4" ]]; then head_bind_addr="$ipv4"; fi
+      fi
+    fi
+    head_adv="$head_bind_addr"
+    if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
+    # Use shared temp dir on Slurm so logs survive after job ends
+    temp_dir_arg=""
+    if [[ -n "${{SLURM_JOB_ID:-}}" ]]; then
+      ray_tmp_dir="$HOME/dagster_runs/ray_tmp/${{SLURM_JOB_ID}}"
+      mkdir -p "$ray_tmp_dir"
+      export RAY_TMPDIR="$ray_tmp_dir"
+      temp_dir_arg="--temp-dir=$ray_tmp_dir"
+    fi
+{override_block}    # Start local Ray cluster
     echo "[$({date_fmt})] Starting local Ray cluster"
     # Cleanup function - MUST be defined before trap
     cleanup_ray() {{
@@ -214,11 +265,12 @@ class RayLauncher(ComputeLauncher):
     trap cleanup_ray EXIT SIGINT SIGTERM
     # Start Ray head
     unset RAY_ADDRESS 2>/dev/null || true
-    export RAY_DASHBOARD_ADDRESS="http://127.0.0.1:$dash_port"
-    ray start --head --port=$port \
+    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
+    export RAY_NODE_IP_ADDRESS="$head_bind_addr"
+    ray start --head --port=$port --node-ip-address="$head_bind_addr" \
         --dashboard-host={self.dashboard_host} --dashboard-port=$dash_port \
-        --num-gpus={self.num_gpus_per_node} {obj_store}
-    export RAY_ADDRESS="127.0.0.1:$port"
+        --num-gpus={self.num_gpus_per_node} {obj_store} {(" " + " ".join(self.ray_start_args)) if self.ray_start_args else ""} $temp_dir_arg
+    export RAY_ADDRESS="$head_adv:$port"
     # Wait for Ray to be ready
     echo "[$({date_fmt})] Waiting for Ray to be ready..."
     for i in $(seq 1 {self.head_startup_timeout}); do
@@ -268,17 +320,21 @@ class RayLauncher(ComputeLauncher):
             cpu_bind_option = ""
         dg.get_dagster_logger().info(f"Using CPU bind of: {cpu_bind_option}")
 
-        head_args = [
-            "--head",
-            "-v",
-            "--node-ip-address=$head_bind_addr",
-            "--port=$port",
-            f"--dashboard-host={self.dashboard_host}",
-            "--dashboard-port=$dash_port",
-            f"--num-gpus={self.num_gpus_per_node}",
-            "--redis-password=$redis_password",
-            f"--temp-dir={temp_dir_path}",
-        ] + common_args
+        head_args = (
+            [
+                "--head",
+                "-v",
+                "--node-ip-address=$head_bind_addr",
+                "--port=$port",
+                f"--dashboard-host={self.dashboard_host}",
+                "--dashboard-port=$dash_port",
+                f"--num-gpus={self.num_gpus_per_node}",
+                "--redis-password=$redis_password",
+                f"--temp-dir={temp_dir_path}",
+            ]
+            + common_args
+            + self.ray_start_args
+        )
 
         worker_args = [
             "-v",
@@ -298,6 +354,7 @@ class RayLauncher(ComputeLauncher):
     redis_password="$3"
     echo "Worker on $(hostname) activating environment: $activation_script"
     source "$activation_script"
+    {self._render_override_block(date_fmt)}
     cleanup_node() {{
         echo "Worker on $(hostname) shutting down..."
         ray stop --force 2>/dev/null || true
@@ -318,6 +375,7 @@ class RayLauncher(ComputeLauncher):
     echo "Activating environment: $activation_script"
     echo "======================================="
     source "$activation_script"
+    {self._render_override_block(date_fmt)}
 
     # Define all variables first
     # Figure out ports 

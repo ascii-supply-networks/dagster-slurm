@@ -15,7 +15,7 @@ def main():
     context.log.info("Starting Ray training...")
     print("Hello from Ray...")
     # Ray is already initialized by launcher
-    context.log.info(f"Ray address: {ray.get_runtime_context().gcs_address}")  # type: ignore
+    context.log.info(f"Ray address: {ray.get_runtime_context().gcs_address}")
     # Distributed training
     num_chunks = 10
     futures = [train_model_chunk.remote(i) for i in range(num_chunks)]

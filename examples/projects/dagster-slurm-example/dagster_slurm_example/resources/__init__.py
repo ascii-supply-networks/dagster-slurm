@@ -173,6 +173,12 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "gpus_per_node": 1,
             "num_nodes": 1,
         },
+        "launchers": {
+            "ray": {
+                "pre_start_commands": ["ulimit -n 65536"],
+                # "ray_start_args": ["--include-dashboard=false"],
+            }
+        },
     },
     # Leonardo (CINECA) runs directly on the edge node without an extra hop.
     "leonardo": {
@@ -296,7 +302,7 @@ def get_dagster_deployment_environment(
         return environment
     except ValueError as e:
         # 4. Handle the case where the string is not a valid environment
-        valid_envs = [e.value for e in Environment]  # type: ignore
+        valid_envs = [e.value for e in Environment]
         raise ValueError(
             f"'{deployment}' is not a valid environment. "
             f"Please set {deployment_key} to one of: {valid_envs}"

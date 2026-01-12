@@ -20,7 +20,7 @@ def main():  # noqa: C901
     model_path = os.environ.get("MODEL_PATH")
     context.log.info(f"Loading model from: {model_path}")
 
-    if not ray.is_initialized():  # type: ignore
+    if not ray.is_initialized():
         context.log.info("Connecting to Ray cluster...")
 
         # Get connection parameters from environment
@@ -42,7 +42,7 @@ def main():  # noqa: C901
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             try:
-                ray.init(**init_kwargs)  # type: ignore
+                ray.init(**init_kwargs)
                 context.log.info("Connected to Ray cluster.")
                 break
             except Exception as e:

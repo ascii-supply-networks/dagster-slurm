@@ -32,4 +32,8 @@ DAGSTER_DEPLOYMENT=production_supercomputer # or staging_supercomputer
 
 With the variables defined, restart your Dagster code location. For a quick validation, run `sinfo` on the login node to confirm the partition name and `srun` with the parameters above to verify access before launching Dagster jobs.
 
+## Ray launcher note
+
+Ray requires a higher file-descriptor limit on MUSICA. Configure the Ray launcher with `pre_start_commands` so it runs `ulimit -n 65536` before `ray start`. If the Ray dashboard fails to start on MUSICA, add `ray_start_args: ["--include-dashboard=false"]`. In the example repo, this lives under `SUPERCOMPUTER_SITE_OVERRIDES["musica"]` in `examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py`.
+
 For additional information about MUSICA, see the [MUSICA](https://docs.asc.ac.at/musica_test/).
