@@ -186,9 +186,8 @@ cmd = "pixi build -o dist"
 cwd = "./projects/dagster-slurm-example"
 
 [tool.pixi.tasks.pack]
-# --ignore-pypi-non-wheel
 # For now, deliberately not inject workload here (fast mode)
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
 description = "Pack dev environment"
 depends-on = [
   "build-shared-library",
@@ -199,11 +198,11 @@ depends-on = [
 
 [tool.pixi.tasks.pack-only]
 # Same as pack but without rebuilding - for cache-friendly repeated runs
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
 description = "Pack dev environment (no rebuild, cache-friendly)"
 
 [tool.pixi.tasks.pack-aarch]
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch"
 depends-on = [
   "build-shared-library",
@@ -213,7 +212,7 @@ depends-on = [
 
 [tool.pixi.tasks.pack-only-aarch]
 # Same as pack-aarch but without rebuilding - for cache-friendly repeated runs
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch (no rebuild, cache-friendly)"
 
 [tool.pixi.tasks.clean]
