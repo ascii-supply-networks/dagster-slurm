@@ -21,11 +21,11 @@ services:
 
 
   slurmdbd:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
     build:
       context: services/slurm
       args:
-        SLURM_TAG: ${SLURM_TAG:-slurm-25-05-3-1}
+        SLURM_TAG: ${SLURM_TAG:-slurm-25-11-2-1}
     command: ["slurmdbd"]
     container_name: slurmdbd
     hostname: slurmdbd
@@ -49,7 +49,7 @@ services:
       start_period: 10s
 
   slurmctld:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
     command: ["slurmctld"]
     container_name: slurmctld
     hostname: slurmctld
@@ -84,7 +84,7 @@ services:
       start_period: 15s
 
   c1:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
     command: ["slurmd"]
     hostname: c1
     container_name: c1
@@ -111,7 +111,7 @@ services:
     
 
   c2:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
     command: ["slurmd"]
     hostname: c2
     container_name: c2

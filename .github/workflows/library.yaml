@@ -19,7 +19,7 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
-  SLURM_VERSION: 25-05-3-1
+  SLURM_VERSION: 25-11-2-1
 
 jobs:
   validate-pr:
