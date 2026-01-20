@@ -33,7 +33,7 @@ Maybe this project can support making HPC systems more accessible.**
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-docker compose up -d --build
+docker compose up
 cd examples
 ```
 

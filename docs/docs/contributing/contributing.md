@@ -72,7 +72,7 @@ cd examples pixi update
 Start a local slurm cluster via
 
 ```bash
-docker compose up --build -d
+docker compose up
 ssh submitter@localhost -p 2223
 # password: submitter
 sinfo

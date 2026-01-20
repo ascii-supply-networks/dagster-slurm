@@ -26,7 +26,7 @@ Once the image is built, deploy the cluster with the default version of slurm
 using Docker Compose:
 
 ```bash
-docker compose up -d --build
+docker compose up
 
 ssh submitter@localhost -p 2223
 ```
