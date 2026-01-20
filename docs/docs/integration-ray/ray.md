@@ -157,6 +157,11 @@ Ray workers inherit that environment automatically.
 - Enable the Ray dashboard by exposing the web UI through SSH tunnelling (`ray_args=["--dashboard-host=0.0.0.0"]`), then forward the port from the edge node.
 - Slurm usage metrics (CPU efficiency, memory high-water mark, elapsed time) appear in the asset materialization metadata automatically.
 
+## Real-world examples
+
+- **[Document processing with docling](./docling-example.md)** – Quick start guide for PDF to markdown conversion
+  - [Full application documentation](../applications/document-preprocessing-docling.md) with architecture, scaling, and troubleshooting
+
 ## Troubleshooting
 
 - **Cluster never starts** – Ensure `ray` is installed in the packed environment and that your Slurm partition allows the requested CPUs/GPUs. Check the job logs under `${SLURM_DEPLOYMENT_BASE_PATH}/.../run.log`.

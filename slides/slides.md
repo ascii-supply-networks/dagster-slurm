@@ -343,6 +343,398 @@ if __name__ == "__main__":
 ---
 transition: slide-left
 layout: intro
+class: bg-gradient-to-br from-purple-900 to-indigo-900 text-white
+---
+
+# Real-world example
+## Processing 10,000 PDFs with Ray + Docling
+
+<div class="mt-8 text-xl opacity-90">
+Turn any document corpus into structured markdown at HPC scale
+</div>
+
+<style>
+h1 {
+  font-size: 3rem;
+  font-weight: 800;
+}
+h2 {
+  font-size: 1.5rem;
+  font-weight: 400;
+  opacity: 0.9;
+}
+</style>
+
+---
+transition: fade
+layout: two-cols
+---
+
+# The challenge
+
+<div class="space-y-4 text-lg">
+
+**📚 Document Processing at Scale**
+- 10,000+ scientific PDFs need conversion to markdown
+- Complex layouts, figures, equations
+- Current approach: serial processing ~50 docs/hour
+
+**⏱️ Time constraints**
+- Single machine: **200+ hours**
+- Need results for analysis pipeline
+
+**💰 Resource requirements**
+- Needs GPUs for OCR acceleration
+- Can't afford dedicated cloud infrastructure
+
+</div>
+
+::right::
+
+<div class="mt-12">
+
+```mermaid
+%%{init:{"theme":"dark","themeVariables":{"primaryColor":"#ec4899","primaryTextColor":"#fff","lineColor":"#a855f7"}}}%%
+graph TD
+    A[10,000 PDFs] -->|Serial| B[Single Machine]
+    B -->|50 docs/hr| C[200+ hours]
+
+    A -->|Parallel| D[HPC Cluster]
+    D -->|Ray + 32 cores| E[< 2 hours]
+
+    style A fill:#6366f1
+    style E fill:#10b981
+    style C fill:#ef4444
+```
+
+<div class="mt-8 text-center text-2xl font-bold">
+🎯 Goal: < 2 hours using HPC
+</div>
+
+</div>
+
+---
+transition: slide-left
+---
+
+# The solution: Dagster + Slurm + Ray + Docling
+
+<div class="grid grid-cols-3 gap-4 mt-8">
+
+<div class="border-2 border-blue-400 rounded-lg p-4 bg-blue-950/30">
+  <div class="text-3xl mb-2">🎭</div>
+  <div class="font-bold text-blue-300">Dagster</div>
+  <div class="text-sm mt-2 opacity-80">
+    Orchestration & observability
+  </div>
+</div>
+
+<div class="border-2 border-purple-400 rounded-lg p-4 bg-purple-950/30">
+  <div class="text-3xl mb-2">🖥️</div>
+  <div class="font-bold text-purple-300">Slurm + HPC</div>
+  <div class="text-sm mt-2 opacity-80">
+    Resource allocation & scheduling
+  </div>
+</div>
+
+<div class="border-2 border-pink-400 rounded-lg p-4 bg-pink-950/30">
+  <div class="text-3xl mb-2">⚡</div>
+  <div class="font-bold text-pink-300">Ray</div>
+  <div class="text-sm mt-2 opacity-80">
+    Distributed parallel processing
+  </div>
+</div>
+
+</div>
+
+<div class="border-2 border-green-400 rounded-lg p-4 bg-green-950/30 mt-4">
+  <div class="text-3xl mb-2 inline-block">📄</div>
+  <div class="font-bold text-green-300 inline-block ml-2">Docling</div>
+  <div class="text-sm mt-2 opacity-80">
+    High-quality PDF → Markdown conversion with OCR
+  </div>
+</div>
+
+<div class="mt-8 text-center text-xl">
+  <span class="bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 text-transparent bg-clip-text font-bold">
+    Same code runs locally for development, on HPC for production
+  </span>
+</div>
+
+---
+transition: fade
+---
+
+# The code: Dagster asset
+
+````md magic-move {lines: true}
+```python
+# Step 1: Define the asset
+import dagster as dg
+from dagster_slurm import ComputeResource, RayLauncher
+
+@dg.asset
+def process_documents_with_docling(
+    context: dg.AssetExecutionContext,
+    compute_ray: ComputeResource,
+):
+    """Process 10,000 PDFs using Ray and Docling."""
+
+    script_path = dg.file_relative_path(__file__, "../workloads/process_documents.py")
+
+    completed = compute_ray.run(
+        context=context,
+        payload_path=script_path,
+        launcher=RayLauncher(num_gpus_per_node=0),  # CPU for now
+        extra_env={
+            "INPUT_GLOB": "data/**/*.pdf",      # 10,000 PDFs
+            "NUM_WORKERS": "32",                # 32 parallel workers
+            "BATCH_SIZE": "8",                  # Process 8 at a time
+        },
+    )
+
+    yield from completed.get_results()
+```
+
+```python
+# Step 2: Scale it up for HPC
+@dg.asset
+def process_documents_with_docling(
+    context: dg.AssetExecutionContext,
+    compute_ray: ComputeResource,
+):
+    """Process 10,000 PDFs using Ray and Docling."""
+
+    completed = compute_ray.run(
+        context=context,
+        payload_path=script_path,
+        launcher=RayLauncher(num_gpus_per_node=1),   # Enable GPUs!
+        extra_env={
+            "INPUT_GLOB": "data/**/*.pdf",
+            "NUM_WORKERS": "128",                     # 4 nodes × 32 cores
+            "BATCH_SIZE": "16",                       # Larger batches
+        },
+        extra_slurm_opts={
+            "nodes": 4,           # 4-node Ray cluster
+            "cpus_per_task": 32,  # 32 CPUs per node
+            "mem": "128G",        # 128GB per node
+            "gres": "gpu:1",      # 1 GPU per node for OCR
+        },
+    )
+
+    yield from completed.get_results()
+```
+````
+
+---
+transition: fade
+---
+
+# The payload: Ray + Docling processing
+
+```python {1-4|6-12|14-21|23-30|all}
+import ray.data as rd
+from docling.document_converter import DocumentConverter
+from dagster_pipes import PipesContext, open_dagster_pipes
+
+def main():
+    context = PipesContext.get()
+
+    # Find all PDFs
+    files = [str(p) for p in Path().glob(context.get_extra("INPUT_GLOB"))]
+    context.log.info(f"Found {len(files)} documents to process")
+
+    # Create Ray dataset (distributed!)
+    ds = rd.from_items([{"path": p} for p in files])
+
+    # Process with Ray Data - automatic parallelization
+    result = ds.map_batches(
+        DoclingConverter(),              # Docling does the conversion
+        batch_size=int(context.get_extra("BATCH_SIZE")),
+        concurrency=int(context.get_extra("NUM_WORKERS")),  # 32-128 workers!
+    ).materialize()
+
+    # Report back to Dagster
+    total = result.count()
+    successful = result.filter(lambda r: r["ok"]).count()
+
+    context.report_asset_materialization(metadata={
+        "total_documents": total,
+        "successful": successful,
+        "duration_seconds": round(time.time() - start, 2),
+    })
+
+if __name__ == "__main__":
+    with open_dagster_pipes():  # Dagster Pipes magic ✨
+        main()
+```
+
+---
+transition: slide-up
+layout: two-cols
+class: bg-slate-950 text-white
+---
+
+# Execution flow
+
+<div class="space-y-6 mt-4">
+
+**1️⃣ Local Development**
+```bash
+cd examples/
+pixi run start
+# Materialize in UI
+```
+<div class="text-sm opacity-70">→ Processes 10 PDFs locally in ~30 seconds</div>
+
+<v-click>
+
+**2️⃣ Submit to HPC**
+```bash
+pixi run start-staging
+# Same UI, same asset
+```
+<div class="text-sm opacity-70">→ Submits Slurm job automatically</div>
+
+</v-click>
+
+<v-click>
+
+**3️⃣ Ray Cluster Startup**
+<div class="text-sm opacity-70 mt-2">
+• dagster-slurm packages environment<br>
+• Transfers via SSH<br>
+• Starts 4-node Ray cluster<br>
+• Spawns 128 workers
+</div>
+
+</v-click>
+
+<v-click>
+
+**4️⃣ Parallel Processing**
+<div class="text-sm opacity-70 mt-2">
+• Ray distributes 10,000 PDFs<br>
+• Docling converts in parallel<br>
+• Results stream back to Dagster
+</div>
+
+</v-click>
+
+</div>
+
+::right::
+
+<div class="ml-4">
+
+```mermaid
+%%{init:{"theme":"dark"}}%%
+sequenceDiagram
+    participant Dev as Developer
+    participant DG as Dagster
+    participant DS as dagster-slurm
+    participant S as Slurm
+    participant R as Ray Cluster
+    participant D as Docling
+
+    Dev->>DG: Materialize asset
+    DG->>DS: Run with RayLauncher
+    DS->>DS: Package env (pixi-pack)
+    DS->>S: sbatch job (4 nodes)
+    S->>R: Allocate & start Ray
+    R->>R: Spawn 128 workers
+
+    loop 10,000 PDFs
+        R->>D: Convert batch of PDFs
+        D->>R: Markdown results
+    end
+
+    R->>DS: Processing complete
+    DS->>DG: Report results
+    DG->>Dev: Show in UI ✅
+```
+
+<div class="mt-6 p-4 bg-green-900/30 border border-green-500 rounded">
+  <div class="font-bold text-green-300">⚡ Result</div>
+  <div class="text-2xl mt-2">10,000 PDFs → 1.5 hours</div>
+  <div class="text-sm opacity-80 mt-1">vs. 200+ hours serial</div>
+</div>
+
+</div>
+
+---
+transition: fade
+layout: center
+class: bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 text-white
+---
+
+# Why this matters
+
+<div class="grid grid-cols-2 gap-8 mt-12 text-left">
+
+<div class="space-y-4">
+  <div class="flex items-start gap-3">
+    <div class="text-3xl">🚀</div>
+    <div>
+      <div class="font-bold text-xl">133x Faster</div>
+      <div class="text-sm opacity-80">200 hours → 1.5 hours</div>
+    </div>
+  </div>
+
+  <div class="flex items-start gap-3">
+    <div class="text-3xl">💰</div>
+    <div>
+      <div class="font-bold text-xl">Cost Effective</div>
+      <div class="text-sm opacity-80">Use existing HPC allocation, no cloud spend</div>
+    </div>
+  </div>
+
+  <div class="flex items-start gap-3">
+    <div class="text-3xl">🔧</div>
+    <div>
+      <div class="font-bold text-xl">Developer Friendly</div>
+      <div class="text-sm opacity-80">Test locally, deploy to HPC unchanged</div>
+    </div>
+  </div>
+</div>
+
+<div class="space-y-4">
+  <div class="flex items-start gap-3">
+    <div class="text-3xl">📊</div>
+    <div>
+      <div class="font-bold text-xl">Full Observability</div>
+      <div class="text-sm opacity-80">Monitor progress, logs, and metrics in Dagster UI</div>
+    </div>
+  </div>
+
+  <div class="flex items-start gap-3">
+    <div class="text-3xl">🔄</div>
+    <div>
+      <div class="font-bold text-xl">Automatic Retries</div>
+      <div class="text-sm opacity-80">Failed PDFs retry automatically</div>
+    </div>
+  </div>
+
+  <div class="flex items-start gap-3">
+    <div class="text-3xl">📈</div>
+    <div>
+      <div class="font-bold text-xl">Scales Seamlessly</div>
+      <div class="text-sm opacity-80">10 docs to 100,000 docs, same code</div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<div class="mt-12 text-center text-2xl">
+  <span class="bg-gradient-to-r from-yellow-200 via-pink-200 to-purple-200 text-transparent bg-clip-text font-bold">
+    Modern orchestration meets supercomputer power
+  </span>
+</div>
+
+---
+transition: slide-left
+layout: intro
 ---
 
 # What is a supercomputer?

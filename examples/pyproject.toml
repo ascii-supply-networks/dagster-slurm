@@ -75,7 +75,8 @@ dagster-ray = ">=0.4.0,<1"
 pandas = ">=2.3.1,<3"
 
 [tool.pixi.feature.cluster.pypi-dependencies]
-ray = { version = "~=2.50.0", extras = ["data", "default"] }
+ray = { version = "~=2.53.0", extras = ["data", "default"] }
+docling = ">=2.68.0,<3"
 dagster-ray = ">=0.4.0,<0.25"
 dagster-pipes = "~=1.12.0"
 dagster = "~=1.12.0"
