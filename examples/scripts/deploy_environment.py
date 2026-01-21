@@ -32,6 +32,7 @@ def main():
     parser.add_argument(
         "--platform",
         help="Specify the target platform for pixi pack (e.g., 'linux-aarch64', 'linux-64').",
+        choices=["linux-64", "linux-aarch64"],
         default="linux-64",
     )
     parser.add_argument(
