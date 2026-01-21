@@ -1,6 +1,7 @@
 """Unified compute resource - main facade."""
 
 from pathlib import Path
+import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
@@ -747,6 +748,7 @@ class ComputeResource(ConfigurableResource):
             env_overrides = {}
             if self.pack_platform:
                 env_overrides["SLURM_PACK_PLATFORM"] = self.pack_platform
+            logger.debug(f"Pack command (one line): {shlex.join(pack_cmd)}")
             pack_file = pack_environment_with_pixi(
                 pack_cmd=pack_cmd, env_overrides=env_overrides or None
             )

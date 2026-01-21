@@ -1,5 +1,6 @@
 import copy
 import os
+import platform
 import shlex
 from typing import Any, Dict
 
@@ -347,6 +348,12 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     # Step 2.1: Select base config based on docker vs supercomputer
     if _is_docker_based(deployment):
         config = copy.deepcopy(DOCKER_SLURM_BASE_CONFIG)
+        # When running docker-based Slurm from ARM hosts, force linux-aarch64 packs.
+        host_arch = platform.machine().lower()
+        if host_arch in ("arm64", "aarch64"):
+            compute_cfg = config.setdefault("compute_config", {})
+            compute_cfg["auto_detect_platform"] = False
+            compute_cfg["pack_platform"] = "linux-aarch64"
         # Apply production overrides if needed
         if _is_production(deployment):
             _deep_merge(config, PRODUCTION_DOCKER_OVERRIDES)

@@ -62,6 +62,16 @@ def main() -> int:
         action="store_true",
         help="Skip missing inject artifacts instead of failing.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the pixi-pack command and exit without executing.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print detailed resolution information before running.",
+    )
     args = parser.parse_args()
 
     base_dir = Path(__file__).resolve().parents[1]
@@ -93,10 +103,13 @@ def main() -> int:
         "pyproject.toml",
     ]
 
-    print(f"Using environment: {args.env}")
-    print(f"Resolved platform: {platform_value}")
-    print(f"Inject args: {inject_args}")
+    if args.debug or args.dry_run:
+        print(f"Using environment: {args.env}")
+        print(f"Resolved platform: {platform_value}")
+        print(f"Inject args: {inject_args}")
     print(f"Running: {' '.join(cmd)}")
+    if args.dry_run:
+        return 0
     result = subprocess.run(cmd, check=False, cwd=base_dir, capture_output=True, text=True)
     if result.stdout:
         print(result.stdout)

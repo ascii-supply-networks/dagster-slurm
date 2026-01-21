@@ -2,6 +2,7 @@
 
 import platform
 import shlex
+import shlex
 import re
 import signal
 import subprocess
@@ -553,6 +554,7 @@ class SlurmPipesClient(PipesClient):
         env_overrides = {}
         if self.pack_platform:
             env_overrides["SLURM_PACK_PLATFORM"] = self.pack_platform
+        self.logger.debug(f"Pack command (one line): {shlex.join(pack_cmd)}")
         pack_file = pack_environment_with_pixi(
             pack_cmd=pack_cmd, env_overrides=env_overrides or None
         )

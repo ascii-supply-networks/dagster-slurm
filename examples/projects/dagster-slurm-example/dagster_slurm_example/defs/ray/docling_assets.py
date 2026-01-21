@@ -5,16 +5,36 @@ document processing workflows. In development, it runs locally; in production
 on Slurm clusters, it spawns a multi-node Ray cluster for parallel processing.
 """
 
+from pathlib import Path
+
 import dagster as dg
 from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
 from pydantic import Field
+
+
+def _default_docling_glob() -> str:
+    """Prefer local example data when present, otherwise use HPC default."""
+    examples_dir = Path(__file__).resolve().parents[5]
+    data_dir = examples_dir / "data"
+    if data_dir.exists() and any(data_dir.rglob("*.pdf")):
+        return str(data_dir / "**" / "*.pdf")
+    return "/home/submitter/dagster-slurm-data/**/*.pdf"
+
+
+def _default_large_docling_glob() -> str:
+    """Prefer local example data when present, otherwise use HPC large-collection path."""
+    examples_dir = Path(__file__).resolve().parents[5]
+    data_dir = examples_dir / "data"
+    if data_dir.exists() and any(data_dir.rglob("*.pdf")):
+        return str(data_dir / "**" / "*.pdf")
+    return "/home/submitter/dagster-slurm-data/large_collection/**/*.pdf"
 
 
 class DoclingRunConfig(SlurmRunConfig):
     """Configuration for docling document processing."""
 
     input_glob: str = Field(
-        default="/home/submitter/dagster-slurm-data/**/*.pdf",
+        default_factory=_default_docling_glob,
         description="Glob pattern for input PDF files to process",
     )
     output_dir: str = Field(
@@ -39,7 +59,7 @@ class LargeScaleDoclingRunConfig(SlurmRunConfig):
     """Configuration for large-scale multi-node docling processing."""
 
     input_glob: str = Field(
-        default="/home/submitter/dagster-slurm-data/large_collection/**/*.pdf",
+        default_factory=_default_large_docling_glob,
         description="Glob pattern for input PDF files to process",
     )
     output_dir: str = Field(
@@ -135,89 +155,14 @@ def process_documents_with_docling(
             # Single node = local Ray mode
             # Multi-node = distributed Ray cluster
             "nodes": 1,  # Increase for larger workloads
-            "cpus_per_task": 4,  # CPUs per Ray worker
-            "mem": "8G",  # Memory per node
+            "cpus_per_task": 2,  # CPUs per Ray worker
+            "mem": "4G",  # Memory per node
             # Uncomment for GPU-accelerated OCR:
             # "gres": "gpu:1",
         },
     )
 
     yield from completed_run.get_results()
-
-
-@dg.asset(
-    deps=[process_documents_with_docling],
-    description="Aggregate and analyze docling processing results",
-    group_name="document_processing",
-)
-def analyze_docling_results(  # noqa: C901
-    context: dg.AssetExecutionContext,
-):
-    """Analyze results from document processing and generate summary statistics.
-
-    This asset demonstrates downstream processing of docling results,
-    showing how to chain multiple assets in a document processing pipeline.
-
-    Args:
-        context: Dagster execution context
-    """
-    # Get metadata from upstream asset
-    event_record = context.instance.get_latest_materialization_event(
-        asset_key=process_documents_with_docling.key
-    )
-
-    if (
-        not event_record
-        or not event_record.asset_materialization
-        or not event_record.asset_materialization.metadata
-    ):
-        raise dg.DagsterError(
-            f"Could not find metadata from upstream asset '{process_documents_with_docling.key}'. "
-            "Please ensure the upstream asset has been materialized."
-        )
-
-    metadata = event_record.asset_materialization.metadata
-
-    # Extract metadata values properly
-    def get_int_value(key: str, default: int = 0) -> int:
-        val = metadata.get(key)
-        if val is None:
-            return default
-        return int(val.value) if hasattr(val, "value") else default
-
-    def get_str_value(key: str, default: str = "") -> str:
-        val = metadata.get(key)
-        if val is None:
-            return default
-        return str(val.value) if hasattr(val, "value") else default
-
-    total_docs = get_int_value("total_documents", 0)
-    successful = get_int_value("successful", 0)
-    failed = get_int_value("failed", 0)
-    output_dir = get_str_value("output_directory", "")
-
-    context.log.info(
-        f"Analyzing results: {successful}/{total_docs} documents processed successfully, "
-        f"{failed} failed. Output: {output_dir}"
-    )
-
-    # Calculate success rate
-    success_rate = (successful / total_docs * 100) if total_docs > 0 else 0.0
-
-    context.log.info(f"Analysis complete: {success_rate:.2f}% success rate")
-
-    # Return materialization with analysis results
-    yield dg.Output(
-        value=None,
-        metadata={
-            "success_rate_percent": round(success_rate, 2),
-            "total_documents": total_docs,
-            "successful": successful,
-            "failed": failed,
-            "output_directory": output_dir,
-            "status": "healthy" if success_rate > 95 else "needs_attention",
-        },
-    )
 
 
 @dg.asset(
@@ -283,10 +228,10 @@ def process_large_document_collection(
         },
         extra_slurm_opts={
             # Multi-node configuration
-            "nodes": 4,  # Multiple nodes for distributed processing
-            "cpus_per_task": 4,
-            "mem": "16G",
-            "time": "02:00:00",  # 2-hour time limit
+            "nodes": 2,  # Multiple nodes for distributed processing
+            "cpus_per_task": 2,
+            "mem": "4G",
+            "time": "01:00:00",  # 1-hour time limit
         },
     )
 

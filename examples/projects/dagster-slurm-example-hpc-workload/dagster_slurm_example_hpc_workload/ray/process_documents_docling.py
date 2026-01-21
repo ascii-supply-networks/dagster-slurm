@@ -6,6 +6,8 @@ Adapted for dagster-slurm integration to demonstrate HPC document processing wor
 Based on: https://github.com/l-mds/duckpond/blob/main/projects/100_combined/ai_example/
 """
 
+import glob
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import ray
 import ray.data as rd
-from dagster_pipes import PipesContext, open_dagster_pipes
+from dagster_pipes import DagsterPipesError, PipesContext, open_dagster_pipes
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling.document_converter import DocumentConverter
@@ -256,7 +258,12 @@ def run_processing(  # noqa: C901
         log_func("Ray not initialized or running in local mode")
 
     # Find input files
-    files = [str(p) for p in Path().glob(input_glob)]
+    files = [str(p) for p in glob.glob(input_glob, recursive=True)]
+    if not files and not os.path.isabs(input_glob):
+        project_root = os.getenv("PIXI_PROJECT_ROOT")
+        if project_root:
+            fallback_glob = os.path.join(project_root, input_glob)
+            files = [str(p) for p in glob.glob(fallback_glob, recursive=True)]
     if not files:
         log_func(f"No files found for glob: {input_glob}")
         result = {
@@ -340,10 +347,16 @@ def main():
     context = PipesContext.get()
 
     # Get configuration from Pipes context extras
-    input_glob = context.get_extra("INPUT_GLOB") or "data/**/*.pdf"
-    output_dir = context.get_extra("OUTPUT_DIR") or "out/docling"
-    num_workers = int(context.get_extra("NUM_WORKERS") or "2")
-    batch_size = int(context.get_extra("BATCH_SIZE") or "4")
+    def _get_extra(key: str) -> str | None:
+        try:
+            return context.get_extra(key)
+        except DagsterPipesError:
+            return None
+
+    input_glob = _get_extra("INPUT_GLOB") or os.getenv("INPUT_GLOB") or "data/**/*.pdf"
+    output_dir = _get_extra("OUTPUT_DIR") or os.getenv("OUTPUT_DIR") or "out/docling"
+    num_workers = int(_get_extra("NUM_WORKERS") or os.getenv("NUM_WORKERS") or "2")
+    batch_size = int(_get_extra("BATCH_SIZE") or os.getenv("BATCH_SIZE") or "4")
 
     # Run processing
     run_processing(
@@ -356,46 +369,40 @@ def main():
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Process PDF documents using docling and Ray"
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["pipes", "standalone"],
-        default="standalone",
-        help="Execution mode: 'pipes' for Dagster Pipes, 'standalone' for direct execution",
-    )
-    parser.add_argument(
-        "--input-glob",
-        default="data/**/*.pdf",
-        help="Glob pattern for input files (default: data/**/*.pdf)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="out/docling",
-        help="Output directory for processed files (default: out/docling)",
-    )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=2,
-        help="Number of parallel workers (default: 2)",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=4,
-        help="Documents per batch (default: 4)",
-    )
-    args = parser.parse_args()
-
-    if args.mode == "pipes":
+    if os.getenv("DAGSTER_PIPES_CONTEXT") or os.getenv("DAGSTER_PIPES_MESSAGES"):
         # Dagster Pipes mode
         with open_dagster_pipes() as context:
             main()
     else:
+        import argparse
+
+        parser = argparse.ArgumentParser(
+            description="Process PDF documents using docling and Ray"
+        )
+        parser.add_argument(
+            "--input-glob",
+            default="data/**/*.pdf",
+            help="Glob pattern for input files (default: data/**/*.pdf)",
+        )
+        parser.add_argument(
+            "--output-dir",
+            default="out/docling",
+            help="Output directory for processed files (default: out/docling)",
+        )
+        parser.add_argument(
+            "--num-workers",
+            type=int,
+            default=2,
+            help="Number of parallel workers (default: 2)",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=4,
+            help="Documents per batch (default: 4)",
+        )
+        args = parser.parse_args()
+
         # Standalone mode
         # Initialize Ray if not already running
         if not ray.is_initialized():
