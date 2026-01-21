@@ -93,6 +93,9 @@ dagster-ray = ">=0.4.0,<0.25"
 dagster-pipes = "~=1.12.0"
 dagster = "~=1.12.0"
 
+[tool.pixi.feature.workload-document-processing.dependencies]
+pylatexenc = ">=2.10,<3"
+
 [tool.pixi.feature.workload-document-processing.pypi-dependencies]
 docling = ">=2.68.0,<3"
 

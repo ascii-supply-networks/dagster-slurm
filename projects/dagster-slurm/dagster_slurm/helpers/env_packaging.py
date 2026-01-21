@@ -308,8 +308,8 @@ def _find_pack_file(search_dir: Path) -> Optional[Path]:
     # Look for both executable and tarball formats
     candidates = []
 
-    # pixi-pack with --create-executable creates: environment.sh
-    for pattern in ["environment.sh", "*.tar.bz2"]:
+    # pixi-pack with --create-executable creates: environment.sh (or renamed variants)
+    for pattern in ["environment.sh", "environment-*.sh", "*.tar.bz2"]:
         matches = glob.glob(str(search_dir / pattern))
         candidates.extend(matches)
 

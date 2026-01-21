@@ -318,7 +318,9 @@ class RayLauncher(ComputeLauncher):
                 cpu_bind_option = f"--cpu-bind={self.worker_cpu_bind} "
         else:
             cpu_bind_option = ""
-        dg.get_dagster_logger().info(f"Using CPU bind of: {cpu_bind_option}")
+
+        if cpu_bind_option != "":
+            dg.get_dagster_logger().info(f"Using CPU bind of: {cpu_bind_option}")
 
         head_args = (
             [

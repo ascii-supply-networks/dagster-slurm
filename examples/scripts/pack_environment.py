@@ -3,6 +3,7 @@ import os
 import platform
 import subprocess
 from pathlib import Path
+import time
 
 
 INJECT_PATTERNS = [
@@ -88,7 +89,17 @@ def main() -> int:
             raise
         print(f"{exc} -> building missing artifacts")
         build_cmd = ["pixi", "run", "-e", "build", "--frozen", "build-lib"]
-        subprocess.run(build_cmd, check=True, cwd=repo_root)
+        build_result = subprocess.run(
+            build_cmd, check=False, cwd=repo_root, capture_output=True, text=True
+        )
+        if build_result.stdout:
+            print(build_result.stdout)
+        if build_result.stderr:
+            print(build_result.stderr)
+        if build_result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                build_result.returncode, build_cmd, build_result.stdout, build_result.stderr
+            )
         inject_args = _resolve_inject_args(base_dir, args.allow_missing_injects)
 
     cmd = [
@@ -110,12 +121,25 @@ def main() -> int:
     print(f"Running: {' '.join(cmd)}")
     if args.dry_run:
         return 0
-    result = subprocess.run(cmd, check=False, cwd=base_dir, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, check=False, cwd=base_dir, capture_output=True, text=True
+    )
     if result.stdout:
         print(result.stdout)
     if result.stderr:
         print(result.stderr)
-    return result.returncode
+    if result.returncode != 0:
+        return result.returncode
+
+    # Rename the packed environment to avoid collisions across workloads/platforms.
+    packed_path = base_dir / "environment.sh"
+    if packed_path.exists():
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe_env = args.env.replace("/", "_")
+        target = base_dir / f"environment-{safe_env}-{platform_value}-{stamp}.sh"
+        packed_path.rename(target)
+        print(f"Created pack at {target} with size {target.stat().st_size}")
+    return 0
 
 
 if __name__ == "__main__":
