@@ -732,6 +732,11 @@ class ComputeResource(ConfigurableResource):
         run_id = context.run_id or uuid.uuid4().hex
         working_dir = f"{self.slurm.remote_base}/hetjobs/{run_id}"  # type: ignore
 
+        auth_provider = getattr(self.slurm, "_auth_provider", None)
+        if isinstance(auth_provider, object) and callable(
+            getattr(auth_provider, "ensure", None)
+        ):
+            auth_provider.ensure()
         with SSHConnectionPool(self.slurm.ssh) as ssh_pool:  # type: ignore
             # Create working directory
             ssh_pool.run(f"mkdir -p {working_dir}")

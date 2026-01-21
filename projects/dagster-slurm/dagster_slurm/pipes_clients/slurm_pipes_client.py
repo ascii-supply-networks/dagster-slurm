@@ -2,7 +2,6 @@
 
 import platform
 import shlex
-import shlex
 import re
 import signal
 import subprocess
@@ -128,6 +127,9 @@ class SlurmPipesClient(PipesClient):
             Dagster events
 
         """
+        auth_provider = getattr(self.slurm, "_auth_provider", None)
+        if callable(getattr(auth_provider, "ensure", None)):
+            auth_provider.ensure()
         if context.run:
             run_id = context.run.run_id
         else:

@@ -3,7 +3,7 @@ from typing import Optional
 
 import dagster as dg
 from dagster import ConfigurableResource
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from .ssh import SSHConnectionResource
 
@@ -67,6 +67,11 @@ class SlurmResource(ConfigurableResource):
         default=None,
         description="Base directory on remote system (default: ~/pipelines/<run_id>)",
     )
+    _auth_provider: Optional[object] = PrivateAttr(default=None)
+
+    def set_auth_provider(self, provider: object) -> "SlurmResource":
+        self._auth_provider = provider
+        return self
 
     @classmethod
     def from_env_slurm(cls, ssh: SSHConnectionResource) -> "SlurmResource":

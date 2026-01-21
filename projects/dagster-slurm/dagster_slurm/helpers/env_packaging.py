@@ -88,6 +88,8 @@ def pack_environment_with_pixi(
     if result.returncode != 0:
         stderr = result.stderr.strip()
         stdout = result.stdout.strip()
+        logger.error("Pack command failed. Reproduce with:")
+        logger.error(shlex.join(pack_cmd))
 
         # Check for common errors
         if "could not find a `pixi.toml`" in stderr.lower():

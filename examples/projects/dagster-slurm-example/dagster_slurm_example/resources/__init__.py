@@ -15,6 +15,7 @@ from dagster_slurm import (
     SparkLauncher,
     SSHConnectionResource,
 )
+from dagster_slurm.auth.step_oidc import StepOIDCAuthProvider
 from dagster_slurm.config.environment import Environment, ExecutionMode
 
 LOCAL_RESOURCES_CONFIG: Dict[str, Any] = {
@@ -254,7 +255,14 @@ def build_slurm_resources(config: Dict[str, Any]) -> Dict[str, Any]:
     """Builds Slurm-related Dagster resources from a configuration dictionary."""
     ssh = SSHConnectionResource(**config["ssh_config"])
     queue = SlurmQueueConfig(**config["slurm_queue_config"])
-    slurm = SlurmResource(ssh=ssh, queue=queue, remote_base="$HOME/dagster_runs")
+    slurm = SlurmResource(
+        ssh=ssh,
+        queue=queue,
+        remote_base="$HOME/dagster_runs",
+    )
+    slurm_cfg = config.get("slurm_config", {})
+    if "auth_provider" in slurm_cfg:
+        slurm.set_auth_provider(slurm_cfg["auth_provider"])
 
     session = None
     if "session" in config["mode"].value:
@@ -369,6 +377,31 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
                     f"Available options: {available_sites}"
                 )
             _deep_merge(config, copy.deepcopy(site_override))
+        if site_key == "musica":
+            musica_client_id = os.environ.get("ASC_OIDC_CLIENT_ID")
+            musica_username = os.environ.get("ASC_OIDC_USERNAME")
+            musica_app_password = os.environ.get("ASC_OIDC_APP_PASSWORD")
+            if musica_client_id and musica_username and musica_app_password:
+                auth_provider = StepOIDCAuthProvider(
+                    token_url=os.environ.get(
+                        "ASC_OIDC_TOKEN_URL",
+                        "https://auth.asc.ac.at/application/o/token/",
+                    ),
+                    client_id=musica_client_id,
+                    username=musica_username,
+                    app_password=musica_app_password,
+                    scope=os.environ.get("ASC_OIDC_SCOPE", "profile"),
+                    token_field=os.environ.get("ASC_OIDC_TOKEN_FIELD", "access_token"),
+                    context=os.environ.get("ASC_STEP_CONTEXT", "asc"),
+                    refresh_skew_minutes=int(
+                        os.environ.get("ASC_STEP_REFRESH_SKEW", "30")
+                    ),
+                    cert_path=os.environ.get("ASC_STEP_CERT_PATH"),
+                    bootstrap_ca_url=os.environ.get("ASC_STEP_CA_URL"),
+                    bootstrap_fingerprint=os.environ.get("ASC_STEP_FINGERPRINT"),
+                )
+                config.setdefault("slurm_config", {})
+                config["slurm_config"]["auth_provider"] = auth_provider
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
 
