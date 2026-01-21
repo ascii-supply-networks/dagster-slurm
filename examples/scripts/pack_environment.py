@@ -93,8 +93,15 @@ def main() -> int:
         "pyproject.toml",
     ]
 
+    print(f"Using environment: {args.env}")
+    print(f"Resolved platform: {platform_value}")
+    print(f"Inject args: {inject_args}")
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, check=False, cwd=base_dir)
+    result = subprocess.run(cmd, check=False, cwd=base_dir, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
     return result.returncode
 
 

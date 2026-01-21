@@ -31,7 +31,6 @@ def defs():
                 ray_defs,
                 automation_condition=dg.AutomationCondition.eager()
                 | dg.AutomationCondition.on_missing(),
-                group_name="ray_example",
             ),
         ]
     )
