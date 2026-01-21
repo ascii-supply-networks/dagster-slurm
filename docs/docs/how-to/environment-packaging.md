@@ -267,6 +267,51 @@ export CI_DEPLOYED_ENVIRONMENT_PATH="/home/submitter/deployments/my-project/v202
 
 CI can update the environment by re-running `pixi run deploy-prod-docker` and bumping the version suffix.
 
+## Advanced: workload-specific packed environments
+
+Some workloads (e.g., docling + Ray) require heavier dependencies than the default cluster runtime. The example project supports packing a dedicated environment and selecting it per asset.
+
+- **Separate environment:** `examples/pyproject.toml` defines `workload-document-processing`, so docling dependencies stay out of the base `packaged-cluster`.
+- **Pack script:** `examples/scripts/pack_environment.py` wraps `pixi-pack` with:
+  - `--env` to choose the Pixi environment
+  - `--platform auto` to auto-detect (or override with `linux-64`, `linux-aarch64`, `osx-arm64`)
+  - `--build-missing` to build local wheels when absent
+  - `--allow-missing-injects` to skip local injects for users who rely on pre-provided packages
+
+Example:
+
+```bash
+cd examples
+pixi run -e opstooling --frozen python scripts/pack_environment.py \
+  --env workload-document-processing \
+  --platform auto \
+  --build-missing
+```
+
+You can also pin this per asset using metadata:
+
+```python
+@dg.asset(
+    metadata={
+        "slurm_pack_cmd": [
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+            "--platform",
+            "auto",
+        ]
+    }
+)
+```
+
+This keeps lightweight assets on the base environment while heavier assets use the specialized one.
+
 ## Common troubleshooting tips
 
 - Ensure pixi is available inside your CI runner or deployment environment.

@@ -550,7 +550,12 @@ class SlurmPipesClient(PipesClient):
         else:
             self.logger.info(f"Cache miss for {cache_key}, packing environment...")
         self.logger.info("Packing environment with pixi...")
-        pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+        env_overrides = {}
+        if self.pack_platform:
+            env_overrides["SLURM_PACK_PLATFORM"] = self.pack_platform
+        pack_file = pack_environment_with_pixi(
+            pack_cmd=pack_cmd, env_overrides=env_overrides or None
+        )
 
         # Re-compute cache key AFTER building, since pack may have rebuilt artifacts
         # This ensures the upload path matches what future runs will compute

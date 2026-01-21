@@ -33,8 +33,14 @@ def main():
     parser.add_argument(
         "--platform",
         help="Specify the target platform for pixi pack (e.g., 'linux-aarch64', 'linux-64').",
-        choices=["linux-64", "linux-aarch64"],
-        default="linux-64",
+        choices=["linux-64", "linux-aarch64", "osx-arm64", "auto"],
+        default="auto",
+    )
+    parser.add_argument(
+        "--workload",
+        help="Select workload environment for the packed environment.",
+        choices=["packaged-cluster", "workload-document-processing"],
+        default="packaged-cluster",
     )
     parser.add_argument(
         "--output-json",
@@ -92,11 +98,19 @@ def main():
     logger.info(f"Target deployment path on remote: {deployment_path}")
 
     logger.info("Packing environment using pixi...")
-    pack_cmd_map = {
-        "linux-64": ["pixi", "run", "--frozen", "pack"],
-        "linux-aarch64": ["pixi", "run", "--frozen", "pack-aarch"],
-    }
-    pack_cmd = pack_cmd_map.get(args.platform) if args.platform else ["pixi", "run", "--frozen", "pack"]
+    pack_cmd = [
+        "pixi",
+        "run",
+        "-e",
+        "opstooling",
+        "--frozen",
+        "python",
+        "scripts/pack_environment.py",
+        "--env",
+        args.workload,
+        "--platform",
+        args.platform,
+    ]
     logger.info(f"Using pack command: {pack_cmd}")
     
     try:

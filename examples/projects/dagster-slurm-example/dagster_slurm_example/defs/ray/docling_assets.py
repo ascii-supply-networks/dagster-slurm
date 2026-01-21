@@ -10,7 +10,7 @@ from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
 from pydantic import Field
 
 
-class DoclingProcessingConfig(dg.Config):
+class DoclingRunConfig(SlurmRunConfig):
     """Configuration for docling document processing."""
 
     input_glob: str = Field(
@@ -35,20 +35,7 @@ class DoclingProcessingConfig(dg.Config):
     )
 
 
-class DoclingAssetConfig(dg.Config):
-    """Combined config for docling processing and Slurm run settings."""
-
-    slurm: SlurmRunConfig = Field(
-        default_factory=SlurmRunConfig,
-        description="Slurm run configuration",
-    )
-    docling: DoclingProcessingConfig = Field(
-        default_factory=DoclingProcessingConfig,
-        description="Document processing configuration",
-    )
-
-
-class LargeScaleDoclingConfig(dg.Config):
+class LargeScaleDoclingRunConfig(SlurmRunConfig):
     """Configuration for large-scale multi-node docling processing."""
 
     input_glob: str = Field(
@@ -73,26 +60,26 @@ class LargeScaleDoclingConfig(dg.Config):
     )
 
 
-class LargeScaleDoclingAssetConfig(dg.Config):
-    """Combined config for large-scale docling processing and Slurm run settings."""
-
-    slurm: SlurmRunConfig = Field(
-        default_factory=SlurmRunConfig,
-        description="Slurm run configuration",
-    )
-    docling: LargeScaleDoclingConfig = Field(
-        default_factory=LargeScaleDoclingConfig,
-        description="Large-scale document processing configuration",
-    )
-
-
 @dg.asset(
     description="Process PDF documents using docling with distributed Ray workers",
+    metadata={
+        "slurm_pack_cmd": [
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+        ]
+    },
 )
 def process_documents_with_docling(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
-    config: DoclingAssetConfig,
+    config: DoclingRunConfig,
 ):
     """Process PDF documents using docling and Ray for parallel conversion.
 
@@ -109,7 +96,7 @@ def process_documents_with_docling(
     Args:
         context: Dagster execution context
         compute_ray: ComputeResource configured with RayLauncher
-        config: Combined configuration (slurm + document processing)
+        config: Slurm + docling configuration
     """
     script_path = dg.file_relative_path(
         __file__,
@@ -124,23 +111,23 @@ def process_documents_with_docling(
 
     context.log.info(
         f"Starting distributed document processing with docling...\n"
-        f"  Input: {config.docling.input_glob}\n"
-        f"  Output: {config.docling.output_dir}\n"
-        f"  Workers: {config.docling.num_workers}\n"
-        f"  Batch size: {config.docling.batch_size}"
+        f"  Input: {config.input_glob}\n"
+        f"  Output: {config.output_dir}\n"
+        f"  Workers: {config.num_workers}\n"
+        f"  Batch size: {config.batch_size}"
     )
 
     completed_run = compute_ray.run(
         context=context,
         payload_path=script_path,
-        config=config.slurm,
+        config=config,
         launcher=ray_launcher,
         extra_env={
             # Document processing configuration from Dagster config
-            "INPUT_GLOB": config.docling.input_glob,
-            "OUTPUT_DIR": config.docling.output_dir,
-            "NUM_WORKERS": str(config.docling.num_workers),
-            "BATCH_SIZE": str(config.docling.batch_size),
+            "INPUT_GLOB": config.input_glob,
+            "OUTPUT_DIR": config.output_dir,
+            "NUM_WORKERS": str(config.num_workers),
+            "BATCH_SIZE": str(config.batch_size),
         },
         extra_slurm_opts={
             # Resource allocation for document processing
@@ -233,11 +220,24 @@ def analyze_docling_results(  # noqa: C901
 
 @dg.asset(
     description="Multi-node docling processing for large document collections",
+    metadata={
+        "slurm_pack_cmd": [
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+        ]
+    },
 )
 def process_large_document_collection(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
-    config: LargeScaleDoclingAssetConfig,
+    config: LargeScaleDoclingRunConfig,
 ):
     """Process a large collection of documents using multi-node Ray cluster.
 
@@ -247,7 +247,7 @@ def process_large_document_collection(
     Args:
         context: Dagster execution context
         compute_ray: ComputeResource configured with RayLauncher
-        config: Combined configuration (slurm + document processing)
+        config: Slurm + docling configuration
     """
     script_path = dg.file_relative_path(
         __file__,
@@ -261,22 +261,22 @@ def process_large_document_collection(
 
     context.log.info(
         f"Starting large-scale document processing with multi-node Ray cluster...\n"
-        f"  Input: {config.docling.input_glob}\n"
-        f"  Output: {config.docling.output_dir}\n"
-        f"  Workers: {config.docling.num_workers}\n"
-        f"  Batch size: {config.docling.batch_size}"
+        f"  Input: {config.input_glob}\n"
+        f"  Output: {config.output_dir}\n"
+        f"  Workers: {config.num_workers}\n"
+        f"  Batch size: {config.batch_size}"
     )
 
     completed_run = compute_ray.run(
         context=context,
         payload_path=script_path,
-        config=config.slurm,
+        config=config,
         launcher=ray_launcher,
         extra_env={
-            "INPUT_GLOB": config.docling.input_glob,
-            "OUTPUT_DIR": config.docling.output_dir,
-            "NUM_WORKERS": str(config.docling.num_workers),
-            "BATCH_SIZE": str(config.docling.batch_size),
+            "INPUT_GLOB": config.input_glob,
+            "OUTPUT_DIR": config.output_dir,
+            "NUM_WORKERS": str(config.num_workers),
+            "BATCH_SIZE": str(config.batch_size),
         },
         extra_slurm_opts={
             # Multi-node configuration

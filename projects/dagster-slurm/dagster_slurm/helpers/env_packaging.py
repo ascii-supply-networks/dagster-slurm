@@ -1,5 +1,6 @@
 """Environment packaging using pixi pack."""
 
+import os
 import glob
 import re
 import shlex
@@ -16,6 +17,7 @@ def pack_environment_with_pixi(
     project_dir: Optional[Path] = None,
     pack_cmd: Optional[list[str]] = None,
     timeout: int = 600,
+    env_overrides: Optional[dict[str, str]] = None,
 ) -> Path:
     """Pack environment using 'pixi pack'.
 
@@ -51,12 +53,17 @@ def pack_environment_with_pixi(
     logger.debug(f"Timeout: {timeout}s")
 
     try:
+        env = None
+        if env_overrides:
+            env = os.environ.copy()
+            env.update(env_overrides)
         result = subprocess.run(
             pack_cmd,
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except FileNotFoundError as e:
         raise RuntimeError(

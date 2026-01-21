@@ -744,7 +744,12 @@ class ComputeResource(ConfigurableResource):
                 "_get_pack_command",
                 lambda: ["pixi", "run", "--frozen", "pack-only"],
             )()
-            pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+            env_overrides = {}
+            if self.pack_platform:
+                env_overrides["SLURM_PACK_PLATFORM"] = self.pack_platform
+            pack_file = pack_environment_with_pixi(
+                pack_cmd=pack_cmd, env_overrides=env_overrides or None
+            )
 
             # Upload packed environment
             remote_pack_file = f"{working_dir}/{pack_file.name}"
