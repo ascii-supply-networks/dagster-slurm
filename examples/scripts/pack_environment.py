@@ -13,6 +13,13 @@ INJECT_PATTERNS = [
     "projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda",
 ]
 
+BUILD_TASKS = [
+    "build-shared-library",
+    "build-integrations",
+    "build-hpc-workload",
+    "build-example",
+]
+
 
 def _detect_platform() -> str:
     system = platform.system().lower()
@@ -88,35 +95,20 @@ def main() -> int:
         if not args.build_missing:
             raise
         print(f"{exc} -> building missing artifacts")
-        build_cmd = ["pixi", "run", "-e", "build", "--frozen", "build-lib"]
-        print(f"Running build: {' '.join(build_cmd)}")
-        build_result = subprocess.run(
-            build_cmd, check=False, cwd=repo_root, capture_output=True, text=True
-        )
-        if build_result.stdout:
-            print(build_result.stdout)
-        if build_result.stderr:
-            print(build_result.stderr)
-        if build_result.returncode != 0 and "unknown environment 'build'" in build_result.stderr.lower():
-            print("Build env not found in current manifest; retrying with repo root manifest")
-            build_env = os.environ.copy()
-            build_env["PIXI_PROJECT_MANIFEST"] = str(repo_root / "pyproject.toml")
+        for task in BUILD_TASKS:
+            build_cmd = ["pixi", "run", "-e", "opstooling", "--frozen", task]
+            print(f"Running build task: {' '.join(build_cmd)}")
             build_result = subprocess.run(
-                build_cmd,
-                check=False,
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                env=build_env,
+                build_cmd, check=False, cwd=base_dir, capture_output=True, text=True
             )
             if build_result.stdout:
                 print(build_result.stdout)
             if build_result.stderr:
                 print(build_result.stderr)
-        if build_result.returncode != 0:
-            raise subprocess.CalledProcessError(
-                build_result.returncode, build_cmd, build_result.stdout, build_result.stderr
-            )
+            if build_result.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    build_result.returncode, build_cmd, build_result.stdout, build_result.stderr
+                )
         inject_args = _resolve_inject_args(base_dir, args.allow_missing_injects)
 
     cmd = [
