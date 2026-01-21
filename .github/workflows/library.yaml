@@ -191,7 +191,19 @@ jobs:
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
           SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
-        run: cd examples && pixi run deploy-prod-docker
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          cd examples
+          if ! pixi run deploy-prod-docker; then
+            echo "Deploy failed; dumping pack debug output..."
+            pixi run -e opstooling --frozen python scripts/pack_environment.py --env packaged-cluster --platform auto --build-missing --debug || true
+            echo "Listing examples/ and dist/ for context..."
+            ls -la
+            ls -la dist || true
+            ls -la ../dist || true
+            exit 1
+          fi
 
       - name: Run integration tests against SLURM cluster
         env:
