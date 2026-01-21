@@ -89,6 +89,7 @@ def main() -> int:
             raise
         print(f"{exc} -> building missing artifacts")
         build_cmd = ["pixi", "run", "-e", "build", "--frozen", "build-lib"]
+        print(f"Running build: {' '.join(build_cmd)}")
         build_result = subprocess.run(
             build_cmd, check=False, cwd=repo_root, capture_output=True, text=True
         )
@@ -96,6 +97,22 @@ def main() -> int:
             print(build_result.stdout)
         if build_result.stderr:
             print(build_result.stderr)
+        if build_result.returncode != 0 and "unknown environment 'build'" in build_result.stderr.lower():
+            print("Build env not found in current manifest; retrying with repo root manifest")
+            build_env = os.environ.copy()
+            build_env["PIXI_PROJECT_MANIFEST"] = str(repo_root / "pyproject.toml")
+            build_result = subprocess.run(
+                build_cmd,
+                check=False,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                env=build_env,
+            )
+            if build_result.stdout:
+                print(build_result.stdout)
+            if build_result.stderr:
+                print(build_result.stderr)
         if build_result.returncode != 0:
             raise subprocess.CalledProcessError(
                 build_result.returncode, build_cmd, build_result.stdout, build_result.stderr
@@ -122,7 +139,11 @@ def main() -> int:
     if args.dry_run:
         return 0
     result = subprocess.run(
-        cmd, check=False, cwd=base_dir, capture_output=True, text=True
+        cmd,
+        check=False,
+        cwd=base_dir,
+        capture_output=True,
+        text=True,
     )
     if result.stdout:
         print(result.stdout)
