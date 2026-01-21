@@ -43,6 +43,16 @@ def main():
         default="packaged-cluster",
     )
     parser.add_argument(
+        "--build-missing",
+        action="store_true",
+        help="Build missing artifacts before packing.",
+    )
+    parser.add_argument(
+        "--allow-missing-injects",
+        action="store_true",
+        help="Skip missing inject artifacts instead of failing.",
+    )
+    parser.add_argument(
         "--output-json",
         help="Path to write the deployment metadata JSON file.",
         type=Path,
@@ -111,6 +121,10 @@ def main():
         "--platform",
         args.platform,
     ]
+    if args.build_missing:
+        pack_cmd.append("--build-missing")
+    if args.allow_missing_injects:
+        pack_cmd.append("--allow-missing-injects")
     logger.info(f"Using pack command: {pack_cmd}")
     
     try:

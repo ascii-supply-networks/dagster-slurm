@@ -144,13 +144,13 @@ env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
 description = "Start dagster webserver in staging mode connected to supercomputer using SSH"
 
 [tool.pixi.tasks.deploy-prod-docker]
-cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py"
+cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --build-missing"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Package and deploy environment for HPC environment"
 
 [tool.pixi.tasks.deploy-prod-docker-aarch]
-cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --platform linux-aarch64"
+cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --platform linux-aarch64 --build-missing"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Package and deploy ARM64 environment for HPC environment"
