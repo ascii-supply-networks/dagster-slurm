@@ -62,6 +62,7 @@ class LargeScaleDoclingRunConfig(SlurmRunConfig):
 
 @dg.asset(
     description="Process PDF documents using docling with distributed Ray workers",
+    group_name="document_processing",
     metadata={
         "slurm_pack_cmd": [
             "pixi",
@@ -147,6 +148,7 @@ def process_documents_with_docling(
 @dg.asset(
     deps=[process_documents_with_docling],
     description="Aggregate and analyze docling processing results",
+    group_name="document_processing",
 )
 def analyze_docling_results(  # noqa: C901
     context: dg.AssetExecutionContext,
@@ -220,6 +222,7 @@ def analyze_docling_results(  # noqa: C901
 
 @dg.asset(
     description="Multi-node docling processing for large document collections",
+    group_name="document_processing",
     metadata={
         "slurm_pack_cmd": [
             "pixi",
