@@ -13,11 +13,11 @@ INJECT_PATTERNS = [
     "projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda",
 ]
 
-BUILD_TASKS = [
-    "build-shared-library",
-    "build-integrations",
-    "build-hpc-workload",
-    "build-example",
+BUILD_COMMANDS = [
+    ("projects/dagster-slurm-example-shared", ["pixi", "build", "-o", "dist"]),
+    ("projects/dagster-slurm-example-hpc-workload", ["pixi", "build", "-o", "dist"]),
+    ("projects/dagster-slurm-example", ["pixi", "build", "-o", "dist"]),
+    ("../projects", ["pixi", "run", "-e", "build", "--frozen", "build-lib"]),
 ]
 
 
@@ -95,18 +95,15 @@ def main() -> int:
         if not args.build_missing:
             raise
         print(f"{exc} -> building missing artifacts")
-        build_env = os.environ.copy()
-        build_env["PIXI_PROJECT_MANIFEST"] = str(base_dir / "pyproject.toml")
-        for task in BUILD_TASKS:
-            build_cmd = ["pixi", "run", "--frozen", task]
-            print(f"Running build task: {' '.join(build_cmd)}")
+        for build_dir, build_cmd in BUILD_COMMANDS:
+            build_path = base_dir / build_dir
+            print(f"Running build in {build_dir}: {' '.join(build_cmd)}")
             build_result = subprocess.run(
                 build_cmd,
                 check=False,
-                cwd=base_dir,
+                cwd=build_path,
                 capture_output=True,
                 text=True,
-                env=build_env,
             )
             if build_result.stdout:
                 print(build_result.stdout)
