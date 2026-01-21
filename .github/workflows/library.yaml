@@ -52,8 +52,8 @@ jobs:
             doesn't start with an uppercase character.
   validation:
     name: Validate library
-    # runs-on: ubuntu-latest
-    runs-on: paid-ci-runner-more-disk
+    runs-on: ubuntu-latest
+    # runs-on: paid-ci-runner-more-disk
     permissions:
       contents: read
       pull-requests: read
