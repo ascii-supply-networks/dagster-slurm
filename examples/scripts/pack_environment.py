@@ -96,7 +96,7 @@ def main() -> int:
             raise
         print(f"{exc} -> building missing artifacts")
         for task in BUILD_TASKS:
-            build_cmd = ["pixi", "run", "-e", "opstooling", "--frozen", task]
+            build_cmd = ["pixi", "run", "--frozen", task]
             print(f"Running build task: {' '.join(build_cmd)}")
             build_result = subprocess.run(
                 build_cmd, check=False, cwd=base_dir, capture_output=True, text=True
