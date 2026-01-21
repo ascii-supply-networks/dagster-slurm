@@ -15,7 +15,6 @@ See the (draft) [documentation](https://dagster-slurm.geoheil.com/)
 
 > We are actively looking for contributions to bring this package to life together
 
-
 ## Contributing
 
 You have to have uv installed for the library development - but pixi for executing the examples.
@@ -25,7 +24,7 @@ You have to have uv installed for the library development - but pixi for executi
 - **pixi installation**: https://pixi.sh/latest/installation/
   ```bash
   curl -fsSL https://pixi.sh/install.sh | sh
-  ````
+  ```
 - install global tools
   ```bash
   pixi global install git make uv pre-commit

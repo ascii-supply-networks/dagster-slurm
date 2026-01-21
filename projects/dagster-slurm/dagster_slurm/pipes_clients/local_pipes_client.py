@@ -142,14 +142,14 @@ class LocalPipesClient(PipesClient):
             extras=extras,
         ) as session:
             # Get Pipes environment
-            pipes_env = session.get_bootstrap_env_vars()
+            pipes_env = dict(session.get_bootstrap_env_vars())
 
             # Generate execution plan
             execution_plan = self.launcher.prepare_execution(
                 payload_path=payload_path,
                 python_executable=python_executable,
                 working_dir=working_dir,
-                pipes_context=pipes_env,  # type: ignore
+                pipes_context=pipes_env,
                 extra_env=extra_env,
                 allocation_context=None,  # No allocation in local mode
             )

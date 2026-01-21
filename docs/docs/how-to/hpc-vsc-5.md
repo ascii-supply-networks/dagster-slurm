@@ -31,13 +31,13 @@ SLURM_SUPERCOMPUTER_SITE=vsc5
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).  
+VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).\
 VMOS currently rejects key-only authentication, so always provide `SLURM_EDGE_NODE_JUMP_PASSWORD` (and be ready to type the time-based OTP on the first prompt). The final hop to `vsc5.vsc.ac.at` can still use your SSH key. If your policies require password-only access end-to-end, set `SLURM_EDGE_NODE_PASSWORD`; Dagster prints `Enter … for vsc5.vsc.ac.at:` on your terminal—type the OTP there to continue. Password-based sessions automatically request a pseudo-TTY, so you only need `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
 
 > **Cleanup behaviour:** Completed runs trigger an asynchronous `rm -rf` of the run directory on the edge node. This keeps quotas tidy without delaying Dagster shutdown. Set `debug_mode=True` on the relevant `ComputeResource` while debugging to keep run folders around for manual inspection.
 
-
 ## SSH on VSC-5
+
 To keep the VSC-5 login chain responsive, configure SSH keepalives for the `vmos.vsc.ac.at` bastion and `vsc5.vsc.ac.at` login node:
 
 ```sshconfig title="~/.ssh/config"

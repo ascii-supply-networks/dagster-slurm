@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -84,7 +84,7 @@ class StepOIDCAuthProvider:
 
     def _is_expiring_soon(self, valid_until: datetime) -> bool:
         return (
-            datetime.utcnow() + timedelta(minutes=self.refresh_skew_minutes)
+            datetime.now(timezone.utc) + timedelta(minutes=self.refresh_skew_minutes)
             >= valid_until
         )
 

@@ -18,9 +18,10 @@
 - [ ] Manual testing
 
 **Test Configuration**:
-* Python version:
-* Dagster version:
-* OS:
+
+- Python version:
+- Dagster version:
+- OS:
 
 ## Checklist
 
@@ -40,9 +41,11 @@
 <!-- Any additional information that reviewers should know -->
 
 ## Type of Change
+
 <!-- Check one -->
+
 - [ ] feat: New feature
-- [ ] fix: Bug fix  
+- [ ] fix: Bug fix
 - [ ] docs: Documentation
 - [ ] style: Code style
 - [ ] refactor: Code refactor
@@ -50,7 +53,8 @@
 - [ ] test: Tests
 - [ ] chore: Maintenance
 
-
 ## Breaking Changes
+
 <!-- If applicable -->
+
 BREAKING CHANGE: describe the breaking change

@@ -126,9 +126,9 @@ The launcher exposes the head node address via Ray defaults, so `ray.init(addres
 
 ## Execution modes and Ray behaviour
 
-| Mode | Behaviour |
-| --- | --- |
-| `local` | Starts a local Ray runtime on the Dagster node. Ideal for development, no Slurm required. |
+| Mode    | Behaviour                                                                                                                      |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `local` | Starts a local Ray runtime on the Dagster node. Ideal for development, no Slurm required.                                      |
 | `slurm` | Submits a Slurm job per asset; the `RayLauncher` bootstraps a Ray cluster inside that allocation and tears it down afterwards. |
 
 > Session reuse and heterogeneous jobs are planned enhancements. Their configuration knobs remain in the API but are considered experimental until documented otherwise.

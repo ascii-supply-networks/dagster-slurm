@@ -9,16 +9,16 @@ Reliable environment packaging ensures that assets behave the same on your lapto
 
 The packaging tasks read your SSH credentials and remote destination from the environment. Set these before running `pixi run deploy-prod-docker` (or your own wrapper script):
 
-| Variable | Purpose | Notes |
-| --- | --- | --- |
-| `SLURM_EDGE_NODE_HOST` | SSH hostname of the edge/login node. | Example: `vsc5.vsc.ac.at`. |
-| `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22`. |
-| `SLURM_EDGE_NODE_USER` | Username for SSH and file uploads. | Must have write access to the deployment path. |
-| `SLURM_EDGE_NODE_KEY_PATH` | Path to the SSH private key (key-based auth). | Expandable paths like `~/.ssh/id_ed25519`. |
-| `SLURM_EDGE_NODE_PASSWORD` | Password for SSH (password auth). | Mutually exclusive with `SLURM_EDGE_NODE_KEY_PATH`. |
-| `SLURM_DEPLOYMENT_BASE_PATH` | Root directory on the cluster where environments are stored. | Used by CI deploy scripts. e.g. `/home/user/dagster-slurm`. |
-| `CI_DEPLOYED_ENVIRONMENT_PATH` | Path to pre-deployed environment (production mode). | Required when `DAGSTER_DEPLOYMENT=production_*`. Set by CI after deployment. |
-| `DAGSTER_DEPLOYMENT` | Controls execution mode and resource configuration. | Values: `development`, `staging_docker`, `production_docker`, `staging_supercomputer`, `production_supercomputer`, etc. |
+| Variable                       | Purpose                                                      | Notes                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `SLURM_EDGE_NODE_HOST`         | SSH hostname of the edge/login node.                         | Example: `vsc5.vsc.ac.at`.                                                                                              |
+| `SLURM_EDGE_NODE_PORT`         | SSH port.                                                    | Defaults to `22`.                                                                                                       |
+| `SLURM_EDGE_NODE_USER`         | Username for SSH and file uploads.                           | Must have write access to the deployment path.                                                                          |
+| `SLURM_EDGE_NODE_KEY_PATH`     | Path to the SSH private key (key-based auth).                | Expandable paths like `~/.ssh/id_ed25519`.                                                                              |
+| `SLURM_EDGE_NODE_PASSWORD`     | Password for SSH (password auth).                            | Mutually exclusive with `SLURM_EDGE_NODE_KEY_PATH`.                                                                     |
+| `SLURM_DEPLOYMENT_BASE_PATH`   | Root directory on the cluster where environments are stored. | Used by CI deploy scripts. e.g. `/home/user/dagster-slurm`.                                                             |
+| `CI_DEPLOYED_ENVIRONMENT_PATH` | Path to pre-deployed environment (production mode).          | Required when `DAGSTER_DEPLOYMENT=production_*`. Set by CI after deployment.                                            |
+| `DAGSTER_DEPLOYMENT`           | Controls execution mode and resource configuration.          | Values: `development`, `staging_docker`, `production_docker`, `staging_supercomputer`, `production_supercomputer`, etc. |
 
 Only one of `SLURM_EDGE_NODE_KEY_PATH` or `SLURM_EDGE_NODE_PASSWORD` should be set. The packaging script validates this and fails fast if both or neither are supplied.
 
@@ -41,14 +41,14 @@ compute = ComputeResource(
 
 ### ComputeResource configuration options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `pre_deployed_env_path` | `None` | Path to pre-deployed environment on cluster. When set, skips packing entirely. |
+| Option                        | Default | Description                                                                                                          |
+| ----------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `pre_deployed_env_path`       | `None`  | Path to pre-deployed environment on cluster. When set, skips packing entirely.                                       |
 | `default_skip_payload_upload` | `False` | When `True`, skip uploading payload scripts. Remote path is derived as `{pre_deployed_env_path}/scripts/{filename}`. |
-| `cache_inject_globs` | `None` | Glob patterns for inject files that affect cache key. If not set, all inject files are hashed. |
-| `auto_detect_platform` | `False` | Auto-detect target platform from edge node architecture. |
-| `pack_platform` | `None` | Explicit target platform (e.g., `linux-64`). |
-| `debug_mode` | `False` | Keep build artefacts for inspection. |
+| `cache_inject_globs`          | `None`  | Glob patterns for inject files that affect cache key. If not set, all inject files are hashed.                       |
+| `auto_detect_platform`        | `False` | Auto-detect target platform from edge node architecture.                                                             |
+| `pack_platform`               | `None`  | Explicit target platform (e.g., `linux-64`).                                                                         |
+| `debug_mode`                  | `False` | Keep build artefacts for inspection.                                                                                 |
 
 ## Environment caching
 
@@ -83,13 +83,13 @@ compute = ComputeResource(
 
 With this configuration:
 
-| What changed | Cache invalidated? | Action |
-|--------------|-------------------|--------|
-| `pixi.lock` | Yes | Re-pack and upload |
-| `dagster_slurm-*.whl` (base lib) | Yes | Re-pack and upload |
-| `shared/*.conda` (shared lib) | Yes | Re-pack and upload |
-| `workload/*.conda` (excluded) | No | Reuse cached environment |
-| `process.py` (payload script) | N/A | Always uploaded fresh |
+| What changed                     | Cache invalidated? | Action                   |
+| -------------------------------- | ------------------ | ------------------------ |
+| `pixi.lock`                      | Yes                | Re-pack and upload       |
+| `dagster_slurm-*.whl` (base lib) | Yes                | Re-pack and upload       |
+| `shared/*.conda` (shared lib)    | Yes                | Re-pack and upload       |
+| `workload/*.conda` (excluded)    | No                 | Reuse cached environment |
+| `process.py` (payload script)    | N/A                | Always uploaded fresh    |
 
 If `cache_inject_globs` is not set, **all** `--inject` files from the pack command are hashed (safe default).
 
@@ -117,11 +117,11 @@ def my_asset(
 
 ### Available options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `force_env_push` | `False` | Force re-pack and upload the environment even when cached. Useful after manual changes to injected packages. |
-| `skip_payload_upload` | `False` | Skip uploading the payload script. Use when the script already exists on the remote. |
-| `remote_payload_path` | `None` | Custom remote path for the payload when `skip_payload_upload=True`. |
+| Option                | Default | Description                                                                                                  |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `force_env_push`      | `False` | Force re-pack and upload the environment even when cached. Useful after manual changes to injected packages. |
+| `skip_payload_upload` | `False` | Skip uploading the payload script. Use when the script already exists on the remote.                         |
+| `remote_payload_path` | `None`  | Custom remote path for the payload when `skip_payload_upload=True`.                                          |
 
 ### When to use SlurmRunConfig
 
@@ -150,6 +150,7 @@ pixi run deploy-prod-docker
 ```
 
 The command writes the remote path to `deployment_metadata.json`. Your CI pipeline should:
+
 1. Run the deploy command
 2. Export `CI_DEPLOYED_ENVIRONMENT_PATH` with the deployed path
 

@@ -1,5 +1,6 @@
 Based on https://github.com/giovtorres/slurm-docker-cluster
 Refinements:
+
 - python environment handling
 - SSH demo access
 - Upgrade to current version of slurm and OS
@@ -12,13 +13,11 @@ To get up and running with Slurm in Docker, make sure you have the following too
 - **[Docker](https://docs.docker.com/get-docker/)**
 - **[Docker Compose](https://docs.docker.com/compose/install/)**
 
-
 ```bash
 docker compose build
 ```
 
 > find more details at https://github.com/giovtorres/slurm-docker-cluster
-
 
 🚀 Starting the Cluster
 
@@ -31,7 +30,7 @@ docker compose up
 ssh submitter@localhost -p 2223
 ```
 
-## 🖥️  Accessing the Cluster
+## 🖥️ Accessing the Cluster
 
 To interact with the Slurm controller, open a shell inside the `slurmctld` container:
 

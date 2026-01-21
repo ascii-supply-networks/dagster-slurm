@@ -325,8 +325,9 @@ def _find_pack_file(search_dir: Path) -> Optional[Path]:
 
 def _format_size(size_bytes: int) -> str:
     """Format bytes as human-readable size."""
+    size: float = float(size_bytes)
     for unit in ["B", "KiB", "MiB", "GiB"]:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.2f} {unit}"
-        size_bytes /= 1024.0  # type: ignore
-    return f"{size_bytes:.2f} TiB"
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} TiB"

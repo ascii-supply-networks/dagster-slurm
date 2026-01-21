@@ -124,11 +124,11 @@ Documents are converted in parallel using local Ray. Same code deploys to Slurm 
 
 ## Execution modes
 
-| Mode | Ray Cluster | Use Case |
-|------|-------------|----------|
-| Local dev | Single-node local | Fast iteration, testing |
-| Slurm single-node | Local Ray in job | < 1000 documents |
-| Slurm multi-node | Distributed Ray cluster | > 1000 documents |
+| Mode              | Ray Cluster             | Use Case                |
+| ----------------- | ----------------------- | ----------------------- |
+| Local dev         | Single-node local       | Fast iteration, testing |
+| Slurm single-node | Local Ray in job        | < 1000 documents        |
+| Slurm multi-node  | Distributed Ray cluster | > 1000 documents        |
 
 ### Scale to multi-node
 
@@ -199,27 +199,31 @@ Requires RapidOCR model files (~2-3GB). See [duckpond implementation](https://gi
 ## Performance tuning
 
 **Batch size**: Documents per worker
+
 - Small PDFs (< 5MB): `batch_size=8-16`
 - Large PDFs (> 20MB): `batch_size=2-4`
 
 **Worker count**: Match available resources
+
 - Local: `cpu_count() - 1`
 - Slurm: `nodes × cpus_per_task`
 
 **Memory**: Based on document size
+
 - Small PDFs: 4-8GB/node
 - Large PDFs: 16-32GB/node
 
 ## Key differences from duckpond
 
-| Aspect | Duckpond | dagster-slurm |
-|--------|----------|---------------|
-| Integration | `dagster-ray` | `ComputeResource` + `RayLauncher` |
-| Execution | Direct Ray cluster | Pipes-based payload script |
-| Environment | Cloud/local | HPC/Slurm + environment packaging |
-| Ray management | Manual connection | Automatic cluster startup/shutdown |
+| Aspect         | Duckpond           | dagster-slurm                      |
+| -------------- | ------------------ | ---------------------------------- |
+| Integration    | `dagster-ray`      | `ComputeResource` + `RayLauncher`  |
+| Execution      | Direct Ray cluster | Pipes-based payload script         |
+| Environment    | Cloud/local        | HPC/Slurm + environment packaging  |
+| Ray management | Manual connection  | Automatic cluster startup/shutdown |
 
 dagster-slurm optimizes for HPC environments with:
+
 - Slurm job submission (`sbatch`)
 - Environment packaging (`pixi-pack`)
 - SSH-based multi-node coordination

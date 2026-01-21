@@ -42,11 +42,9 @@ What actually happened.
 
 Paste relevant logs here
 
-
 ## Additional Context
 
 Add any other context about the problem here.
-
 
 # .github/ISSUE_TEMPLATE/feature_request.md (COMPLETE)
 
@@ -84,7 +82,6 @@ Add any other context or screenshots about the feature request here.
 - [ ] No, but I'm available for testing
 - [ ] No, but I can provide feedback
 
-
 # .github/ISSUE_TEMPLATE/documentation.md (COMPLETE)
 
 ---
@@ -100,6 +97,7 @@ assignees: ''
 **Page/Section**: [e.g., API Reference > ComputeResource]
 
 **Issue Type**:
+
 - [ ] Typo/Grammar
 - [ ] Missing information
 - [ ] Incorrect information

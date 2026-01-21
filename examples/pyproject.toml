@@ -20,41 +20,14 @@ build-backend = "hatchling.build"
 requires = ["hatchling"]
 
 [tool.pixi.environments]
-secops = { features = [
-  "secops",
-], solve-group = "secops", no-default-feature = true }
-opstooling = { features = [
-  "opstooling",
-], solve-group = "opstooling", no-default-feature = true }
-ci-basics = { features = [
-  "ci-basics",
-  "opstooling",
-], solve-group = "ci-basics" }
-dev = { features = [
-  "my-infrastructure",
-  "dagster-basics",
-  "dagster-webserver",
-  "submission",
-  "cluster",
-  "hpc-workload",
-  "workload-document-processing",
-  "cluster-dev",
-  "ci-basics",
-  "dagster-scaffolding",
-], solve-group = "dagster-slurm-example" }
+secops = { features = ["secops"], solve-group = "secops", no-default-feature = true }
+opstooling = { features = ["opstooling"], solve-group = "opstooling", no-default-feature = true }
+ci-basics = { features = ["ci-basics", "opstooling"], solve-group = "ci-basics" }
+dev = { features = ["my-infrastructure", "dagster-basics", "dagster-webserver", "submission", "cluster", "hpc-workload", "workload-document-processing", "cluster-dev", "ci-basics", "dagster-scaffolding"], solve-group = "dagster-slurm-example" }
 
-packaged-cluster = { features = [
-  "submission",
-  "cluster",
-  "cluster-prod",
-], solve-group = "dagster-slurm-example-cluster-submission" }
+packaged-cluster = { features = ["submission", "cluster", "cluster-prod"], solve-group = "dagster-slurm-example-cluster-submission" }
 
-workload-document-processing = { features = [
-  "submission",
-  "cluster",
-  "cluster-prod",
-  "workload-document-processing",
-], solve-group = "dagster-slurm-example-workload-docling" }
+workload-document-processing = { features = ["submission", "cluster", "cluster-prod", "workload-document-processing"], solve-group = "dagster-slurm-example-workload-docling" }
 
 [tool.pixi.feature.ci-basics.dependencies]
 yamllint = ">=1.35.1,<2"
@@ -152,7 +125,6 @@ cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Package and deploy ARM64 environment for HPC environment"
 
-
 [tasks.deploy-prod-aarch]
 description = "Packs and deploys the ARM64 production environment to the HPC cluster."
 cmd = "python scripts/deploy_environment.py --platform linux-aarch64"
@@ -176,7 +148,6 @@ cmd = "pixi run -e dev --frozen dagster dev"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_supercomputer" }
 description = "Start dagster webserver in production mode with real HPC"
-
 
 # TODO: add more launcher modes for the other variants
 
@@ -226,7 +197,6 @@ depends-on = [
 cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch (no rebuild, cache-friendly)"
 
-
 [tool.pixi.tasks.clean]
 cmd = "pixi run -e opstooling --frozen ./scripts/cleanup_all.sh"
 description = "Cleanup"
@@ -274,7 +244,6 @@ directory_type = "project"
 root_module = "dagster_slurm_example"
 registry_modules = ["dagster_slurm_example.components.*"]
 
-
 [tool.ruff]
 exclude = [".git", "__pycache__", "build", "dist", ".pixi", "*.ipynb"]
 
@@ -296,7 +265,6 @@ filterwarnings = [
   "ignore::dagster._utils.warnings.PreviewWarning",
 ]
 markers = ["data: tests using real input data"]
-
 
 [tool.ty.environment]
 python-version = "3.12"

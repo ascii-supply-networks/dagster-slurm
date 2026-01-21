@@ -393,8 +393,8 @@ class SSHMessageReader(PipesMessageReader):
                 reconnect_count = 0
                 message_count = 0
 
-                if self._proc:
-                    for line in self._proc.stdout:  # type: ignore
+                if self._proc and self._proc.stdout:
+                    for line in self._proc.stdout:
                         if self._stop_flag.is_set():
                             break
 
@@ -743,7 +743,7 @@ class SSHMessageReader(PipesMessageReader):
 
     def _spawn_tail_with_password(self, ssh_cmd: list[str]):
         try:
-            import pexpect  # type: ignore
+            import pexpect
         except ImportError as exc:  # pragma: no cover - dependency guard
             raise RuntimeError(
                 "Password-based log tailing requires the 'pexpect' package. "
@@ -821,7 +821,7 @@ class SSHMessageReader(PipesMessageReader):
         return child
 
     def _iter_pexpect_lines(self, child):
-        import pexpect  # type: ignore
+        import pexpect
 
         while not self._stop_flag.is_set():
             try:

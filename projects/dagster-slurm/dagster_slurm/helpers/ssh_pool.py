@@ -171,7 +171,7 @@ class SSHConnectionPool:
     def _run_with_password(self, cmd, password, timeout=30):
         """Run SSH command with password using pexpect."""
         try:
-            import pexpect  # type: ignore
+            import pexpect
         except ImportError:
             raise RuntimeError(
                 "Password authentication requires 'pexpect' library.\n"

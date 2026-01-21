@@ -2,8 +2,8 @@
 sidebar_position: 3
 title: Release process
 ---
-This project uses [semantic-release](https://semantic-release.gitbook.io/) for automated versioning and publishing.
 
+This project uses [semantic-release](https://semantic-release.gitbook.io/) for automated versioning and publishing.
 
 When committing - ensure semver compatible standard commit patterns are followed.
 
@@ -19,7 +19,6 @@ pixi run -e build --frozen build-lib
 
 # to publish (albeit CI is doing this automatically)
 pixi run -e build --frozen publish-lib
-
 ```
 
 Check what version would be released:

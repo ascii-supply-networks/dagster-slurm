@@ -14,6 +14,7 @@ Adapted from [duckpond's docling+Ray example](https://github.com/l-mds/duckpond/
 ## Overview
 
 This application shows how to:
+
 - Process large collections of PDF documents in parallel using docling
 - Use Ray Data for distributed batch processing with real docling converters
 - Run the same code locally (development) and on Slurm HPC clusters (production)
@@ -78,16 +79,19 @@ The application follows a layered architecture:
 Located in: `examples/projects/dagster-slurm-example/dagster_slurm_example/defs/ray/docling_assets.py`
 
 **`process_documents_with_docling`** - Main document processing asset
+
 - Single-node document processing with configurable resources
 - Uses `ComputeResource` with `RayLauncher`
 - Converts PDFs to markdown in parallel
 
 **`analyze_docling_results`** - Downstream analysis asset
+
 - Reads metadata from upstream processing
 - Calculates success rates and health metrics
 - Demonstrates asset chaining and metadata propagation
 
 **`process_large_document_collection`** - Multi-node scaling example
+
 - Demonstrates scaling to 4+ nodes for large workloads
 - Higher parallelism configuration for batch processing
 
@@ -96,6 +100,7 @@ Located in: `examples/projects/dagster-slurm-example/dagster_slurm_example/defs/
 Located in: `examples/projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/process_documents_docling.py`
 
 Key components:
+
 - **`BasicDocumentConverter`** - Simple out-of-the-box PDF converter
 - **`RapidOCRDocumentConverter`** - Advanced OCR converter (optional, commented)
 - **`DoclingActor`** - Ray actor for parallel document processing
@@ -109,10 +114,12 @@ The payload script supports two execution modes:
 ### Test Data
 
 Sample PDFs are included in `examples/data/` for testing:
+
 - **WO2021041671-eval-small.pdf** - 4-page patent document (596KB)
 - **test-document-{1-5}.pdf** - 5 copies for batch processing tests
 
 For HPC testing, transfer data to your cluster:
+
 ```bash
 # Transfer via SCP
 scp -r examples/data/ user@hpc-cluster:/path/on/hpc/
@@ -139,6 +146,7 @@ pixi run -e build --frozen start
 ```
 
 The asset will:
+
 1. Start a local Ray instance automatically
 2. Process documents in parallel using available CPU cores
 3. Convert PDFs to markdown using real docling
@@ -164,6 +172,7 @@ compute_ray = ComputeResource.for_slurm(
 ```
 
 The asset will:
+
 1. Submit a Slurm job with requested resources
 2. Start a Ray cluster across allocated nodes
 3. Distribute document processing across the cluster
@@ -194,6 +203,7 @@ python process_documents_docling.py --mode pipes
 ```
 
 **Standalone mode features:**
+
 - Initializes Ray automatically
 - No Dagster dependency required
 - Returns results as dictionary
@@ -232,6 +242,7 @@ extra_slurm_opts={
 ### Scaling Configurations
 
 #### Single Node (Local Ray)
+
 ```python
 extra_slurm_opts={
     "nodes": 1,
@@ -239,9 +250,11 @@ extra_slurm_opts={
     "mem": "8G",
 }
 ```
+
 **Best for:** Small to medium document collections (< 1000 documents)
 
 #### Multi-Node (Distributed Ray)
+
 ```python
 extra_slurm_opts={
     "nodes": 4,           # 4 nodes
@@ -249,6 +262,7 @@ extra_slurm_opts={
     "mem": "16G",         # 16GB per node
 }
 ```
+
 **Best for:** Large document collections (> 1000 documents)
 
 ## Example Assets
@@ -380,6 +394,7 @@ self.converter = RapidOCRDocumentConverter(
 **Best for:** Scanned documents, images in PDFs, higher OCR accuracy.
 
 **Requirements:**
+
 - RapidOCR ONNX models (PP-OCRv5, PP-OCRv4)
 - Additional 2-3GB for model files
 - Recommended for GPU-enabled nodes
@@ -389,21 +404,28 @@ self.converter = RapidOCRDocumentConverter(
 ## Performance Tuning
 
 ### Batch Size
+
 Adjust based on document size:
+
 - **Small PDFs (< 5MB)**: `batch_size=8-16`
 - **Large PDFs (> 20MB)**: `batch_size=2-4`
 
 ### Worker Count
+
 Match to available resources:
+
 - **Local**: `cpu_count() - 1`
 - **Slurm**: `nodes × cpus_per_task`
 
 ### Memory
+
 Allocate based on document size:
+
 - **Small PDFs**: 4-8GB per node
 - **Large PDFs**: 16-32GB per node
 
 ### Multi-Node Decision
+
 - **Single node**: < 1000 documents
 - **Multi-node**: > 1000 documents
 
@@ -429,6 +451,7 @@ extra_slurm_opts={
 The application provides rich metadata for monitoring:
 
 ### Document Processing Metrics
+
 - `total_documents` - Total documents processed
 - `successful` - Successfully converted documents
 - `failed` - Failed conversions
@@ -438,6 +461,7 @@ The application provides rich metadata for monitoring:
 - `batch_size` - Batch size configuration
 
 ### Analysis Metrics
+
 - `success_rate_percent` - Conversion success rate
 - `status` - Health status (healthy/needs_attention)
 - `total_documents` - Total from upstream
@@ -450,15 +474,15 @@ View these metrics in the Dagster UI under the materialization event for each as
 
 ### Architecture Differences
 
-| Aspect | Duckpond Original | dagster-slurm Adaptation |
-|--------|-------------------|--------------------------|
-| **Integration** | Uses `dagster-ray` + `RayResource` | Uses `ComputeResource` + `RayLauncher` |
-| **Execution** | Direct Ray calls in asset | Pipes-based payload script |
-| **Environment** | Cloud/local Ray clusters | HPC/Slurm clusters + local dev |
-| **Ray Management** | Manual Ray cluster connection | Automatic cluster startup/shutdown |
-| **Code Location** | Ray code embedded in asset | Separate payload script |
-| **Packaging** | Python environment assumed | pixi-pack for environment portability |
-| **Modes** | Single execution mode | Dual-mode: Pipes + standalone |
+| Aspect             | Duckpond Original                  | dagster-slurm Adaptation               |
+| ------------------ | ---------------------------------- | -------------------------------------- |
+| **Integration**    | Uses `dagster-ray` + `RayResource` | Uses `ComputeResource` + `RayLauncher` |
+| **Execution**      | Direct Ray calls in asset          | Pipes-based payload script             |
+| **Environment**    | Cloud/local Ray clusters           | HPC/Slurm clusters + local dev         |
+| **Ray Management** | Manual Ray cluster connection      | Automatic cluster startup/shutdown     |
+| **Code Location**  | Ray code embedded in asset         | Separate payload script                |
+| **Packaging**      | Python environment assumed         | pixi-pack for environment portability  |
+| **Modes**          | Single execution mode              | Dual-mode: Pipes + standalone          |
 
 ### Key Adaptations
 
@@ -483,6 +507,7 @@ View these metrics in the Dagster UI under the materialization event for each as
 ### Why These Changes?
 
 The adaptations optimize for **HPC/Slurm environments** where:
+
 - Compute nodes may not have internet access
 - Python environments need to be self-contained
 - Job submission is via sbatch (not direct Ray cluster connection)
@@ -494,34 +519,42 @@ For **cloud or persistent Ray clusters**, the original duckpond approach with `d
 ## Troubleshooting
 
 ### No files found
+
 **Issue**: "No files found for glob: data/**/*.pdf"
 
 **Solution**:
+
 - Verify the input glob pattern matches your file structure
 - Use absolute paths if working directory is uncertain
 - Check file permissions on the cluster
 
 ### Ray cluster fails to start
+
 **Issue**: Ray workers cannot connect to head node
 
 **Solution**:
+
 - Ensure `ray` is installed in the pixi environment
 - Check Slurm partition allows requested resources
 - Verify intra-node networking is allowed
 - Review job logs: `${SLURM_DEPLOYMENT_BASE_PATH}/.../run.log`
 
 ### Out of memory errors
+
 **Issue**: Workers crash with OOM errors
 
 **Solution**:
+
 - Reduce `batch_size` for large documents
 - Increase memory allocation per node (`mem` in `extra_slurm_opts`)
 - Reduce `num_workers` to allow more memory per worker
 
 ### Slow processing
+
 **Issue**: Document conversion is slower than expected
 
 **Solution**:
+
 - Increase `num_workers` to match available CPUs
 - Adjust `batch_size` based on document size
 - Consider multi-node processing for large collections
@@ -537,5 +570,6 @@ For **cloud or persistent Ray clusters**, the original duckpond approach with `d
 ## Source Code
 
 Full implementation available in the dagster-slurm examples:
+
 - **Assets**: `examples/projects/dagster-slurm-example/dagster_slurm_example/defs/ray/docling_assets.py`
 - **Payload**: `examples/projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/process_documents_docling.py`

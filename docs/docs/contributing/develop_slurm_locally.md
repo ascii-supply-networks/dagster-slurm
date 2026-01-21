@@ -3,7 +3,6 @@ sidebar_position: 4
 title: Develop Slurm Locally
 ---
 
-
 # Develop Slurm Locally
 
 Switching to Slurm-backed execution locally only requires environment variables that describe the edge node. Create an `.env` file with:
@@ -22,4 +21,4 @@ Then run:
 pixi run start-staging
 ```
 
-Assets now submit through Slurm, and Dagster displays job logs, status, and resource metadata collected from the cluster. 
+Assets now submit through Slurm, and Dagster displays job logs, status, and resource metadata collected from the cluster.

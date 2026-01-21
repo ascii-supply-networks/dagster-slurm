@@ -31,13 +31,13 @@ seoMeta:
 routerMode: hash
 ---
 
-# Dagster + Slurm 
+# Dagster + Slurm
+
 ## = Productive HPC
 
 <div @click="$slidev.nav.next" class="mt-12 py-1" hover:bg="white op-10">
 bridge the gap between orchestration and HPC schedulers <carbon:arrow-right />
 </div>
-
 
 <div class="abs-br m-6 text-xl">
   <button @click="$slidev.nav.openInEditor()" title="Open in Editor" class="slidev-icon-btn">
@@ -57,15 +57,14 @@ layout: image
 image: /img/featured.png
 backgroundSize: contain
 ---
+
 ---
 transition: slide-up
 level: 2
 class: bg-white text-black
 ---
 
-
 ![](/img/ascii_overview.svg)
-
 
 ---
 transition: slide-left
@@ -94,7 +93,6 @@ disabled: true
 From the (public) cloud we expect so much more.
 -->
 
-
 ---
 #title: More than a single engine
 layout: image-right
@@ -109,12 +107,10 @@ transition: fade-out
 - Orchestrators provide dependency tracking, retries, metrics, and the control plane HPC teams lack.
 - Dagster supplies that missing layer; dagster-slurm connects it to the supercomputer’s scheduler.
 
-
 ---
 transition: slide-left
 layout: intro
 ---
-
 
 # What is a data orchestrator?
 
@@ -163,7 +159,6 @@ image: /img/lineage-dark2.png
 - Break down tool and department silos
 - Assets know when upstream data changed and re-materialise only when stale.
 
-
 ```python {3-5|7|all}
 import dagster as dg
 
@@ -182,6 +177,7 @@ level: 2
 ---
 
 ## Task-based orchestrator
+
 ```mermaid
 flowchart LR
 classDef task fill:#cfe8ff,stroke:#78b3e6,color:#1f2d3d,rx:6,ry:6
@@ -256,14 +252,14 @@ ccd --> cc[
 
 n_cd[/Is this asset older than 6 hours?<br/>If yes, notify me/]:::note -.-> cd
 n_ccd[/Is dependency asset ready<br/>and not older than 12 hours?/]:::note -.-> ccd
-
 ```
+
 </v-click>
 
 <!--
 Advantages of asset-based orchestration:
 - Asset testing
-- Asset freshness 
+- Asset freshness
 - Asset dependecy graph with granular declarative scheduling approach
 
 -->
@@ -278,12 +274,16 @@ transition: fade
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
 ```
+
 Develop locally
+
 ```bash
 cd examples
 pixi run start # Dagster UI on http://localhost:3000
 ```
+
 Submit through Slurm
+
 ```bash
 pixi run start-staging-supercomputer # use real HPC cluster, interactive enviroment bootstrap
 pixi run start-production-supercomputer # pre-deployed environment, faster startup
@@ -318,6 +318,7 @@ def train_pytorch(context: dg.AssetExecutionContext, compute: ComputeResource):
     )
     yield from completed.get_results()
 ```
+
 ```python
 def main():
     context = PipesContext.get()
@@ -347,6 +348,7 @@ class: bg-gradient-to-br from-purple-900 to-indigo-900 text-white
 ---
 
 # Real-world example
+
 ## Processing 10,000 PDFs with Ray + Docling
 
 <div class="mt-8 text-xl opacity-90">
@@ -375,15 +377,18 @@ layout: two-cols
 <div class="space-y-4 text-lg">
 
 **📚 Document Processing at Scale**
+
 - 10,000+ scientific PDFs need conversion to markdown
 - Complex layouts, figures, equations
 - Current approach: serial processing ~50 docs/hour
 
 **⏱️ Time constraints**
+
 - Single machine: **200+ hours**
 - Need results for analysis pipeline
 
 **💰 Resource requirements**
+
 - Needs GPUs for OCR acceleration
 - Can't afford dedicated cloud infrastructure
 
@@ -580,20 +585,24 @@ class: bg-slate-950 text-white
 <div class="space-y-6 mt-4">
 
 **1️⃣ Local Development**
+
 ```bash
 cd examples/
 pixi run start
 # Materialize in UI
 ```
+
 <div class="text-sm opacity-70">→ Processes 10 PDFs locally in ~30 seconds</div>
 
 <v-click>
 
 **2️⃣ Submit to HPC**
+
 ```bash
 pixi run start-staging
 # Same UI, same asset
 ```
+
 <div class="text-sm opacity-70">→ Submits Slurm job automatically</div>
 
 </v-click>
@@ -601,6 +610,7 @@ pixi run start-staging
 <v-click>
 
 **3️⃣ Ray Cluster Startup**
+
 <div class="text-sm opacity-70 mt-2">
 • dagster-slurm packages environment<br>
 • Transfers via SSH<br>
@@ -613,6 +623,7 @@ pixi run start-staging
 <v-click>
 
 **4️⃣ Parallel Processing**
+
 <div class="text-sm opacity-70 mt-2">
 • Ray distributes 10,000 PDFs<br>
 • Docling converts in parallel<br>
@@ -681,7 +692,7 @@ class: bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 text-white
     </div>
   </div>
 
-  <div class="flex items-start gap-3">
+<div class="flex items-start gap-3">
     <div class="text-3xl">💰</div>
     <div>
       <div class="font-bold text-xl">Cost Effective</div>
@@ -689,7 +700,7 @@ class: bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 text-white
     </div>
   </div>
 
-  <div class="flex items-start gap-3">
+<div class="flex items-start gap-3">
     <div class="text-3xl">🔧</div>
     <div>
       <div class="font-bold text-xl">Developer Friendly</div>
@@ -707,7 +718,7 @@ class: bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 text-white
     </div>
   </div>
 
-  <div class="flex items-start gap-3">
+<div class="flex items-start gap-3">
     <div class="text-3xl">🔄</div>
     <div>
       <div class="font-bold text-xl">Automatic Retries</div>
@@ -715,7 +726,7 @@ class: bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 text-white
     </div>
   </div>
 
-  <div class="flex items-start gap-3">
+<div class="flex items-start gap-3">
     <div class="text-3xl">📈</div>
     <div>
       <div class="font-bold text-xl">Scales Seamlessly</div>
@@ -787,20 +798,21 @@ layout: default
 # Different strengths, better together
 
 ### Data orchestrator
+
 - Models business data products and when they need to refresh.
 - Captures lineage, metadata, and failures across heterogeneous systems.
 - Keeps engineers productive with local runs, tests, and incremental deploys.
 
 ### Supercomputer + Slurm
+
 - Maximises utilisation of scarce accelerators and node hours.
 - Enforces fair-share policies, job placement, and low-level resource binding.
 - Provides high-performance file systems and interconnect-aware scheduling.
 
 ### Bridge
+
 - dagster-slurm lets Dagster plan the work while Slurm owns the physical execution.
 - One orchestrator spans tools silos (HPC and non-HPC) for unified visibility
-
-
 
 ---
 transition: fade-out
@@ -863,18 +875,19 @@ transition: fade
 # What dagster-slurm handles
 
 ## Under the hood
+
 - Packages environments with pixi/pixi-pack and syncs them to the cluster.
 - Verifies the exact dependency set before booting workloads.
 - Submits, monitors, and tears down Slurm jobs on your behalf.
 
 ## Developer experience
+
 - Switch between local and HPC by editing configuration, not code.
 - Follow logs and Slurm telemetry plus Pipes messages from a single pane of glass, for HPC and non-HPC workloads.
 - Capture memory/CPU metrics and run metadata in a structured timeline.
 
 <!-- ::right::
 ![](/img/pipes-architecture.svg) -->
-
 
 ---
 transition: slide-up
@@ -891,7 +904,6 @@ level: 2
 class: bg-white text-black
 disabled: true
 ---
-
 
 # Execution modes
 
@@ -923,7 +935,6 @@ backgroundSize: contain
 ---
 transition: fade-out
 class: bg-white text-black
-
 ---
 
 # Dagster Pipes
@@ -943,9 +954,7 @@ class: bg-white text-black
 <img src="/img/pipes-architecture.svg" />
 </div>
 
-
-layout: default
----
+## layout: default
 
 # Problems encountered
 
@@ -957,7 +966,9 @@ layout: default
 ---
 layout: statement
 ---
+
 # EU sovereign GPU cloud does not come out of nowhere
+
 maybe this project can support making HPC systems more accessible
 
 dagster-slurm
@@ -986,9 +997,10 @@ layout: default
 - Unified asset definitions now span laptops, cloud GPUs, and sovereign EU infrastructure.
 - Slurm in CI is possible
 
-
 ## Learnings
+
 To become a viable possibility for a European GPU cloud some changes are needed:
+
 - Authentication, technical service users
 - Network access (to connect to external data)
 
@@ -999,17 +1011,20 @@ layout: default
 # Wishlist
 
 ### Tools
+
 - Pre-installed pixi/pixi-pack on login nodes to speed up onboarding.
 - Sample Dagster pipelines that demonstrate sanctioned Slurm patterns and dagster-slurm available
 
 <br>
 
 ### Event
+
 - Hackathon office hours with site operators to fast-track credential tweaks.
 
 <br>
 
 ### Systems
+
 - dagster-slurm shipped as a supported module once prerequisites land (technical service user)
 - changed network access from all cluster nodes for accessing large external datasets.
 
@@ -1025,9 +1040,9 @@ class: bg-emerald-950 text-white
 - Continued development is planned
 
 Resources necessary:
+
 - Access to HPC system to test
 - Desire of HPC operators to change systems to solve blockers (technical service user, network access)
-
 
 ---
 layout: default
@@ -1070,14 +1085,13 @@ class: bg-white text-black
 
 # 100-word summary
 
-Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: assets defined once now flip from local development to Slurm without code changes. Pixi-pack seals Python environments so the same build runs on laptops, and real HPC clusters. 
+Dagster-slurm lets us treat Leonardo or VSC5 like any other deployment target: assets defined once now flip from local development to Slurm without code changes. Pixi-pack seals Python environments so the same build runs on laptops, and real HPC clusters.
 
-Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability. 
+Dagster Pipes streams metrics, queue state, and structured logs back into a single pane of glass, giving data scientists and HPC operators shared observability.
 
 We surfaced blockers—short-lived OTP credentials, closed outbound networking, and inconsistent CPU pinning on Leonardo and captured concrete asks for admins.
 
 > The effort validates that orchestrator-based ergonomics and supercomputer horsepower can finally coexist.
-
 
 ---
 layout: default

@@ -128,7 +128,7 @@ class SlurmPipesClient(PipesClient):
 
         """
         auth_provider = getattr(self.slurm, "_auth_provider", None)
-        if callable(getattr(auth_provider, "ensure", None)):
+        if auth_provider and callable(getattr(auth_provider, "ensure", None)):
             auth_provider.ensure()
         if context.run:
             run_id = context.run.run_id
@@ -144,7 +144,7 @@ class SlurmPipesClient(PipesClient):
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
-        self._ssh_pool = ssh_pool  # type: ignore
+        self._ssh_pool = ssh_pool
         run_dir = None
         job_id = None
 
@@ -162,7 +162,7 @@ class SlurmPipesClient(PipesClient):
         try:
             with ssh_pool:
                 # Store control path for log streaming
-                self._control_path = ssh_pool.control_path  # type: ignore
+                self._control_path = ssh_pool.control_path
 
                 remote_base = self._get_remote_base(run_id, ssh_pool)
                 run_dir = f"{remote_base}/runs/{run_id}"
@@ -216,7 +216,7 @@ class SlurmPipesClient(PipesClient):
                     message_reader=message_reader,
                     extras=extras,
                 ) as session:
-                    pipes_env = session.get_bootstrap_env_vars()
+                    pipes_env = dict(session.get_bootstrap_env_vars())
 
                     # Generate execution plan
                     allocation_context = None
@@ -236,7 +236,7 @@ class SlurmPipesClient(PipesClient):
                         payload_path=remote_payload,
                         python_executable=python_executable,
                         working_dir=run_dir,
-                        pipes_context=pipes_env,  # type: ignore
+                        pipes_context=pipes_env,
                         extra_env=extra_env,
                         allocation_context=allocation_context,
                         activation_script=activation_script,
@@ -783,9 +783,9 @@ class SlurmPipesClient(PipesClient):
             # Clean up temp files if they exist
             try:
                 if "local_temp_path" in locals():
-                    Path(local_temp_path).unlink(missing_ok=True)  # type: ignore
+                    Path(local_temp_path).unlink(missing_ok=True)
                 if "local_aux_path" in locals():
-                    Path(local_aux_path).unlink(missing_ok=True)  # type: ignore
+                    Path(local_aux_path).unlink(missing_ok=True)
             except:  # noqa: E722
                 pass
             raise RuntimeError(f"Could not write job script to {script_path}") from e
@@ -831,7 +831,7 @@ class SlurmPipesClient(PipesClient):
             raise RuntimeError(f"Could not parse job ID from:\n{output}")
 
         job_id = int(match.group(1))
-        self._current_job_id = job_id  # type: ignore
+        self._current_job_id = job_id
         self.logger.info(f"Submitted job {job_id}")
 
         # Wait for completion WITH live log streaming
@@ -1105,9 +1105,12 @@ class SlurmPipesClient(PipesClient):
                     text=True,
                     bufsize=1,
                 )
+                if not proc.stdout:
+                    self.logger.warning(f"No stdout for {stream_key}")
+                    return
                 try:
                     while not stop_streaming.is_set():
-                        line = proc.stdout.readline()  # type: ignore
+                        line = proc.stdout.readline()
                         if not line:
                             if proc.poll() is not None:
                                 break
@@ -1342,7 +1345,7 @@ class SlurmPipesClient(PipesClient):
             )
         elif self.slurm.ssh.uses_key_auth:
             cmd.extend(
-                [  # type: ignore
+                [
                     "-i",
                     self.slurm.ssh.key_path,
                     "-o",
