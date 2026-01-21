@@ -509,6 +509,7 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 proc = subprocess.run(scp_cmd, capture_output=True, text=True)
                 returncode = proc.returncode
+                stdout = proc.stdout
                 stderr = proc.stderr
             else:
                 if self.config.uses_password_auth or (
@@ -518,13 +519,17 @@ class SSHConnectionPool:
                         scp_cmd, self._collect_passwords(), timeout=300
                     )
                     returncode = result.returncode
+                    stdout = result.stdout
                     stderr = result.stderr
                 else:
                     proc = subprocess.run(scp_cmd, capture_output=True, text=True)
                     returncode = proc.returncode
+                    stdout = proc.stdout
                     stderr = proc.stderr
 
         if returncode != 0:
             raise RuntimeError(
-                f"SCP upload failed: {local_path} -> {remote_path}\nstderr: {stderr}"
+                f"SCP upload failed: {local_path} -> {remote_path}\n"
+                f"stdout: {stdout}\n"
+                f"stderr: {stderr}"
             )
