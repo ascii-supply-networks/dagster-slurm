@@ -24,6 +24,18 @@ repos:
         pass_filenames: false
         require_serial: false
 
+  # markdown and documentation
+  # - repo: local
+  #   hooks:
+  #     - id: dprint-fmt
+  #       name: dprint format
+  #       entry: sh -c 'pixi run -e build --frozen dprint fmt'
+  #       language: system
+  #       files: \.(md|json|toml|yaml|yml)$
+  #       exclude: ^(pixi\.lock|uv\.lock|package-lock\.json|bun\.lockb)$
+  #       pass_filenames: false
+  #       require_serial: false
+
   # Quick local checks (no virtualenv needed)
   - repo: local
     hooks:

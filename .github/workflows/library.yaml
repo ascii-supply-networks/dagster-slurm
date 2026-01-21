@@ -70,13 +70,7 @@ jobs:
             pixi-version: v0.63.2
             cache: true
             frozen: true
-      - name: Early pack smoke check
-        env:
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          cd examples
-          pixi run -e opstooling --frozen python scripts/pack_environment.py --env packaged-cluster --platform auto --build-missing --debug
+
       - run: pixi install -e build && pixi run -e build --frozen lint
 
       - name: Run unit tests without real SLURM

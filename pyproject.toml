@@ -36,8 +36,12 @@ channels = ["conda-forge"]
 
 [tool.pixi.environments]
 build = { features = ["build"], solve-group = "build" }
-
 docs = { features = ["docs"], solve-group = "docs" }
+
+[tool.pixi.feature.build.dependencies]
+dprint = ">=0.50.0,<1"
+
+
 [tool.pixi.feature.build.pypi-dependencies]
 uv = ">=0.8.6"
 build = ">=1.3.0"
@@ -65,8 +69,10 @@ dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
-fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
-lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && ty check --python .pixi/envs/build projects", description = "Lint" }
+fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt && dprint fmt", description = "Format" }
+lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && dprint check && ty check --python .pixi/envs/build projects", description = "Lint" }
+fmt-docs = { cmd = "dprint fmt docs/**/*.md", description = "Format documentation markdown" }
+lint-docs = { cmd = "dprint check docs/**/*.md", description = "Check documentation markdown formatting" }
 test = { cmd = "uv run -- pytest -m 'not (needs_slurm_docker or slow)' projects", description = "Run all unit tests" }
 testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
 
