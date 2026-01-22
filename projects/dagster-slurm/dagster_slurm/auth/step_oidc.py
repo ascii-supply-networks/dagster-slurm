@@ -62,7 +62,10 @@ class StepOIDCAuthProvider:
                     continue
                 candidate = parts[1].strip().split()[0]
                 try:
-                    return datetime.fromisoformat(candidate)
+                    dt = datetime.fromisoformat(candidate)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt
                 except ValueError:
                     continue
         return None
