@@ -1,9 +1,12 @@
 ---
 sidebar_position: 2
-title: Package environments
+title: Packaging dependencies
 ---
 
-Reliable environment packaging ensures that assets behave the same on your laptop and on the cluster. `dagster-slurm` relies on pixi for reproducible builds and can either package environments on demand or reuse pre-deployed copies.
+Reliable environment packaging ensures that assets behave the same on your laptop and on the cluster.
+`dagster-slurm` relies on [pixi](https://pixi.sh/) for reproducible builds.
+Pixi provides access to the full breadth of the conda ecosystem alongside PyPI packages.
+Dependencies can be packaged on demand or pre-deployed for faster cluster startup.
 
 ## Required environment variables
 
@@ -115,7 +118,7 @@ def my_asset(
     ).get_results()
 ```
 
-### Available options
+### Cache invalidation options
 
 | Option                | Default | Description                                                                                                  |
 | --------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
@@ -196,7 +199,11 @@ Different assets may require different environments (e.g., GPU vs CPU, different
 
 ### Custom pack command per asset
 
-Use `slurm_pack_cmd` metadata to specify a different pixi task for packaging:
+Use `slurm_pack_cmd` metadata to specify a different pixi task for packaging.
+
+:::tip See it in action
+For a complete working example, see the [Document Preprocessing with Docling](../applications/document-preprocessing-docling.md) application which uses custom packaging for different deployment modes.
+:::
 
 ```python
 @dg.asset(
@@ -257,6 +264,12 @@ def data_processing(context: dg.AssetExecutionContext, compute: ComputeResource)
 Per-asset overrides take precedence over `ComputeResource` defaults. This allows mixing live-packaged and pre-deployed environments in the same pipeline.
 :::
 
+### GPU and CUDA environments
+
+For GPU workloads, configure CUDA dependencies in your pixi environment. See the [official pixi documentation on using CUDA](https://pixi.prefix.dev/latest/workspace/system_requirements/#using-cuda-in-pixi) for environment setup details.
+
+**Slurm GPU allocation**: Request GPUs via `extra_slurm_opts = {"gres": "gpu:N"}` and configure Ray with `RayLauncher(num_gpus_per_node=N)`.
+
 ## Managing multiple environments
 
 Use unique deployment paths per branch or release to test upgrades safely:
@@ -312,9 +325,3 @@ You can also pin this per asset using metadata:
 ```
 
 This keeps lightweight assets on the base environment while heavier assets use the specialized one.
-
-## Common troubleshooting tips
-
-- Ensure pixi is available inside your CI runner or deployment environment.
-- If packaging fails with missing compilers, add them to your pixi environment (e.g. `gxx_linux-64`).
-- When switching between GPU and CPU builds, clean the remote deployment directory or use different target paths to avoid stale binaries.

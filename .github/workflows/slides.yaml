@@ -2,14 +2,14 @@ name: slides and pdf render
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'slides/**'
+      - "slides/**"
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'slides/**'
+      - "slides/**"
   workflow_dispatch:
 
 concurrency:

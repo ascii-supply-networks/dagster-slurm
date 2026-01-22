@@ -2,10 +2,10 @@ name: SLURM Cluster Image Builder
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'services/slurm/**'
-      - 'docker-compose.yml'
+      - "services/slurm/**"
+      - "docker-compose.yml"
   workflow_dispatch:
 
 concurrency:

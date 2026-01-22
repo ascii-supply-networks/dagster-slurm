@@ -19,7 +19,6 @@ services:
       retries: 24
       start_period: 10s
 
-
   slurmdbd:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
     build:
@@ -33,7 +32,7 @@ services:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
       - var_log_slurm:/var/log/slurm
-    shm_size: '10gb'
+    shm_size: "10gb"
     expose:
       - "6819"
     depends_on:
@@ -42,7 +41,10 @@ services:
     networks:
       - slurm-network
     healthcheck:
-      test: ["CMD-SHELL", "echo 'SELECT 1' | mysql -hmysql -uslurm -ppassword >/dev/null 2>&1 && ss -ltn | grep -q ':6819'"]
+      test: [
+        "CMD-SHELL",
+        "echo 'SELECT 1' | mysql -hmysql -uslurm -ppassword >/dev/null 2>&1 && ss -ltn | grep -q ':6819'",
+      ]
       interval: 5s
       timeout: 5s
       retries: 24
@@ -54,7 +56,7 @@ services:
     container_name: slurmctld
     hostname: slurmctld
     privileged: true
-    shm_size: '10gb'
+    shm_size: "10gb"
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -74,10 +76,10 @@ services:
     healthcheck:
       test:
         [
-        "CMD-SHELL",
-        "scontrol ping | grep -iq 'is up' && ss -ltn | grep -q ':22 '"
-        #   "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1"
-      ]
+          "CMD-SHELL",
+          "scontrol ping | grep -iq 'is up' && ss -ltn | grep -q ':22 '",
+          #   "scontrol ping | grep -iq 'is up' && sshpass -p 'submitter' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 22 submitter@127.0.0.1 'echo ssh_ok' >/dev/null 2>&1"
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -89,7 +91,7 @@ services:
     hostname: c1
     container_name: c1
     privileged: true
-    shm_size: '10gb'
+    shm_size: "10gb"
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -99,16 +101,14 @@ services:
       - home_dirs:/home
     expose:
       - "6818"
-      - "6379"      # Ray GCS port
-      - "8265"      # Ray dashboard
-      - "10001"     # Ray client server
+      - "6379" # Ray GCS port
+      - "8265" # Ray dashboard
+      - "10001" # Ray client server
     depends_on:
       slurmctld:
         condition: service_started
     networks:
       - slurm-network
-
-    
 
   c2:
     image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
@@ -116,7 +116,7 @@ services:
     hostname: c2
     container_name: c2
     privileged: true
-    shm_size: '10gb'
+    shm_size: "10gb"
     volumes:
       - etc_munge:/etc/munge
       - etc_slurm:/etc/slurm
@@ -126,9 +126,9 @@ services:
       - home_dirs:/home
     expose:
       - "6818"
-      - "6379"      # Ray GCS port
-      - "8265"      # Ray dashboard
-      - "10001"     # Ray client server
+      - "6379" # Ray GCS port
+      - "8265" # Ray dashboard
+      - "10001" # Ray client server
     depends_on:
       slurmctld:
         condition: service_started

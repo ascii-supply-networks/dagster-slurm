@@ -19,8 +19,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "yamllint>=1.35.1,<2",
-  "taplo>=0.9.3,<0.10",
   "pytest>=8.3.4,<9",
   "pytest-mock>=3.14.0,<4",
   "pytest-cov~=7.0.0",
@@ -68,8 +66,8 @@ dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
-fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt && dprint fmt", description = "Format" }
-lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && dprint check && ty check --python .pixi/envs/build projects", description = "Lint" }
+fmt = { cmd = "uv run -- ruff format projects && dprint fmt", description = "Format" }
+lint = { cmd = "uv run -- ruff check projects && dprint check && ty check --python .pixi/envs/build projects", description = "Lint" }
 fmt-docs = { cmd = "dprint fmt docs/**/*.md", description = "Format documentation markdown" }
 lint-docs = { cmd = "dprint check docs/**/*.md", description = "Check documentation markdown formatting" }
 test = { cmd = "uv run -- pytest -m 'not (needs_slurm_docker or slow)' projects", description = "Run all unit tests" }

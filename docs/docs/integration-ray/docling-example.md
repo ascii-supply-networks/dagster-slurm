@@ -3,7 +3,7 @@ sidebar_position: 3
 title: Document processing with docling
 ---
 
-Process PDF documents at scale using [docling](https://github.com/DS4SD/docling) and Ray. This example converts PDFs to markdown across HPC clusters with automatic Ray cluster management.
+Process PDF documents at scale using [docling](https://github.com/DS4SD/docling) and [Ray](./ray.md). This example converts PDFs to markdown across HPC clusters with automatic Ray cluster management.
 
 :::info
 Adapted from [duckpond's docling example](https://github.com/l-mds/duckpond/tree/main/projects/100_combined/ai_example/ai_example/defs/document_ai) for HPC environments.
@@ -151,7 +151,6 @@ cd dagster_slurm_example_hpc_workload/ray/
 
 # Direct Python execution
 python process_documents_docling.py \
-  --mode standalone \
   --input-glob "data/**/*.pdf" \
   --output-dir "out/my_docs" \
   --num-workers 4

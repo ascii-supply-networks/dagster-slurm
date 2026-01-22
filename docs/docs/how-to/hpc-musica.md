@@ -5,7 +5,11 @@ title: HPC - MUSICA
 
 MUSICA requires SSH certificate authentication via the Step client. Standard password or key-based authentication is not supported.
 
-## Authentication
+:::info Official Documentation
+For comprehensive MUSICA cluster documentation, see the [official MUSICA documentation](https://docs.asc.ac.at/musica_test/index.html).
+:::
+
+## Step client authentication
 
 Generate a time-limited SSH certificate:
 
@@ -99,3 +103,10 @@ If the Ray dashboard fails to start, add `ray_start_args: ["--include-dashboard=
 
 - [MUSICA Documentation](https://docs.asc.ac.at/musica_test/)
 - [Step CLI Reference](https://smallstep.com/docs/step-cli/)
+
+## Background
+
+MUSICA's authentication flow combines OAuth2 machine-to-machine credentials with SSH certificate issuance:
+
+- **OAuth2 Machine-to-Machine Flow**: The automatic refresh uses app passwords (OAuth2 client credentials) to obtain access tokens. See [Authentik M2M Provider Documentation](https://next.goauthentik.io/add-secure-apps/providers/oauth2/machine_to_machine/) for the authentication flow details.
+- **SSH Certificate Issuance**: Step CA issues time-limited SSH certificates using the OAuth2 access token. See [Step CA SSH Certificate Operations](https://smallstep.com/docs/step-ca/basic-certificate-authority-operations/#2-issue-an-ssh-user-certificate-and-test-your-connection) for how SSH certificate authentication works.

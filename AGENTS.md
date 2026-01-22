@@ -14,8 +14,8 @@ pixi run -e build --frozen sync              # Create/update environment
 pixi run -e build --frozen sync-lib-with-upgrade  # Refresh pins
 
 # Format and lint
-pixi run -e build --frozen fmt               # Format (ruff + yamllint + taplo)
-pixi run -e build --frozen lint              # Lint (ruff + yamllint + taplo + ty)
+pixi run -e build --frozen fmt               # Format (ruff  + dprint)
+pixi run -e build --frozen lint              # Lint (ruff + dprint + ty)
 
 # Testing
 pixi run -e build --frozen test              # Unit tests (skips slurm/slow)

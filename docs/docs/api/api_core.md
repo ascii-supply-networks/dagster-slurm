@@ -302,7 +302,7 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#id45)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id47)]*
 
 #### slurm *: `Optional`[[`SlurmResource`](#id21)]*
 
@@ -390,6 +390,8 @@ Modes:
 
 #### port_strategy *: `Literal`[`'fixed'`, `'hash_jobid'`]*
 
+#### pre_start_commands *: `list`[`str`]*
+
 #### prepare_execution(payload_path, python_executable, working_dir, pipes_context, extra_env=None, allocation_context=None, activation_script=None)
 
 Generate Ray execution plan.
@@ -408,6 +410,8 @@ Generate Ray execution plan.
 #### ray_address *: `Optional`[`str`]*
 
 #### ray_port *: `int`*
+
+#### ray_start_args *: `list`[`str`]*
 
 #### redis_password *: `Optional`[`str`]*
 
@@ -501,7 +505,7 @@ For proxy jumps, use the `_JUMP` suffix for jump host variables (e.g.,
   - **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
   - **\_is_jump** (`bool`)
 - **Return type:**
-  [`SSHConnectionResource`](#id27)
+  [`SSHConnectionResource`](#id29)
 - **Returns:**
   SSHConnectionResource instance
 
@@ -569,7 +573,7 @@ Represents a running Slurm allocation.
   - **slurm_job_id** (`int`)
   - **nodes** (`List`[`str`])
   - **working_dir** (`str`)
-  - **config** ([`SlurmSessionResource`](#id45))
+  - **config** ([`SlurmSessionResource`](#id47))
 
 #### cancel(ssh_pool)
 
@@ -627,7 +631,7 @@ Works in two modes:
 - **Parameters:**
   - **slurm_resource** ([`SlurmResource`](#id21))
   - **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
-  - **session_resource** (`Optional`[[`SlurmSessionResource`](#id45)])
+  - **session_resource** (`Optional`[[`SlurmSessionResource`](#id47)])
   - **cleanup_on_failure** (`bool`)
   - **debug_mode** (`bool`)
   - **auto_detect_platform** (`bool`)
@@ -714,15 +718,34 @@ Create a SlurmResource by populating most fields from environment variables,
 but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
 - **Parameters:**
-  **ssh** ([`SSHConnectionResource`](#id27)) – A fully configured SSHConnectionResource instance.
+  **ssh** ([`SSHConnectionResource`](#id29)) – A fully configured SSHConnectionResource instance.
 - **Return type:**
   [`SlurmResource`](#id21)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id60), `PartialResource`]]*
+#### model_post_init(context,)
+
+This function is meant to behave like a BaseModel method to initialise private attributes.
+
+It takes context as an argument since that’s what pydantic-core passes when calling it.
+
+- **Parameters:**
+  - **self** (`BaseModel`) – The BaseModel instance.
+  - **context** (`Any`) – The context.
+- **Return type:**
+  `None`
+
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id62), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
-#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id27), `PartialResource`]]*
+#### set_auth_provider(provider)
+
+- **Parameters:**
+  **provider** (`object`)
+- **Return type:**
+  [`SlurmResource`](#id21)
+
+#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id29), `PartialResource`]]*
 
 ### *class* dagster_slurm.SlurmRunConfig(\*\*config_dict)
 
@@ -828,7 +851,7 @@ This is the proper Dagster resource lifecycle hook.
 - **Parameters:**
   **context** (`InitResourceContext`)
 - **Return type:**
-  [`SlurmSessionResource`](#id45)
+  [`SlurmSessionResource`](#id47)
 
 #### slurm *: SlurmResource*
 
@@ -1115,7 +1138,7 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#id45)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id47)]*
 
 #### slurm *: `Optional`[[`SlurmResource`](#id21)]*
 
@@ -1157,15 +1180,34 @@ Create a SlurmResource by populating most fields from environment variables,
 but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
 - **Parameters:**
-  **ssh** ([`SSHConnectionResource`](#id27)) – A fully configured SSHConnectionResource instance.
+  **ssh** ([`SSHConnectionResource`](#id29)) – A fully configured SSHConnectionResource instance.
 - **Return type:**
   [`SlurmResource`](#id21)
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id60), `PartialResource`]]*
+#### model_post_init(context,)
+
+This function is meant to behave like a BaseModel method to initialise private attributes.
+
+It takes context as an argument since that’s what pydantic-core passes when calling it.
+
+- **Parameters:**
+  - **self** (`BaseModel`) – The BaseModel instance.
+  - **context** (`Any`) – The context.
+- **Return type:**
+  `None`
+
+#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#id62), `PartialResource`]]*
 
 #### remote_base *: `Optional`[`str`]*
 
-#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id27), `PartialResource`]]*
+#### set_auth_provider(provider)
+
+- **Parameters:**
+  **provider** (`object`)
+- **Return type:**
+  [`SlurmResource`](#id21)
+
+#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#id29), `PartialResource`]]*
 
 ### *class* dagster_slurm.SSHConnectionResource(\*\*data)
 
@@ -1251,7 +1293,7 @@ For proxy jumps, use the `_JUMP` suffix for jump host variables (e.g.,
   - **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
   - **\_is_jump** (`bool`)
 - **Return type:**
-  [`SSHConnectionResource`](#id27)
+  [`SSHConnectionResource`](#id29)
 - **Returns:**
   SSHConnectionResource instance
 
@@ -1376,7 +1418,7 @@ This is the proper Dagster resource lifecycle hook.
 - **Parameters:**
   **context** (`InitResourceContext`)
 - **Return type:**
-  [`SlurmSessionResource`](#id45)
+  [`SlurmSessionResource`](#id47)
 
 #### slurm *: SlurmResource*
 
