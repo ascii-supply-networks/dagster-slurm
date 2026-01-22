@@ -1,7 +1,6 @@
 """Unified compute resource - main facade."""
 
 from pathlib import Path
-import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
 from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
@@ -87,6 +86,13 @@ class ComputeResource(ConfigurableResource):
     cleanup_on_failure: bool = Field(
         default=True,
         description="Whether to cleanup remote files on failure (ignored if debug_mode=True)",
+    )
+
+    cancel_on_interrupt: bool = Field(
+        default=False,
+        description="If True, cancel SLURM jobs when Dagster is interrupted (Ctrl+C, restart). "
+        "If False, jobs continue running independently. Useful for long-running jobs that should "
+        "survive Dagster restarts. Default: False (jobs survive restarts).",
     )
 
     auto_detect_platform: bool = Field(
@@ -237,6 +243,7 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
+                cancel_on_interrupt=self.cancel_on_interrupt,
             )
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
@@ -259,6 +266,7 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
+                cancel_on_interrupt=self.cancel_on_interrupt,
             )
 
         else:  # ExecutionMode.SLURM_HETJOB
@@ -275,6 +283,7 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
+                cancel_on_interrupt=self.cancel_on_interrupt,
             )
 
     def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:

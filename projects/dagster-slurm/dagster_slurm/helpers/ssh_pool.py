@@ -449,6 +449,7 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 scp_cmd = [
                     "scp",
+                    "-C",  # Enable compression (critical for large files!)
                     "-o",
                     f"ControlPath={self.control_path}",
                     "-P",
@@ -457,6 +458,7 @@ class SSHConnectionPool:
             else:
                 scp_cmd = [
                     "scp",
+                    "-C",  # Enable compression (critical for large files!)
                     "-P",
                     str(self.config.port),
                     "-o",
