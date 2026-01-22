@@ -28,6 +28,7 @@ import argparse
 import os
 import platform
 import subprocess
+import sys
 from pathlib import Path
 import time
 
@@ -176,20 +177,27 @@ def main() -> int:
             print(f"📦 Building in {build_dir}:")
             print(f"   $ {' '.join(build_cmd)}")
 
-            build_result = subprocess.run(
+            # Stream output while capturing (tee-like behavior)
+            build_process = subprocess.Popen(
                 build_cmd,
-                check=False,
                 cwd=build_path,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                bufsize=1,
             )
-            if build_result.stdout:
-                print(build_result.stdout)
-            if build_result.stderr:
-                print(build_result.stderr)
-            if build_result.returncode != 0:
+
+            build_output_lines = []
+            if build_process.stdout is not None:
+                for line in build_process.stdout:
+                    print(line, end='')
+                    sys.stdout.flush()
+                    build_output_lines.append(line)
+
+            build_returncode = build_process.wait()
+            if build_returncode != 0:
                 raise subprocess.CalledProcessError(
-                    build_result.returncode, build_cmd, build_result.stdout, build_result.stderr
+                    build_returncode, build_cmd, ''.join(build_output_lines), ''
                 )
             print(f"   ✓ Build completed\n")
 
@@ -222,20 +230,34 @@ def main() -> int:
         print("\n✓ Dry run complete (no actual packing performed)")
         return 0
 
-    result = subprocess.run(
+    # Stream output while capturing (tee-like behavior)
+    # Use unbuffered output to see progress immediately
+    env = os.environ.copy()
+    env['PYTHONUNBUFFERED'] = '1'
+
+    process = subprocess.Popen(
         cmd,
-        check=False,
         cwd=base_dir,
-        capture_output=True,
-        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,  # Unbuffered
+        env=env,
     )
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-    if result.returncode != 0:
-        print(f"\n❌ Packing failed with exit code {result.returncode}")
-        return result.returncode
+
+    output_lines = []
+    if process.stdout is not None:
+        for chunk in iter(lambda: process.stdout.read(1) if process.stdout else b'', b''):
+            if not chunk:
+                break
+            char = chunk.decode('utf-8', errors='replace')
+            print(char, end='')
+            sys.stdout.flush()
+            output_lines.append(char)
+
+    returncode = process.wait()
+    if returncode != 0:
+        print(f"\n❌ Packing failed with exit code {returncode}")
+        return returncode
 
     # Rename the packed environment to avoid collisions across workloads/platforms
     packed_path = base_dir / "environment.sh"
