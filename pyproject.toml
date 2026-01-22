@@ -90,8 +90,13 @@ description = "uv sync with upgrade"
 [tool.pixi.feature.build.tasks.build-lib]
 cmd = "uv build --all-packages"
 cwd = "projects"
+description = "Build the library (default - no clean)"
+
+[tool.pixi.feature.build.tasks.clean-build-lib]
+cmd = "uv build --all-packages"
+cwd = "projects"
 depends-on = ["clean-lib"]
-description = "Cleanly build the library"
+description = "Clean cache first, then build the library"
 
 [tool.pixi.feature.build.tasks.publish-lib]
 cmd = "uv publish --token $PYPI_TOKEN"
