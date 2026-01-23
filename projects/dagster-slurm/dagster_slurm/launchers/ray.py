@@ -370,9 +370,11 @@ class RayLauncher(ComputeLauncher):
     echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
 
     # Start Ray head
+    # Set environment variables to ensure Ray uses the correct IP
     unset RAY_ADDRESS 2>/dev/null || true
-    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
+    export RAY_IP="$head_bind_addr"
     export RAY_NODE_IP_ADDRESS="$head_bind_addr"
+    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
     echo "[$({date_fmt})] Starting Ray head on $head_bind_addr:$port..."
     ray start --head --port=$port --node-ip-address="$head_bind_addr" \
         --dashboard-host={self.dashboard_host} --dashboard-port=$dash_port \
@@ -384,6 +386,8 @@ class RayLauncher(ComputeLauncher):
     fi
     export RAY_ADDRESS="$head_adv:$port"
     echo "[$({date_fmt})] RAY_ADDRESS=$RAY_ADDRESS"
+    # Give GCS a moment to initialize before checking
+    sleep 2
     # Wait for Ray to be ready
     echo "[$({date_fmt})] Waiting for Ray to be ready..."
     for i in $(seq 1 {self.head_startup_timeout}); do
