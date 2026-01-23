@@ -93,7 +93,7 @@ def test_ray_launcher_cluster_standalone_mode():
         in main_script
     )
     assert "Detected multi-node Slurm allocation" in main_script
-    assert 'srun --nodes=1 --ntasks=1 -w "$head_node"' in main_script
+    assert 'srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$head_node"' in main_script
     assert "else" in main_script
     assert "Single-node mode detected" in main_script
 
@@ -111,7 +111,7 @@ def test_ray_launcher_cluster_standalone_mode():
     )
     assert "ray start --head" in driver_script
     assert "--node-ip-address=$head_bind_addr" in driver_script
-    assert 'srun --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
+    assert 'srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
     assert "python3 /path/to/script.py" in driver_script
 
     assert "--address=$ip_head" in worker_script
