@@ -1,5 +1,5 @@
 #!/bin/bash
 
-rm environment.tar
+rm environment*.sh
 rm -r projects/*/dist
 rm -r projects/*/.pixi

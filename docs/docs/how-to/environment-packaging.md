@@ -302,6 +302,18 @@ pixi run -e opstooling --frozen python scripts/pack_environment.py \
   --build-missing
 ```
 
+:::warning Shared library changes may not be detected
+When you modify local packages that are injected into packed environments
+
+To ensure changes are picked up:
+
+- Clean the local build artifacts
+- Clean caches manually
+- Use a combination of `--build-missing` and `force_env_push=True`
+
+Alternatively: Use a pre-deployed environment.
+:::
+
 You can also pin this per asset using metadata:
 
 ```python

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 import ray
 import ray.data as rd
 from dagster_pipes import DagsterPipesError, PipesContext, open_dagster_pipes
+from dagster_slurm_example_shared import get_base_output_path
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import ConversionResult, ConversionStatus
 from docling.document_converter import DocumentConverter
@@ -409,7 +410,20 @@ def main():
             return None
 
     input_glob = _get_extra("INPUT_GLOB") or os.getenv("INPUT_GLOB") or "data/**/*.pdf"
-    output_dir = _get_extra("OUTPUT_DIR") or os.getenv("OUTPUT_DIR") or "out/docling"
+    output_dir_raw = _get_extra("OUTPUT_DIR") or os.getenv("OUTPUT_DIR")
+
+    # Resolve output directory using environment-aware paths
+    if output_dir_raw == "$HOME/output/docling":
+        # User used default - resolve based on deployment environment
+        base_output = get_base_output_path()
+        output_dir = f"{base_output}/docling"
+    elif output_dir_raw:
+        # User provided explicit path - expand variables
+        output_dir = os.path.expandvars(output_dir_raw)
+    else:
+        # Fallback
+        output_dir = "out/docling"
+
     num_workers = int(_get_extra("NUM_WORKERS") or os.getenv("NUM_WORKERS") or "2")
     batch_size = int(_get_extra("BATCH_SIZE") or os.getenv("BATCH_SIZE") or "4")
 

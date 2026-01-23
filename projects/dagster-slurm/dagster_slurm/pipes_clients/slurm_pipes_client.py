@@ -1477,23 +1477,19 @@ class SlurmPipesClient(PipesClient):
     ) -> None:
         """Query and log the estimated start time for a pending job."""
         try:
-            # Query full queue info (more reliable than just %S)
-            full_output = ssh_pool.run(
-                f"squeue --start -j {job_id} -o '%.18i %.9P %.8j %.8u %.2t %.19S %.6D %R' 2>/dev/null || true"
-            )
-            lines = [line.strip() for line in full_output.split("\n") if line.strip()]
+            # Query full queue info (skip header with tail -n +2)
+            squeue_cmd = f"squeue --start -j {job_id} -o '%.18i %.9P %.8j %.8u %.2t %.19S %.6D %R' | tail -n +2"
+            self.logger.debug(f"Queue status command: {squeue_cmd}")
 
-            # Parse the data line (skip header if present)
-            data_line = lines[1] if len(lines) > 1 else lines[0] if lines else ""
+            full_output = ssh_pool.run(f"{squeue_cmd} 2>/dev/null || true")
+            data_line = full_output.strip()
 
             if data_line:
-                # Show full SLURM queue info directly - no parsing, just raw output
-                self.logger.info(f"Estimated startup: {data_line}")
+                # Don't parse, just show raw squeue output
+                self.logger.debug(f"Job {job_id} queue status: {data_line}")
             else:
-                # No queue info available (job may have already started)
-                self.logger.debug(
-                    f"No queue info available for job {job_id} (may have started immediately)"
-                )
+                # No queue info available (job already started/running)
+                self.logger.debug(f"Job {job_id} already running (not in queue)")
 
         except Exception as e:
             # Non-critical - just log as debug and continue

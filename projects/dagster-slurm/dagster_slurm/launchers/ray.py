@@ -268,16 +268,27 @@ class RayLauncher(ComputeLauncher):
     temp_dir_arg=""
     RAY_TMP_DIR=""  # Global for cleanup function
     if [[ -n "${{SLURM_JOB_ID:-}}" ]]; then
-      # Use SLURM_TMPDIR if available (per-job temp dir), otherwise /tmp with job ID
+      # Use SLURM_TMPDIR if available (per-job temp dir)
       if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
         RAY_TMP_DIR="${{SLURM_TMPDIR}}/ray"
+        mkdir -p "$RAY_TMP_DIR"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR: $RAY_TMP_DIR"
       else
-        RAY_TMP_DIR="/tmp/ray_job_${{SLURM_JOB_ID}}"
+        # Try very short /tmp path first (avoids Unix socket 107-byte path limit)
+        SHORT_TMP="/tmp/r${{SLURM_JOB_ID}}"
+        if mkdir -p "$SHORT_TMP" 2>/dev/null; then
+          RAY_TMP_DIR="$SHORT_TMP"
+          echo "[$({date_fmt})] Using /tmp: $RAY_TMP_DIR"
+        else
+          # /tmp not writable - use $HOME/.r<jobid> (much shorter than working dir)
+          RAY_TMP_DIR="$HOME/.r${{SLURM_JOB_ID}}"
+          mkdir -p "$RAY_TMP_DIR"
+          echo "[$({date_fmt})] Using HOME temp dir: $RAY_TMP_DIR"
+        fi
       fi
-      mkdir -p "$RAY_TMP_DIR"
       export RAY_TMPDIR="$RAY_TMP_DIR"
       temp_dir_arg="--temp-dir=$RAY_TMP_DIR"
-      echo "[$({date_fmt})] Ray temp directory: $RAY_TMP_DIR"
+      echo "[$({date_fmt})] Ray temp directory: $RAY_TMP_DIR ($(echo -n "$RAY_TMP_DIR" | wc -c) chars)"
     fi
 {override_block}    # Start local Ray cluster
     echo "[$({date_fmt})] Starting local Ray cluster"
@@ -396,7 +407,6 @@ class RayLauncher(ComputeLauncher):
         Generates a robust Ray cluster startup script with proper shutdown.
         """
         redis_pw = self.redis_password or "$(uuidgen)"
-        temp_dir_path = "/tmp/ray-$SLURM_JOB_ID"
 
         common_args = []
         if self.object_store_memory_gb is not None:
@@ -427,7 +437,7 @@ class RayLauncher(ComputeLauncher):
                 "--dashboard-port=$dash_port",
                 f"--num-gpus={self.num_gpus_per_node}",
                 "--redis-password=$redis_password",
-                f"--temp-dir={temp_dir_path}",
+                f"--temp-dir=$RAY_CLUSTER_TMP",
             ]
             + common_args
             + self.ray_start_args
@@ -438,6 +448,7 @@ class RayLauncher(ComputeLauncher):
             "--address=$ip_head",
             "--redis-password=$redis_password",
             f"--num-gpus={self.num_gpus_per_node}",
+            "--temp-dir=$RAY_CLUSTER_TMP",
         ] + common_args
 
         head_cmd_str = " \\\n    ".join(head_args)
@@ -477,7 +488,7 @@ class RayLauncher(ComputeLauncher):
 
         # Final sync of worker logs
         worker_logs_dir="{working_dir}/ray_logs/worker_$(hostname)"
-        for session_dir in "{temp_dir_path}"/session_*/logs; do
+        for session_dir in "$RAY_CLUSTER_TMP"/session_*/logs; do
           if [[ -d "$session_dir" ]]; then
             session_name=$(basename "$(dirname "$session_dir")")
             target_dir="$worker_logs_dir/$session_name/logs"
@@ -495,7 +506,7 @@ class RayLauncher(ComputeLauncher):
         run_with_timeout 30 ray stop --force 2>/dev/null || true
 
         # Cleanup temp dir
-        rm -rf {temp_dir_path} 2>/dev/null || true
+        rm -rf $RAY_CLUSTER_TMP 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Worker cleanup complete"
         exit 0
     }}
@@ -508,7 +519,7 @@ class RayLauncher(ComputeLauncher):
 
     {{
       while true; do
-        for session_dir in "{temp_dir_path}"/session_*/logs; do
+        for session_dir in "$RAY_CLUSTER_TMP"/session_*/logs; do
           if [[ -d "$session_dir" ]]; then
             session_name=$(basename "$(dirname "$session_dir")")
             target_dir="$worker_logs_dir/$session_name/logs"
@@ -521,8 +532,22 @@ class RayLauncher(ComputeLauncher):
     }} &
     WORKER_LOG_SYNC_PID=$!
     echo "[$({date_fmt})] Started background worker log sync (PID: $WORKER_LOG_SYNC_PID)"
-    echo "Worker on $(hostname) starting and connecting to $ip_head..."
 
+    # Determine Ray temp directory (short path to avoid 107-byte socket limit)
+    if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
+        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray"
+    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /tmp for Ray"
+    else
+        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using HOME for Ray"
+    fi
+    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
+    mkdir -p "$RAY_CLUSTER_TMP"
+
+    echo "Worker on $(hostname) starting and connecting to $ip_head..."
     ray start {worker_cmd_str} --block
     """
 
@@ -600,10 +625,10 @@ class RayLauncher(ComputeLauncher):
             echo "PAYLOAD FAILED OR SCRIPT EXITED UNEXPECTEDLY! Capturing logs..." >&2
             for node in "${{worker_nodes[@]}}"; do
                 echo "--- WORKER NODE ($node) RAYLET LOG ---" >&2
-                srun --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
+                srun --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
             done
             echo "--- HEAD NODE ($(hostname)) RAYLET LOG ---" >&2
-            tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
+            tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
         fi
 
@@ -629,8 +654,8 @@ class RayLauncher(ComputeLauncher):
         fi
 
         # Final sync of any remaining logs
-        echo "[$({date_fmt})] Final log sync from {temp_dir_path}..."
-        for session_dir in "{temp_dir_path}"/session_*/logs; do
+        echo "[$({date_fmt})] Final log sync from $RAY_CLUSTER_TMP..."
+        for session_dir in "$RAY_CLUSTER_TMP"/session_*/logs; do
           if [[ -d "$session_dir" ]]; then
             session_name=$(basename "$(dirname "$session_dir")")
             target_dir="{working_dir}/ray_logs/$session_name/logs"
@@ -640,7 +665,7 @@ class RayLauncher(ComputeLauncher):
         done
 
         echo "[$({date_fmt})] Cleaning up temporary files..."
-        rm -rf {temp_dir_path} 2>/dev/null || true
+        rm -rf $RAY_CLUSTER_TMP 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Shutdown complete"
     }}
     trap cleanup EXIT SIGINT SIGTERM ERR
@@ -652,7 +677,7 @@ class RayLauncher(ComputeLauncher):
 
     {{
       while true; do
-        for session_dir in "{temp_dir_path}"/session_*/logs; do
+        for session_dir in "$RAY_CLUSTER_TMP"/session_*/logs; do
           if [[ -d "$session_dir" ]]; then
             session_name=$(basename "$(dirname "$session_dir")")
             target_dir="$ray_logs_archive/$session_name/logs"
@@ -665,6 +690,20 @@ class RayLauncher(ComputeLauncher):
     }} &
     LOG_SYNC_PID=$!
     echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
+
+    # Determine Ray temp directory (short path to avoid 107-byte socket limit)
+    if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
+        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray"
+    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /tmp for Ray"
+    else
+        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using HOME for Ray"
+    fi
+    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
+    mkdir -p "$RAY_CLUSTER_TMP"
 
     # ===== 1. Start Head Node =====
     echo "[$({date_fmt})] Starting Ray head on this node ($(hostname)) at $ip_head..."

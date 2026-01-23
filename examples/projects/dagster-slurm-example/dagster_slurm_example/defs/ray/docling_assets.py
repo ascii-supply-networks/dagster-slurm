@@ -6,66 +6,26 @@ on Slurm clusters, it spawns a multi-node Ray cluster for parallel processing.
 """
 
 import os
-from pathlib import Path
 
 import dagster as dg
 from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
-from dagster_slurm_example_shared import get_base_output_path
-from pydantic import Field
-
-
-def _default_docling_glob() -> str | None:
-    """Return default input glob based on deployment environment.
-
-    - Local/development: Use local example data directory
-    - Docker SLURM: Use Docker container data path
-    - Supercomputer: None (must be configured via launchpad)
-    """
-    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
-
-    # Docker SLURM deployments use container path
-    # Use *.pdf to match files in the directory root (not just subdirectories)
-    if "docker" in deployment:
-        return "/home/submitter/dagster-slurm-data/*.pdf"
-
-    # Supercomputer: no default path (user must configure via launchpad)
-    if "supercomputer" in deployment:
-        return None
-
-    # For local development, use local example data
-    examples_dir = Path(__file__).resolve().parents[5]
-    data_dir = examples_dir / "data"
-    if data_dir.exists() and any(data_dir.rglob("*.pdf")):
-        return str(data_dir / "**" / "*.pdf")
-
-    # Unknown deployment: no default
-    return None
-
-
-def _default_docling_output_dir() -> str:
-    """Return default output directory based on deployment environment.
-
-    Uses shared path configuration from dagster_slurm_example_shared.
-    - Local/development: /tmp/dagster_output/docling
-    - Docker: $DATA/output/docling
-    - musica/vsc5: $DATA/output/docling
-    - datalab: $HOME/output/docling
-    """
-    base_output = get_base_output_path()
-    return f"{base_output}/docling"
+from pydantic import Field, model_validator
 
 
 class DoclingRunConfig(SlurmRunConfig):
     """Configuration for docling document processing."""
 
-    input_glob: str | None = Field(
-        default_factory=_default_docling_glob,
-        description="Glob pattern for input PDF files to process (relative to project root or absolute path). "
-        "Required for supercomputer deployments - configure via launchpad.",
+    input_glob: str = Field(
+        description="Glob pattern for input PDF files to process (absolute path). "
+        "Examples:\n"
+        "  - Docker: /home/submitter/dagster-slurm-data/*.pdf\n"
+        "  - Supercomputer: /scratch/username/data/*.pdf\n"
+        "  - Development: /path/to/your/data/**/*.pdf",
     )
     output_dir: str = Field(
-        default_factory=_default_docling_output_dir,
-        description="Directory where processed documents will be saved",
+        default="$HOME/output/docling",
+        description="Directory where processed documents will be saved. "
+        "Default: $HOME/output/docling (expanded on compute node)",
     )
     num_workers: int = Field(
         default=2,
@@ -80,18 +40,32 @@ class DoclingRunConfig(SlurmRunConfig):
         description="Number of documents to process per batch",
     )
 
+    @model_validator(mode="after")
+    def validate_input_glob_not_empty(self):
+        """Validate that input_glob is not empty."""
+        if not self.input_glob or not self.input_glob.strip():
+            raise ValueError(
+                "input_glob is required and cannot be empty. "
+                "Please provide a glob pattern in the Dagster launchpad, "
+                "e.g., '/scratch/username/data/*.pdf' or '/home/user/documents/**/*.pdf'"
+            )
+        return self
+
 
 class LargeScaleDoclingRunConfig(SlurmRunConfig):
     """Configuration for large-scale multi-node docling processing."""
 
-    input_glob: str | None = Field(
-        default_factory=_default_docling_glob,
-        description="Glob pattern for input PDF files to process (relative to project root or absolute path). "
-        "Required for supercomputer deployments - configure via launchpad.",
+    input_glob: str = Field(
+        description="Glob pattern for input PDF files to process (absolute path). "
+        "Examples:\n"
+        "  - Docker: /home/submitter/dagster-slurm-data/*.pdf\n"
+        "  - Supercomputer: /scratch/username/data/*.pdf\n"
+        "  - Development: /path/to/your/data/**/*.pdf",
     )
     output_dir: str = Field(
-        default_factory=_default_docling_output_dir,
-        description="Directory where processed documents will be saved",
+        default="$HOME/output/docling",
+        description="Directory where processed documents will be saved. "
+        "Default: $HOME/output/docling (expanded on compute node)",
     )
     num_workers: int = Field(
         default=8,
@@ -105,6 +79,17 @@ class LargeScaleDoclingRunConfig(SlurmRunConfig):
         le=200,
         description="Number of documents to process per batch",
     )
+
+    @model_validator(mode="after")
+    def validate_input_glob_not_empty(self):
+        """Validate that input_glob is not empty."""
+        if not self.input_glob or not self.input_glob.strip():
+            raise ValueError(
+                "input_glob is required and cannot be empty. "
+                "Please provide a glob pattern in the Dagster launchpad, "
+                "e.g., '/scratch/username/data/*.pdf' or '/home/user/documents/**/*.pdf'"
+            )
+        return self
 
 
 @dg.asset(
@@ -121,6 +106,7 @@ class LargeScaleDoclingRunConfig(SlurmRunConfig):
             "scripts/pack_environment.py",
             "--env",
             "workload-document-processing",
+            "--build-missing",
         ]
     },
 )
@@ -146,12 +132,6 @@ def process_documents_with_docling(
         compute_ray: ComputeResource configured with RayLauncher
         config: Slurm + docling configuration
     """
-    # Validate required configuration
-    if config.input_glob is None:
-        raise ValueError(
-            "input_glob is required but not configured. "
-            "Please provide input_glob in the Dagster launchpad or run configuration."
-        )
 
     script_path = dg.file_relative_path(
         __file__,
@@ -190,10 +170,16 @@ def process_documents_with_docling(
         launcher=ray_launcher,
         extra_env={
             # Document processing configuration from Dagster config
+            # OUTPUT_DIR will be resolved on the compute node if __AUTO__
             "INPUT_GLOB": config.input_glob,
             "OUTPUT_DIR": config.output_dir,
             "NUM_WORKERS": str(config.num_workers),
             "BATCH_SIZE": str(config.batch_size),
+            # Ray object store memory: use 50% of available memory (recommended for Ray Data)
+            "RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION": "0.5",
+            # Pass deployment config for environment-aware path resolution
+            "DAGSTER_DEPLOYMENT": deployment,
+            "SLURM_SUPERCOMPUTER_SITE": os.getenv("SLURM_SUPERCOMPUTER_SITE", ""),
         },
         extra_slurm_opts={
             # Resource allocation for document processing
@@ -224,6 +210,7 @@ def process_documents_with_docling(
             "scripts/pack_environment.py",
             "--env",
             "workload-document-processing",
+            "--build-missing",
         ]
     },
 )
@@ -242,12 +229,6 @@ def process_large_document_collection(
         compute_ray: ComputeResource configured with RayLauncher
         config: Slurm + docling configuration
     """
-    # Validate required configuration
-    if config.input_glob is None:
-        raise ValueError(
-            "input_glob is required but not configured. "
-            "Please provide input_glob in the Dagster launchpad or run configuration."
-        )
 
     script_path = dg.file_relative_path(
         __file__,
@@ -286,6 +267,11 @@ def process_large_document_collection(
             "OUTPUT_DIR": config.output_dir,
             "NUM_WORKERS": str(config.num_workers),
             "BATCH_SIZE": str(config.batch_size),
+            # Ray object store memory: use 50% of available memory (recommended for Ray Data)
+            "RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION": "0.5",
+            # Pass deployment config for environment-aware path resolution
+            "DAGSTER_DEPLOYMENT": deployment,
+            "SLURM_SUPERCOMPUTER_SITE": os.getenv("SLURM_SUPERCOMPUTER_SITE", ""),
         },
         extra_slurm_opts={
             # Multi-node configuration
