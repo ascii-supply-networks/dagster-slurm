@@ -340,8 +340,8 @@ class RayLauncher(ComputeLauncher):
       echo "[$({date_fmt})] ✓ Cleanup complete"
     }}
 
-    # Set trap for ALL exit scenarios (normal, error, cancel, kill)
-    trap cleanup_ray EXIT SIGINT SIGTERM ERR
+    # Set trap for exit scenarios (not ERR - it causes double cleanup with set -e)
+    trap cleanup_ray EXIT SIGINT SIGTERM
 
     # Start continuous log archival in background (survives scancel better than traps)
     # This ensures logs are preserved even if SIGKILL terminates the main process
@@ -370,13 +370,24 @@ class RayLauncher(ComputeLauncher):
     echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
 
     # Start Ray head
+    # Set environment variables to ensure Ray uses the correct IP
     unset RAY_ADDRESS 2>/dev/null || true
-    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
+    export RAY_IP="$head_bind_addr"
     export RAY_NODE_IP_ADDRESS="$head_bind_addr"
+    export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
+    echo "[$({date_fmt})] Starting Ray head on $head_bind_addr:$port..."
     ray start --head --port=$port --node-ip-address="$head_bind_addr" \
         --dashboard-host={self.dashboard_host} --dashboard-port=$dash_port \
         --num-gpus={self.num_gpus_per_node} {obj_store} {(" " + " ".join(self.ray_start_args)) if self.ray_start_args else ""} $temp_dir_arg
+    ray_start_exit=$?
+    if [[ $ray_start_exit -ne 0 ]]; then
+        echo "[$({date_fmt})] ERROR: ray start failed with exit code $ray_start_exit" >&2
+        exit 1
+    fi
     export RAY_ADDRESS="$head_adv:$port"
+    echo "[$({date_fmt})] RAY_ADDRESS=$RAY_ADDRESS"
+    # Give GCS a moment to initialize before checking
+    sleep 2
     # Wait for Ray to be ready
     echo "[$({date_fmt})] Waiting for Ray to be ready..."
     for i in $(seq 1 {self.head_startup_timeout}); do
@@ -510,7 +521,7 @@ class RayLauncher(ComputeLauncher):
         echo "[$({date_fmt})] ✓ Worker cleanup complete"
         exit 0
     }}
-    trap cleanup_node TERM INT EXIT ERR
+    trap cleanup_node TERM INT EXIT
 
     # Start continuous log sync in background for worker
     # Only sync logs/, not runtime files
@@ -673,7 +684,7 @@ class RayLauncher(ComputeLauncher):
         rm -rf $RAY_CLUSTER_TMP 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Shutdown complete"
     }}
-    trap cleanup EXIT SIGINT SIGTERM ERR
+    trap cleanup EXIT SIGINT SIGTERM
 
     # Start continuous log archival in background (survives scancel)
     # Only sync logs/, not runtime files
