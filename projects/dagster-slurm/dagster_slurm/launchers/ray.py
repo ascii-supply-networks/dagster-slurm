@@ -58,10 +58,12 @@ class RayLauncher(ComputeLauncher):
         description="Optional shell commands to run before ray start (e.g., ulimit).",
     )
     worker_cpu_bind: Optional[str] = Field(
-        default=None,
+        default="none",
         description=(
-            "Optional value for srun --cpu-bind when starting workers. "
-            "Leave unset to inherit Slurm defaults."
+            "Value for srun --cpu-bind when starting workers. "
+            "Default 'none' disables CPU binding to avoid conflicts with job allocation. "
+            "Other values: 'cores', 'threads', 'sockets', etc. "
+            "Set to Python None (not the string) to omit the flag entirely."
         ),
     )
     use_head_ip: bool = Field(
@@ -263,8 +265,8 @@ class RayLauncher(ComputeLauncher):
     fi
     head_adv="$head_bind_addr"
     if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
-    # Use /tmp for Ray sockets (Unix socket path limit: 107 bytes)
-    # $HOME/dagster_runs paths are too long and cause socket errors
+    # Use short path for Ray sockets (Unix socket path limit: 107 bytes)
+    # Must be node-local storage - Unix sockets don't work over NFS
     temp_dir_arg=""
     RAY_TMP_DIR=""  # Global for cleanup function
     if [[ -n "${{SLURM_JOB_ID:-}}" ]]; then
@@ -272,19 +274,17 @@ class RayLauncher(ComputeLauncher):
       if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
         RAY_TMP_DIR="${{SLURM_TMPDIR}}/ray"
         mkdir -p "$RAY_TMP_DIR"
-        echo "[$({date_fmt})] Using SLURM_TMPDIR: $RAY_TMP_DIR"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR: $RAY_TMP_DIR (node-local)"
+      elif mkdir -p "/tmp/r${{SLURM_JOB_ID}}" 2>/dev/null; then
+        RAY_TMP_DIR="/tmp/r${{SLURM_JOB_ID}}"
+        echo "[$({date_fmt})] Using /tmp: $RAY_TMP_DIR (node-local)"
+      elif mkdir -p "/var/tmp/r${{SLURM_JOB_ID}}" 2>/dev/null; then
+        RAY_TMP_DIR="/var/tmp/r${{SLURM_JOB_ID}}"
+        echo "[$({date_fmt})] Using /var/tmp: $RAY_TMP_DIR (node-local)"
       else
-        # Try very short /tmp path first (avoids Unix socket 107-byte path limit)
-        SHORT_TMP="/tmp/r${{SLURM_JOB_ID}}"
-        if mkdir -p "$SHORT_TMP" 2>/dev/null; then
-          RAY_TMP_DIR="$SHORT_TMP"
-          echo "[$({date_fmt})] Using /tmp: $RAY_TMP_DIR"
-        else
-          # /tmp not writable - use $HOME/.r<jobid> (much shorter than working dir)
-          RAY_TMP_DIR="$HOME/.r${{SLURM_JOB_ID}}"
-          mkdir -p "$RAY_TMP_DIR"
-          echo "[$({date_fmt})] Using HOME temp dir: $RAY_TMP_DIR"
-        fi
+        RAY_TMP_DIR="$HOME/.r${{SLURM_JOB_ID}}"
+        mkdir -p "$RAY_TMP_DIR"
+        echo "[$({date_fmt})] WARNING: Using HOME: $RAY_TMP_DIR - may fail if shared filesystem"
       fi
       export RAY_TMPDIR="$RAY_TMP_DIR"
       temp_dir_arg="--temp-dir=$RAY_TMP_DIR"
@@ -534,15 +534,20 @@ class RayLauncher(ComputeLauncher):
     echo "[$({date_fmt})] Started background worker log sync (PID: $WORKER_LOG_SYNC_PID)"
 
     # Determine Ray temp directory (short path to avoid 107-byte socket limit)
+    # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
+    # Unix sockets don't work across NFS.
     if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
         export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
     elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
         export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using /tmp for Ray"
+        echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
+    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
     else
         export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using HOME for Ray"
+        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
     fi
     echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
     mkdir -p "$RAY_CLUSTER_TMP"
@@ -625,7 +630,7 @@ class RayLauncher(ComputeLauncher):
             echo "PAYLOAD FAILED OR SCRIPT EXITED UNEXPECTEDLY! Capturing logs..." >&2
             for node in "${{worker_nodes[@]}}"; do
                 echo "--- WORKER NODE ($node) RAYLET LOG ---" >&2
-                srun --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
+                srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
             done
             echo "--- HEAD NODE ($(hostname)) RAYLET LOG ---" >&2
             tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
@@ -692,15 +697,20 @@ class RayLauncher(ComputeLauncher):
     echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
 
     # Determine Ray temp directory (short path to avoid 107-byte socket limit)
+    # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
+    # Unix sockets don't work across NFS.
     if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
         export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
     elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
         export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using /tmp for Ray"
+        echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
+    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
     else
         export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using HOME for Ray"
+        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
     fi
     echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
     mkdir -p "$RAY_CLUSTER_TMP"
@@ -724,6 +734,7 @@ class RayLauncher(ComputeLauncher):
         if [[ "$node" != "$head_node_name" ]]; then worker_nodes+=("$node"); fi
     done
     echo "Head node: $head_node_name"; echo "Worker nodes: ${{worker_nodes[@]}}"
+    export TMPDIR="{working_dir}"
     for node_i in "${{worker_nodes[@]}}"; do
         echo "Launching worker on $node_i..."
         srun {cpu_bind_option}--nodes=1 --ntasks=1 -w "$node_i" \\
@@ -776,13 +787,16 @@ class RayLauncher(ComputeLauncher):
     {shlex.quote(python_executable)} {shlex.quote(payload_path)}
     """
 
-        # --- Main sbatch payload (unchanged) ---
+        # --- Main sbatch payload ---
+        # Use --cpu-bind=none to avoid CPU binding conflicts with job allocation
+        # Set TMPDIR to working dir in case /tmp is not writable
         main_sbatch_payload = f"""
     nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
     nodes_array=($nodes)
     head_node="${{nodes_array[0]}}"
     echo "Designated head node: $head_node"
-    srun --nodes=1 --ntasks=1 -w "$head_node" {working_dir}/ray_driver.sh "{activation_script}"
+    export TMPDIR="{working_dir}"
+    srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$head_node" {working_dir}/ray_driver.sh "{activation_script}"
     """
         auxiliary_scripts = {
             "ray_driver.sh": ray_driver_script,
