@@ -18,11 +18,31 @@ from dagster_slurm import (
 from dagster_slurm.auth.step_oidc import StepOIDCAuthProvider
 from dagster_slurm.config.environment import Environment, ExecutionMode
 
+# Detect CI environment - GitHub Actions sets both CI=true and GITHUB_ACTIONS=true
+_is_ci = (
+    os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    or os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+)
+
+# In CI: use non-default ports to avoid TIME_WAIT conflicts between tests,
+# and limit object store memory to fit in CI runner's limited RAM
+_ray_config: Dict[str, Any] = {"num_gpus_per_node": 0}
+if _is_ci:
+    _ray_config.update(
+        {
+            "ray_port": 16379,
+            "dashboard_port": 18265,
+            "object_store_memory_gb": 1,  # CI runners have limited RAM
+        }
+    )
+else:
+    _ray_config["dashboard_port"] = 8265
+
 LOCAL_RESOURCES_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.LOCAL,
     "launchers": {
         "bash": {},
-        "ray": {"num_gpus_per_node": 0, "dashboard_port": 8265},
+        "ray": _ray_config,
         "spark": {"driver_memory": "2g", "executor_memory": "4g"},
     },
 }
