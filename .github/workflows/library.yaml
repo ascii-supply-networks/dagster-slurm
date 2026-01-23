@@ -217,7 +217,7 @@ jobs:
           SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
           # Set SLURM_JOB_ID to enable Ray port randomization in local mode tests
           # This prevents port 6379 conflicts (Redis default port) in CI
-          SLURM_JOB_ID: 47
+          SLURM_JOB_ID: ${{ github.run_id }}
         run: pixi run -e build --frozen testpixi-integration
 
       - name: Stop SLURM Cluster and Clean Up
