@@ -63,6 +63,7 @@ services:
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
       - ./z_state/data_and_logs:/data_and_logs
+      - ./examples/data:/home/submitter/dagster-slurm-data:ro
       - home_dirs:/home
     expose:
       - "6817"
@@ -98,12 +99,16 @@ services:
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
       - ./z_state/data_and_logs:/data_and_logs
+      - ./examples/data:/home/submitter/dagster-slurm-data:ro
       - home_dirs:/home
     expose:
       - "6818"
       - "6379" # Ray GCS port
       - "8265" # Ray dashboard
       - "10001" # Ray client server
+    ports:
+      - "8265-8365:8265-8365" # Ray dashboard (port range for hash_jobid strategy)
+      - "6379-6479:6379-6479" # Ray GCS port range
     depends_on:
       slurmctld:
         condition: service_started
@@ -123,6 +128,7 @@ services:
       - slurm_jobdir:/data
       - var_log_slurm:/var/log/slurm
       - ./z_state/data_and_logs:/data_and_logs
+      - ./examples/data:/home/submitter/dagster-slurm-data:ro
       - home_dirs:/home
     expose:
       - "6818"

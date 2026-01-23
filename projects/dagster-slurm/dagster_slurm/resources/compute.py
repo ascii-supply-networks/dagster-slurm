@@ -88,13 +88,6 @@ class ComputeResource(ConfigurableResource):
         description="Whether to cleanup remote files on failure (ignored if debug_mode=True)",
     )
 
-    cancel_on_interrupt: bool = Field(
-        default=False,
-        description="If True, cancel SLURM jobs when Dagster is interrupted (Ctrl+C, restart). "
-        "If False, jobs continue running independently. Useful for long-running jobs that should "
-        "survive Dagster restarts. Default: False (jobs survive restarts).",
-    )
-
     auto_detect_platform: bool = Field(
         default=True,
         description="Auto-detect platform (ARM vs x86) for pixi pack command",
@@ -243,7 +236,6 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
-                cancel_on_interrupt=self.cancel_on_interrupt,
             )
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
@@ -266,7 +258,6 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
-                cancel_on_interrupt=self.cancel_on_interrupt,
             )
 
         else:  # ExecutionMode.SLURM_HETJOB
@@ -283,7 +274,6 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
-                cancel_on_interrupt=self.cancel_on_interrupt,
             )
 
     def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:

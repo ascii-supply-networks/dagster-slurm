@@ -123,10 +123,23 @@ scp -r examples/data/ user@hpc-cluster:/path/on/hpc/
 
 # Or via rsync for larger datasets
 rsync -avz --progress examples/data/ user@hpc-cluster:/path/on/hpc/
+```
 
-# For docker Slurm testing
+:::info Docker SLURM
+For Docker SLURM testing, example data is automatically mounted via docker-compose.yml volume:
+
+```yaml
+- ./examples/data:/home/submitter/dagster-slurm-data:ro
+```
+
+No manual copying needed. No need for:
+
+```bash
 docker cp examples/data/. slurmctld:/home/submitter/dagster-slurm-data/
 ```
+
+Data appears at `/home/submitter/dagster-slurm-data/` inside containers.
+:::
 
 :::warning AI Model Downloads
 Docling and other AI workloads require downloading models on first run. **Network connectivity requirements are cluster-dependent:**
@@ -192,6 +205,157 @@ pixi run -e build --frozen start
 # Or use the dg CLI:
 dg launch --assets process_documents_with_docling
 ```
+
+Ensure the right paths are set:
+
+- either directly in code
+- or via the lauch configuration
+
+**Model Pre-downloading (Automatic):**
+
+> Tip: Add a warmup step to pre-download the models automatically
+
+The example processing script includes a `warmup_model_cache()` function that automatically pre-downloads docling models **before** Ray workers start, preventing race conditions when multiple workers try to download the same models simultaneously.
+
+:::warning Network Connectivity Required
+Automatic model warmup requires **outbound internet connectivity** from compute nodes to download models from HuggingFace and modelscope.cn. This works in:
+
+- ✅ Local development environments
+- ✅ HPC clusters with unrestricted compute node internet access
+- ❌ Air-gapped or restricted clusters (use [Manual Pre-download](#manual-pre-download-optional) instead)
+
+Consult your HPC administrator about compute node network policies.
+:::
+
+**How it works:**
+
+```python
+# Simplified flow inside process_documents_docling.py
+def run_processing(...):
+    # 1. Warmup runs BEFORE Ray processing
+    warmup_model_cache(context=context)  # Downloads models once
+
+    # 2. Then Ray workers start
+    ds = rd.from_items([{"path": p} for p in files])
+    result = ds.map_batches(
+        mapper_document,  # Workers now use cached models
+        batch_size=batch_size,
+        concurrency=(num_workers, num_workers),
+    )
+```
+
+**Configuration via environment variables:**
+
+- `DOCLING_WARMUP_MODELS`: Enable/disable automatic warmup (default: `true`)
+- `DOCLING_FAIL_ON_WARMUP_ERROR`: Fail job if warmup fails (default: `true`)
+
+**Example configurations:**
+
+```python
+# Development/Staging: Use automatic warmup (default)
+completed_run = compute_ray.run(
+    context=context,
+    payload_path=script_path,
+    launcher=RayLauncher(num_gpus_per_node=0),
+    extra_env={
+        "INPUT_GLOB": "data/**/*.pdf",
+        "NUM_WORKERS": "2",
+        # DOCLING_WARMUP_MODELS defaults to "true"
+    },
+)
+
+# Production: Disable warmup and use pre-deployed models
+completed_run = compute_ray.run(
+    context=context,
+    payload_path=script_path,
+    launcher=RayLauncher(num_gpus_per_node=0),
+    extra_env={
+        "INPUT_GLOB": "data/**/*.pdf",
+        "NUM_WORKERS": "2",
+        "DOCLING_WARMUP_MODELS": "false",  # Skip warmup in prod
+        "HF_HOME": "/shared/models/huggingface",  # Use pre-deployed models
+    },
+)
+
+# Restricted cluster: Allow warmup to fail gracefully
+# (Workers will attempt individual downloads - may hit rate limits)
+completed_run = compute_ray.run(
+    context=context,
+    payload_path=script_path,
+    launcher=RayLauncher(num_gpus_per_node=0),
+    extra_env={
+        "INPUT_GLOB": "data/**/*.pdf",
+        "NUM_WORKERS": "2",
+        "DOCLING_FAIL_ON_WARMUP_ERROR": "false",  # Continue if warmup fails
+    },
+)
+```
+
+**Manual Pre-download (For Air-gapped Clusters):**
+
+For air-gapped or restricted HPC clusters without compute node internet access, manually pre-download models once on a login/edge node with internet access:
+
+```bash
+# One-time setup on HPC cluster (run on login node with internet)
+# 1. Unpack the environment
+cd /home/first.lastname/dagster_runs/env-cache/ID_HASH
+./environment-workload-document-processing-linux-64-20260122-203856.sh
+
+# 2. Activate and download models
+source activate.sh
+python /path/to/examples/scripts/download_docling_models.py
+```
+
+**Automation example:**
+
+You can automate this as part of your deployment pipeline:
+
+```python
+# deploy_models.py - Run once during cluster setup
+import subprocess
+from pathlib import Path
+
+def deploy_models_to_hpc(env_cache_path: str, shared_models_dir: str):
+    """Deploy models to shared HPC filesystem."""
+    # 1. Unpack environment
+    env_dir = Path(env_cache_path)
+    pack_file = next(env_dir.glob("environment-*.sh"))
+    subprocess.run([str(pack_file)], cwd=env_dir, check=True)
+
+    # 2. Download models
+    activate_script = env_dir / "activate.sh"
+    download_script = "/path/to/examples/scripts/download_docling_models.py"
+
+    subprocess.run(
+        f"source {activate_script} && "
+        f"export HF_HOME={shared_models_dir} && "
+        f"python {download_script}",
+        shell=True,
+        check=True,
+    )
+
+    print(f"✓ Models deployed to {shared_models_dir}")
+
+# Usage
+deploy_models_to_hpc(
+    env_cache_path="/home/user/dagster_runs/env-cache/c661e6dbdf4f9b47",
+    shared_models_dir="/shared/models/huggingface"
+)
+```
+
+Then configure your assets to use the pre-deployed models:
+
+```python
+# In your Dagster asset configuration
+completed_run = compute_ray.run(
+    extra_env={
+        "DOCLING_WARMUP_MODELS": "false",  # Skip warmup
+        "HF_HOME": "/shared/models/huggingface",  # Use pre-deployed models
+    },
+)
+```
+
+See [Pre-Downloading Models](#pre-downloading-models-for-restricted-clusters) for more details.
 
 **What happens:**
 

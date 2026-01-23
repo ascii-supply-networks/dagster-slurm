@@ -5,6 +5,9 @@ if [ -f /etc/bashrc ]; then
     . /etc/bashrc
 fi
 
+# Set DATA environment variable for data directory
+export DATA=/data_and_logs
+
 # --- Slurm Completion Guard ---
 # Only source completion scripts in INTERACTIVE shells.
 # This prevents errors in non-interactive sbatch jobs.

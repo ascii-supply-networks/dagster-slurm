@@ -5,40 +5,66 @@ document processing workflows. In development, it runs locally; in production
 on Slurm clusters, it spawns a multi-node Ray cluster for parallel processing.
 """
 
+import os
 from pathlib import Path
 
 import dagster as dg
 from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
+from dagster_slurm_example_shared import get_base_output_path
 from pydantic import Field
 
 
-def _default_docling_glob() -> str:
-    """Prefer local example data when present, otherwise use HPC default."""
+def _default_docling_glob() -> str | None:
+    """Return default input glob based on deployment environment.
+
+    - Local/development: Use local example data directory
+    - Docker SLURM: Use Docker container data path
+    - Supercomputer: None (must be configured via launchpad)
+    """
+    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+
+    # Docker SLURM deployments use container path
+    # Use *.pdf to match files in the directory root (not just subdirectories)
+    if "docker" in deployment:
+        return "/home/submitter/dagster-slurm-data/*.pdf"
+
+    # Supercomputer: no default path (user must configure via launchpad)
+    if "supercomputer" in deployment:
+        return None
+
+    # For local development, use local example data
     examples_dir = Path(__file__).resolve().parents[5]
     data_dir = examples_dir / "data"
     if data_dir.exists() and any(data_dir.rglob("*.pdf")):
         return str(data_dir / "**" / "*.pdf")
-    return "/home/submitter/dagster-slurm-data/**/*.pdf"
+
+    # Unknown deployment: no default
+    return None
 
 
-def _default_large_docling_glob() -> str:
-    """Prefer local example data when present, otherwise use HPC large-collection path."""
-    examples_dir = Path(__file__).resolve().parents[5]
-    data_dir = examples_dir / "data"
-    if data_dir.exists() and any(data_dir.rglob("*.pdf")):
-        return str(data_dir / "**" / "*.pdf")
-    return "/home/submitter/dagster-slurm-data/large_collection/**/*.pdf"
+def _default_docling_output_dir() -> str:
+    """Return default output directory based on deployment environment.
+
+    Uses shared path configuration from dagster_slurm_example_shared.
+    - Local/development: /tmp/dagster_output/docling
+    - Docker: $DATA/output/docling
+    - musica/vsc5: $DATA/output/docling
+    - datalab: $HOME/output/docling
+    """
+    base_output = get_base_output_path()
+    return f"{base_output}/docling"
 
 
 class DoclingRunConfig(SlurmRunConfig):
     """Configuration for docling document processing."""
 
-    input_glob: str = Field(
+    input_glob: str | None = Field(
         default_factory=_default_docling_glob,
-        description="Glob pattern for input PDF files to process",
+        description="Glob pattern for input PDF files to process (relative to project root or absolute path). "
+        "Required for supercomputer deployments - configure via launchpad.",
     )
     output_dir: str = Field(
-        default="/tmp/docling_output",
+        default_factory=_default_docling_output_dir,
         description="Directory where processed documents will be saved",
     )
     num_workers: int = Field(
@@ -58,12 +84,13 @@ class DoclingRunConfig(SlurmRunConfig):
 class LargeScaleDoclingRunConfig(SlurmRunConfig):
     """Configuration for large-scale multi-node docling processing."""
 
-    input_glob: str = Field(
-        default_factory=_default_large_docling_glob,
-        description="Glob pattern for input PDF files to process",
+    input_glob: str | None = Field(
+        default_factory=_default_docling_glob,
+        description="Glob pattern for input PDF files to process (relative to project root or absolute path). "
+        "Required for supercomputer deployments - configure via launchpad.",
     )
     output_dir: str = Field(
-        default="/tmp/docling_large_output",
+        default_factory=_default_docling_output_dir,
         description="Directory where processed documents will be saved",
     )
     num_workers: int = Field(
@@ -119,6 +146,13 @@ def process_documents_with_docling(
         compute_ray: ComputeResource configured with RayLauncher
         config: Slurm + docling configuration
     """
+    # Validate required configuration
+    if config.input_glob is None:
+        raise ValueError(
+            "input_glob is required but not configured. "
+            "Please provide input_glob in the Dagster launchpad or run configuration."
+        )
+
     script_path = dg.file_relative_path(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/process_documents_docling.py",
@@ -130,8 +164,19 @@ def process_documents_with_docling(
         num_gpus_per_node=0,  # Set to >0 if using GPU-accelerated OCR
     )
 
+    # Adjust resources based on deployment target
+    # Docker/local: 2 CPUs, 4GB (safe for Docker environments)
+    # Datalab/Musica: 8 CPUs, 24GB (docling + Ray + models need more)
+    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+    is_supercomputer = "supercomputer" in deployment
+    cpus_per_task = 8 if is_supercomputer else 2
+    memory_per_node = "24G" if is_supercomputer else "4G"
+
     context.log.info(
         f"Starting distributed document processing with docling...\n"
+        f"  Deployment: {deployment}\n"
+        f"  CPUs per task: {cpus_per_task}\n"
+        f"  Memory per node: {memory_per_node}\n"
         f"  Input: {config.input_glob}\n"
         f"  Output: {config.output_dir}\n"
         f"  Workers: {config.num_workers}\n"
@@ -155,8 +200,8 @@ def process_documents_with_docling(
             # Single node = local Ray mode
             # Multi-node = distributed Ray cluster
             "nodes": 1,  # Increase for larger workloads
-            "cpus_per_task": 2,  # CPUs per Ray worker
-            "mem": "4G",  # Memory per node
+            "cpus_per_task": cpus_per_task,  # 2 CPUs for Docker, 8 for supercomputers
+            "mem": memory_per_node,  # 4GB for Docker, 24GB for supercomputers
             # Uncomment for GPU-accelerated OCR:
             # "gres": "gpu:1",
         },
@@ -197,6 +242,13 @@ def process_large_document_collection(
         compute_ray: ComputeResource configured with RayLauncher
         config: Slurm + docling configuration
     """
+    # Validate required configuration
+    if config.input_glob is None:
+        raise ValueError(
+            "input_glob is required but not configured. "
+            "Please provide input_glob in the Dagster launchpad or run configuration."
+        )
+
     script_path = dg.file_relative_path(
         __file__,
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/process_documents_docling.py",
@@ -207,8 +259,17 @@ def process_large_document_collection(
         num_gpus_per_node=0,
     )
 
+    # Adjust resources based on deployment target
+    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+    is_supercomputer = "supercomputer" in deployment
+    cpus_per_task = 8 if is_supercomputer else 2
+    memory_per_node = "24G" if is_supercomputer else "4G"
+
     context.log.info(
         f"Starting large-scale document processing with multi-node Ray cluster...\n"
+        f"  Deployment: {deployment}\n"
+        f"  CPUs per task: {cpus_per_task}\n"
+        f"  Memory per node: {memory_per_node}\n"
         f"  Input: {config.input_glob}\n"
         f"  Output: {config.output_dir}\n"
         f"  Workers: {config.num_workers}\n"
@@ -229,8 +290,8 @@ def process_large_document_collection(
         extra_slurm_opts={
             # Multi-node configuration
             "nodes": 2,  # Multiple nodes for distributed processing
-            "cpus_per_task": 2,
-            "mem": "4G",
+            "cpus_per_task": cpus_per_task,  # 2 CPUs for Docker, 8 for supercomputers
+            "mem": memory_per_node,  # 4GB for Docker, 24GB for supercomputers
             "time": "01:00:00",  # 1-hour time limit
         },
     )

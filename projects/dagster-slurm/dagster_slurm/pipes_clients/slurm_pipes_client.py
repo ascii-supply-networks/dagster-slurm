@@ -57,7 +57,6 @@ class SlurmPipesClient(PipesClient):
         pack_platform: Optional[str] = None,
         pre_deployed_env_path: Optional[str] = None,
         cache_inject_globs: Optional[list[str]] = None,
-        cancel_on_interrupt: bool = False,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -71,9 +70,6 @@ class SlurmPipesClient(PipesClient):
             should affect the environment cache key. If None, all --inject patterns
             from the pack command are hashed. Use this to exclude workload-specific
             packages from cache invalidation (e.g., only include base libraries).
-        cancel_on_interrupt: If True, cancel SLURM jobs when Dagster is interrupted (Ctrl+C, restart).
-            If False, jobs continue running independently. Useful for long-running jobs that should
-            survive Dagster restarts. Default: False (jobs survive restarts).
 
         """
         super().__init__()
@@ -84,7 +80,6 @@ class SlurmPipesClient(PipesClient):
         self.debug_mode = debug_mode
         self.auto_detect_platform = auto_detect_platform
         self.pack_platform = pack_platform
-        self.cancel_on_interrupt = cancel_on_interrupt
         self.logger = get_dagster_logger()
         self.metrics_collector = SlurmMetricsCollector()
         self._control_path = None
@@ -155,16 +150,12 @@ class SlurmPipesClient(PipesClient):
 
         # Setup cancellation handler
         def handle_cancellation(signum, frame):
-            self.logger.warning(f"⚠️  Cancellation signal received (signal {signum})")
-            self._cancellation_requested = True
+            self.logger.warning(f"⚠️  Termination signal received (signal {signum})")
+
             if self._current_job_id:
-                if self.cancel_on_interrupt:
-                    self._cancel_slurm_job(self._current_job_id)
-                else:
-                    self.logger.info(
-                        f"Job {self._current_job_id} will continue running (cancel_on_interrupt=False). "
-                        f"To cancel manually: scancel {self._current_job_id}"
-                    )
+                self.logger.info(f"Cancelling SLURM job {self._current_job_id}...")
+                self._cancellation_requested = True
+                self._cancel_slurm_job(self._current_job_id)
 
         # Register signal handlers
         original_sigint = signal.signal(signal.SIGINT, handle_cancellation)
@@ -274,6 +265,7 @@ class SlurmPipesClient(PipesClient):
                             ssh_pool=ssh_pool,
                             message_reader=message_reader,
                             extra_slurm_opts=extra_slurm_opts,
+                            op_context=context.op_execution_context,
                         )
 
                     self._maybe_emit_final_logs(
@@ -347,18 +339,12 @@ class SlurmPipesClient(PipesClient):
                         self.logger.warning(f"Cleanup failed: {e}")
 
         except Exception as e:
-            # Cancel job if it's running (unless cancel_on_interrupt=False)
+            # Cancel job if it's running and not already cancelled
             if self._current_job_id and not self._cancellation_requested:
-                if self.cancel_on_interrupt:
-                    self.logger.warning(
-                        f"Cancelling job {self._current_job_id} due to error"
-                    )
-                    self._cancel_slurm_job(self._current_job_id)
-                else:
-                    self.logger.warning(
-                        f"Job {self._current_job_id} will continue running despite error "
-                        f"(cancel_on_interrupt=False). Monitor with: squeue -j {self._current_job_id}"
-                    )
+                self.logger.warning(
+                    f"Cancelling job {self._current_job_id} due to error"
+                )
+                self._cancel_slurm_job(self._current_job_id)
 
             self.logger.error(f"Execution failed: {e}")
 
@@ -405,10 +391,40 @@ class SlurmPipesClient(PipesClient):
 
         try:
             self.logger.warning(f"🛑 Cancelling Slurm job {job_id}...")
-            self._ssh_pool.run(f"scancel {job_id}")
-            self.logger.info(f"Slurm job {job_id} cancelled")
+
+            # First verify the job exists and get its state
+            try:
+                state_check = self._ssh_pool.run(
+                    f"squeue -h -j {job_id} -o '%T' 2>/dev/null || echo 'NOT_FOUND'"
+                )
+                current_state = state_check.strip()
+                self.logger.info(
+                    f"Job {job_id} current state before cancellation: {current_state}"
+                )
+            except Exception as check_error:
+                self.logger.debug(f"Could not check job state: {check_error}")
+
+            # Execute scancel
+            cancel_output = self._ssh_pool.run(f"scancel {job_id} 2>&1")
+            self.logger.info(
+                f"scancel output: {cancel_output.strip() if cancel_output.strip() else '(no output)'}"
+            )
+
+            # Verify cancellation
+            try:
+                verify_output = self._ssh_pool.run(
+                    f"squeue -h -j {job_id} -o '%T' 2>/dev/null || echo 'CANCELLED'"
+                )
+                final_state = verify_output.strip()
+                self.logger.info(f"Job {job_id} state after scancel: {final_state}")
+            except Exception as verify_error:
+                self.logger.debug(f"Could not verify cancellation: {verify_error}")
+
+            self.logger.info(
+                f"✓ Slurm job {job_id} cancellation command sent successfully"
+            )
         except Exception as e:
-            self.logger.error(f"Failed to cancel Slurm job {job_id}: {e}")
+            self.logger.error(f"❌ Failed to cancel Slurm job {job_id}: {e}")
 
     def _get_pack_command(
         self, override: Optional[list[str]] = None, full_build: bool = False
@@ -694,6 +710,7 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         message_reader,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
+        op_context=None,
     ) -> int:
         """Execute as standalone sbatch job with real-time log streaming.
 
@@ -702,6 +719,7 @@ class SlurmPipesClient(PipesClient):
             run_dir: Remote working directory
             ssh_pool: SSH connection pool
             extra_slurm_opts: Optional Slurm option overrides
+            op_context: Optional OpExecutionContext for checking Dagster UI cancellation
 
         """
         import tempfile
@@ -855,7 +873,11 @@ class SlurmPipesClient(PipesClient):
 
         # Wait for completion WITH live log streaming
         self._wait_for_job_with_streaming(
-            job_id, ssh_pool, run_dir, message_reader=message_reader
+            job_id,
+            ssh_pool,
+            run_dir,
+            message_reader=message_reader,
+            op_context=op_context,
         )
 
         return job_id
@@ -1062,9 +1084,18 @@ class SlurmPipesClient(PipesClient):
         run_dir: str,
         message_reader,
         poll_timeout: int = 3600,
+        op_context=None,  # OpExecutionContext for checking Dagster cancellation
     ):
         """Wait for job completion while streaming stdout/stderr and robustly
         polling the job state.
+
+        Args:
+            job_id: SLURM job ID to monitor
+            ssh_pool: SSH connection pool
+            run_dir: Remote working directory
+            message_reader: Pipes message reader
+            poll_timeout: Maximum wait time in seconds
+            op_context: Optional OpExecutionContext to check for Dagster UI cancellation
         """
         self.logger.info(f"Waiting for job {job_id} with live log streaming...")
         stdout_path = f"{run_dir}/slurm-{job_id}.out"
@@ -1177,10 +1208,21 @@ class SlurmPipesClient(PipesClient):
                         f"Timed out after {poll_timeout}s waiting for job {job_id} to complete."
                     )
 
-                # Check for user cancellation request
+                # Check for Dagster UI cancellation
+                if (
+                    op_context
+                    and hasattr(op_context, "is_interrupt_requested")
+                    and op_context.is_interrupt_requested
+                ):
+                    self.logger.warning("⚠️  Cancellation detected via Dagster UI")
+                    self._cancellation_requested = True
+                    self._cancel_slurm_job(job_id)
+                    raise RuntimeError(f"Job {job_id} cancelled")
+
+                # Check for signal-based cancellation (signal handler)
                 if self._cancellation_requested:
-                    self.logger.warning("Cancellation detected during job execution")
-                    raise RuntimeError(f"Job {job_id} was cancelled by user request")
+                    self.logger.warning("⚠️  Cancellation detected via signal")
+                    raise RuntimeError(f"Job {job_id} cancelled")
 
                 # Get current job state
                 state = self._get_job_state(job_id, ssh_pool)
@@ -1280,7 +1322,13 @@ class SlurmPipesClient(PipesClient):
                 if state in TERMINAL_STATES:
                     self.logger.info(f"Job {job_id} reached terminal state: {state}")
 
-                    time.sleep(1)
+                    # Give streaming threads time to catch up
+                    time.sleep(2)
+
+                    # Stop streaming and wait for threads to finish
+                    stop_streaming.set()
+                    stdout_thread.join(timeout=10)
+                    stderr_thread.join(timeout=10)
 
                     if state in {"CANCELLED", "PREEMPTED"}:
                         self.logger.warning(f"Job {job_id} was {state}")
@@ -1291,9 +1339,28 @@ class SlurmPipesClient(PipesClient):
                         )
 
                     if state != "COMPLETED":
+                        # Dump full stderr content for debugging failed jobs
+                        self.logger.error(f"Job {job_id} failed with state: {state}")
+                        sys.stderr.write("Dumping SLURM stderr log:\n")
+                        sys.stderr.flush()
+                        try:
+                            stderr_content = ssh_pool.run(
+                                f"cat {stderr_path} 2>/dev/null || echo 'No stderr file found'"
+                            )
+                            if stderr_content.strip():
+                                for line in stderr_content.splitlines():
+                                    sys.stderr.write(f"  {line}\n")
+                                sys.stderr.flush()
+                            else:
+                                sys.stderr.write("  (stderr is empty)\n")
+                                sys.stderr.flush()
+                        except Exception as e:
+                            sys.stderr.write(f"  Failed to read stderr: {e}\n")
+                            sys.stderr.flush()
+
                         raise RuntimeError(
                             f"Job {job_id} did not complete successfully. Final state: {state}. "
-                            f"Check logs for details."
+                            f"Check logs above for stderr output."
                         )
 
                     self.logger.info(f"Job {job_id} completed successfully")
@@ -1372,7 +1439,8 @@ class SlurmPipesClient(PipesClient):
                 ]
             )
 
-        cmd.extend(self.slurm.ssh.extra_opts)
+        if self.slurm.ssh.extra_opts:
+            cmd.extend([opt for opt in self.slurm.ssh.extra_opts if opt is not None])
         cmd.append(f"{self.slurm.ssh.user}@{self.slurm.ssh.host}")
 
         # Tail command - wait for file to appear, then follow
@@ -1409,39 +1477,22 @@ class SlurmPipesClient(PipesClient):
     ) -> None:
         """Query and log the estimated start time for a pending job."""
         try:
-            # Query estimated start time
-            output = ssh_pool.run(
-                f"squeue --start -j {job_id} -h -o '%S' 2>/dev/null || true"
+            # Query full queue info (more reliable than just %S)
+            full_output = ssh_pool.run(
+                f"squeue --start -j {job_id} -o '%.18i %.9P %.8j %.8u %.2t %.19S %.6D %R' 2>/dev/null || true"
             )
-            estimated_start = output.strip()
+            lines = [line.strip() for line in full_output.split("\n") if line.strip()]
 
-            if estimated_start and estimated_start != "N/A":
-                # Also get job state and reason
-                full_output = ssh_pool.run(
-                    f"squeue --start -j {job_id} -o '%.18i %.9P %.8j %.8u %.2t %.19S %.6D %R' 2>/dev/null || true"
-                )
-                lines = [
-                    line.strip() for line in full_output.split("\n") if line.strip()
-                ]
+            # Parse the data line (skip header if present)
+            data_line = lines[1] if len(lines) > 1 else lines[0] if lines else ""
 
-                # Parse the data line (skip header if present)
-                data_line = lines[1] if len(lines) > 1 else lines[0] if lines else ""
-
-                if data_line:
-                    self.logger.info(
-                        f"Submitted job {job_id} --> Estimated start time: {estimated_start}"
-                    )
-                    # Log the full queue info as debug for more details
-                    self.logger.debug(f"Queue info: {data_line}")
-                else:
-                    # Job might have already started or no estimate available
-                    self.logger.debug(
-                        f"No estimated start time available for job {job_id} (may have started immediately)"
-                    )
+            if data_line:
+                # Show full SLURM queue info directly - no parsing, just raw output
+                self.logger.info(f"Estimated startup: {data_line}")
             else:
-                # No estimate available (job may start immediately or already started)
+                # No queue info available (job may have already started)
                 self.logger.debug(
-                    f"No estimated start time for job {job_id} (immediate start or already running)"
+                    f"No queue info available for job {job_id} (may have started immediately)"
                 )
 
         except Exception as e:

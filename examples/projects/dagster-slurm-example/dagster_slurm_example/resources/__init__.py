@@ -307,7 +307,7 @@ def get_dagster_deployment_environment(
     deployment = os.environ.get(deployment_key, default_value).lower()
     try:
         environment = Environment(deployment)
-        dg.get_dagster_logger().debug("dagster deployment environment: %s", deployment)
+        dg.get_dagster_logger().info(f"Dagster deployment environment: {deployment}")
         return environment
     except ValueError as e:
         # 4. Handle the case where the string is not a valid environment

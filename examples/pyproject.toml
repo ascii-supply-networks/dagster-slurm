@@ -101,13 +101,13 @@ create-dagster = "~=1.12.0"
 [tool.pixi.tasks]
 
 [tool.pixi.tasks.start]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True", DAGSTER_DEPLOYMENT = "development" }
 description = "Start dagster webserver in dev mode"
 
 [tool.pixi.tasks.start-staging]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "staging_docker" }
 description = "Start dagster webserver in staging mode"
@@ -130,20 +130,20 @@ cmd = "python scripts/deploy_environment.py --platform linux-aarch64"
 
 # TODO: for PROD mode we have to package and deploy OUT OF BAND! and need to create a task for this
 [tool.pixi.tasks.start-prod-docker]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Start dagster webserver in production mode"
 
 [tool.pixi.tasks.start-staging-supercomputer]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
 description = "Start dagster webserver in staging mode with real HPC"
 
 # WARNING must pre-deploy!
 [tool.pixi.tasks.start-production-supercomputer]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_supercomputer" }
 description = "Start dagster webserver in production mode with real HPC"

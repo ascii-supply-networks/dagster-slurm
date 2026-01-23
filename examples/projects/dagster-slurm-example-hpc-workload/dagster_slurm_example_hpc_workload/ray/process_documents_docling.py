@@ -219,6 +219,58 @@ def build_converter(
     return _DocConverter
 
 
+def warmup_model_cache(context: Optional[PipesContext] = None) -> bool:
+    """Pre-download docling models to avoid race conditions with Ray workers.
+
+    This function initializes a BasicDocumentConverter once before Ray processing
+    starts, ensuring all models are cached. This prevents multiple Ray actors from
+    downloading the same models simultaneously, which can cause file corruption.
+
+    Args:
+        context: Optional Dagster PipesContext for logging
+
+    Returns:
+        True if warmup succeeded or was skipped, False if it failed
+    """
+    log_func = context.log.info if context else print
+
+    # Check if warmup is enabled (default: True for dev/staging, can be disabled for prod)
+    warmup_enabled = os.getenv("DOCLING_WARMUP_MODELS", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+    if not warmup_enabled:
+        log_func("Model warmup disabled via DOCLING_WARMUP_MODELS=false")
+        return True
+
+    try:
+        log_func("Warming up model cache (pre-downloading docling models)...")
+        # Initialize converter once to trigger model downloads
+        _ = BasicDocumentConverter()
+        log_func("✓ Model cache warmup complete - all models downloaded")
+        return True
+    except Exception as e:
+        error_msg = f"Model cache warmup failed: {e}"
+        log_func(error_msg)
+
+        # Check if we should fail hard or continue (default: fail)
+        fail_on_warmup_error = os.getenv(
+            "DOCLING_FAIL_ON_WARMUP_ERROR", "true"
+        ).lower() in ("true", "1", "yes")
+
+        if fail_on_warmup_error:
+            raise RuntimeError(
+                f"Model warmup failed. {error_msg}. Set DOCLING_FAIL_ON_WARMUP_ERROR=false to continue anyway."
+            ) from e
+
+        log_func(
+            "⚠️  Continuing despite warmup failure - Ray workers will download models individually"
+        )
+        return False
+
+
 def run_processing(  # noqa: C901
     input_glob: str,
     output_dir: str,
@@ -249,6 +301,9 @@ def run_processing(  # noqa: C901
         f"Configuration: input_glob={input_glob}, output_dir={output_dir}, "
         f"num_workers={num_workers}, batch_size={batch_size}"
     )
+
+    # Pre-download models before Ray processing to avoid race conditions
+    warmup_model_cache(context=context)
 
     # Ray is already initialized by RayLauncher (or init manually in standalone mode)
     try:

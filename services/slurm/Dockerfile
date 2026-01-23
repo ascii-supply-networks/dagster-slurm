@@ -39,6 +39,13 @@ RUN set -ex \
        nc \
        sshpass \
        sudo \
+       libxcb \
+       libXext \
+       libXrender \
+       libSM \
+       libICE \
+       libgomp \
+       mesa-libGL \
     && yum clean all \
     && rm -rf /var/cache/yum
 
@@ -67,7 +74,12 @@ RUN set -ex \
 COPY submitter.bashrc /home/submitter/.bashrc
 RUN chown submitter:submitter /home/submitter/.bashrc \
     && chmod +x /home/submitter/.bashrc
-    
+
+# Set DATA environment variable for data directory (container processes)
+ENV DATA=/data_and_logs
+
+# Also set DATA in /etc/environment for system-wide availability (SSH sessions, SLURM jobs)
+RUN echo "DATA=/data_and_logs" >> /etc/environment
 
 EXPOSE 22
 
@@ -110,6 +122,7 @@ RUN set -ex \
         /var/lib/slurmd \
         /var/log/slurm \
         /data \
+        /data_and_logs \
     && touch /var/lib/slurmd/node_state \
         /var/lib/slurmd/front_end_state \
         /var/lib/slurmd/job_state \
@@ -120,6 +133,7 @@ RUN set -ex \
         /var/lib/slurmd/qos_usage \
         /var/lib/slurmd/fed_mgr_state \
     && chown -R slurm:slurm /var/*/slurm* \
+    && chown -R submitter:submitter /data_and_logs \
     && /sbin/create-munge-key
 
 COPY slurm.conf /etc/slurm/slurm.conf

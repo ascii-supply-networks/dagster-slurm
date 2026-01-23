@@ -172,7 +172,9 @@ class RayLauncher(ComputeLauncher):
         echo "[$({date_fmt})] Single-node mode detected. Starting local Ray cluster..."
     """
             local_lines = self._generate_local_template(
-                date_fmt, activation_script, working_dir
+                date_fmt,
+                activation_script,
+                working_dir,  # working_dir used for log archival
             )
             script += local_lines
 
@@ -218,6 +220,22 @@ class RayLauncher(ComputeLauncher):
     """
         # The rest of the function remains the same
         return f"""{activation_block}
+    # Cross-platform timeout wrapper (macOS doesn't have timeout command)
+    run_with_timeout() {{
+      local timeout_sec=$1
+      shift
+      if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_sec" "$@"
+      elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$timeout_sec" "$@"
+      else
+        # Fallback for macOS without coreutils
+        ( "$@" ) & local pid=$!
+        ( sleep "$timeout_sec"; kill -TERM "$pid" 2>/dev/null ) &
+        wait "$pid"
+      fi
+    }}
+
     # Compute ports (optionally hash by SLURM_JOB_ID)
     port="{self.ray_port}"
     dash_port="{self.dashboard_port}"
@@ -245,24 +263,101 @@ class RayLauncher(ComputeLauncher):
     fi
     head_adv="$head_bind_addr"
     if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
-    # Use shared temp dir on Slurm so logs survive after job ends
+    # Use /tmp for Ray sockets (Unix socket path limit: 107 bytes)
+    # $HOME/dagster_runs paths are too long and cause socket errors
     temp_dir_arg=""
+    RAY_TMP_DIR=""  # Global for cleanup function
     if [[ -n "${{SLURM_JOB_ID:-}}" ]]; then
-      ray_tmp_dir="$HOME/dagster_runs/ray_tmp/${{SLURM_JOB_ID}}"
-      mkdir -p "$ray_tmp_dir"
-      export RAY_TMPDIR="$ray_tmp_dir"
-      temp_dir_arg="--temp-dir=$ray_tmp_dir"
+      # Use SLURM_TMPDIR if available (per-job temp dir), otherwise /tmp with job ID
+      if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
+        RAY_TMP_DIR="${{SLURM_TMPDIR}}/ray"
+      else
+        RAY_TMP_DIR="/tmp/ray_job_${{SLURM_JOB_ID}}"
+      fi
+      mkdir -p "$RAY_TMP_DIR"
+      export RAY_TMPDIR="$RAY_TMP_DIR"
+      temp_dir_arg="--temp-dir=$RAY_TMP_DIR"
+      echo "[$({date_fmt})] Ray temp directory: $RAY_TMP_DIR"
     fi
 {override_block}    # Start local Ray cluster
     echo "[$({date_fmt})] Starting local Ray cluster"
-    # Cleanup function - MUST be defined before trap
+    # Cleanup function - runs on exit, cancellation, or failure
+    # This MUST succeed even if Ray never started or failed
     cleanup_ray() {{
+      local exit_code=$?
+      echo "[$({date_fmt})] Cleanup triggered (exit code: $exit_code, signal: ${{1:-none}})"
+
+      # Stop Ray with timeout (to prevent hanging during cancellation)
       echo "[$({date_fmt})] Stopping Ray..."
-      ray stop --force || true
-      echo "[$({date_fmt})] Ray stopped"
+      # Use timeout to prevent ray stop from blocking forever (30 second timeout)
+      run_with_timeout 30 ray stop --force 2>&1 || {{
+        local ray_stop_exit=$?
+        if [[ $ray_stop_exit -eq 124 ]]; then
+          echo "[$({date_fmt})] ⚠ Ray stop timed out after 30s, force killing..."
+          pkill -9 -f "ray::" 2>&1 || true
+        else
+          echo "[$({date_fmt})] Ray stop failed with exit code $ray_stop_exit (ignored)"
+        fi
+      }}
+      echo "[$({date_fmt})] ✓ Ray stopped"
+
+      # Stop background log sync
+      if [[ -n "${{LOG_SYNC_PID:-}}" ]]; then
+        echo "[$({date_fmt})] Stopping background log sync (PID: $LOG_SYNC_PID)..."
+        kill -9 "$LOG_SYNC_PID" 2>/dev/null || true
+      fi
+
+      # Final sync of any remaining logs
+      if [[ -n "$RAY_TMP_DIR" ]] && [[ -d "$RAY_TMP_DIR" ]]; then
+        echo "[$({date_fmt})] Final log sync from $RAY_TMP_DIR..."
+        for session_dir in "$RAY_TMP_DIR"/session_*/logs; do
+          if [[ -d "$session_dir" ]]; then
+            session_name=$(basename "$(dirname "$session_dir")")
+            target_dir="{working_dir}/ray_logs/$session_name/logs"
+            mkdir -p "$target_dir" 2>/dev/null || true
+            rsync -a "$session_dir"/ "$target_dir/" 2>/dev/null || true
+          fi
+        done
+      fi
+
+      # Clean up temp directory (best effort)
+      if [[ -n "$RAY_TMP_DIR" ]] && [[ -d "$RAY_TMP_DIR" ]]; then
+        echo "[$({date_fmt})] Removing $RAY_TMP_DIR..."
+        rm -rf "$RAY_TMP_DIR" 2>&1 || true
+      fi
+
+      echo "[$({date_fmt})] ✓ Cleanup complete"
     }}
-    # Set trap BEFORE starting Ray
-    trap cleanup_ray EXIT SIGINT SIGTERM
+
+    # Set trap for ALL exit scenarios (normal, error, cancel, kill)
+    trap cleanup_ray EXIT SIGINT SIGTERM ERR
+
+    # Start continuous log archival in background (survives scancel better than traps)
+    # This ensures logs are preserved even if SIGKILL terminates the main process
+    # IMPORTANT: Only sync logs/, not the entire session dir (Ray needs runtime files!)
+    ray_logs_archive="{working_dir}/ray_logs"
+    mkdir -p "$ray_logs_archive" 2>/dev/null || true
+
+    {{
+      while true; do
+        if [[ -n "$RAY_TMP_DIR" ]] && [[ -d "$RAY_TMP_DIR" ]]; then
+          # Only sync session_*/logs/ directories, not runtime files
+          for session_dir in "$RAY_TMP_DIR"/session_*/logs; do
+            if [[ -d "$session_dir" ]]; then
+              session_name=$(basename "$(dirname "$session_dir")")
+              target_dir="$ray_logs_archive/$session_name/logs"
+              mkdir -p "$target_dir" 2>/dev/null || true
+              # Copy logs (don't remove source - Ray may still write to them)
+              rsync -a "$session_dir"/ "$target_dir/" 2>/dev/null || true
+            fi
+          done
+        fi
+        sleep 5  # Sync every 5 seconds
+      done
+    }} &
+    LOG_SYNC_PID=$!
+    echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
+
     # Start Ray head
     unset RAY_ADDRESS 2>/dev/null || true
     export RAY_DASHBOARD_ADDRESS="http://$head_adv:$dash_port"
@@ -357,13 +452,75 @@ class RayLauncher(ComputeLauncher):
     echo "Worker on $(hostname) activating environment: $activation_script"
     source "$activation_script"
     {self._render_override_block(date_fmt)}
+    # Cross-platform timeout wrapper
+    run_with_timeout() {{
+      local timeout_sec=$1
+      shift
+      if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_sec" "$@"
+      elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$timeout_sec" "$@"
+      else
+        ( "$@" ) & local pid=$!
+        ( sleep "$timeout_sec"; kill -TERM "$pid" 2>/dev/null ) &
+        wait "$pid"
+      fi
+    }}
     cleanup_node() {{
-        echo "Worker on $(hostname) shutting down..."
-        ray stop --force 2>/dev/null || true
+        echo "[$({date_fmt})] Worker on $(hostname) shutting down..."
+
+        # Stop background log sync
+        if [[ -n "${{WORKER_LOG_SYNC_PID:-}}" ]]; then
+            echo "[$({date_fmt})] Stopping background log sync (PID: $WORKER_LOG_SYNC_PID)..."
+            kill -9 "$WORKER_LOG_SYNC_PID" 2>/dev/null || true
+        fi
+
+        # Final sync of worker logs
+        worker_logs_dir="{working_dir}/ray_logs/worker_$(hostname)"
+        for session_dir in "{temp_dir_path}"/session_*/logs; do
+          if [[ -d "$session_dir" ]]; then
+            session_name=$(basename "$(dirname "$session_dir")")
+            target_dir="$worker_logs_dir/$session_name/logs"
+            if mkdir -p "$target_dir" 2>/dev/null; then
+              echo "[$({date_fmt})] Final worker log sync to $target_dir..."
+              rsync -a "$session_dir"/ "$target_dir/" 2>&1 || true
+              echo "[$({date_fmt})] ✓ Worker logs synced"
+            else
+              echo "[$({date_fmt})] ⚠ Cannot access $target_dir, logs not archived"
+            fi
+          fi
+        done
+
+        # Stop Ray
+        run_with_timeout 30 ray stop --force 2>/dev/null || true
+
+        # Cleanup temp dir
         rm -rf {temp_dir_path} 2>/dev/null || true
+        echo "[$({date_fmt})] ✓ Worker cleanup complete"
         exit 0
     }}
-    trap cleanup_node TERM INT EXIT
+    trap cleanup_node TERM INT EXIT ERR
+
+    # Start continuous log sync in background for worker
+    # Only sync logs/, not runtime files
+    worker_logs_dir="{working_dir}/ray_logs/worker_$(hostname)"
+    mkdir -p "$worker_logs_dir" 2>/dev/null || true
+
+    {{
+      while true; do
+        for session_dir in "{temp_dir_path}"/session_*/logs; do
+          if [[ -d "$session_dir" ]]; then
+            session_name=$(basename "$(dirname "$session_dir")")
+            target_dir="$worker_logs_dir/$session_name/logs"
+            mkdir -p "$target_dir" 2>/dev/null || true
+            rsync -a "$session_dir"/ "$target_dir/" 2>/dev/null || true
+          fi
+        done
+        sleep 5
+      done
+    }} &
+    WORKER_LOG_SYNC_PID=$!
+    echo "[$({date_fmt})] Started background worker log sync (PID: $WORKER_LOG_SYNC_PID)"
     echo "Worker on $(hostname) starting and connecting to $ip_head..."
 
     ray start {worker_cmd_str} --block
@@ -378,6 +535,20 @@ class RayLauncher(ComputeLauncher):
     echo "======================================="
     source "$activation_script"
     {self._render_override_block(date_fmt)}
+    # Cross-platform timeout wrapper
+    run_with_timeout() {{
+      local timeout_sec=$1
+      shift
+      if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_sec" "$@"
+      elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$timeout_sec" "$@"
+      else
+        ( "$@" ) & local pid=$!
+        ( sleep "$timeout_sec"; kill -TERM "$pid" 2>/dev/null ) &
+        wait "$pid"
+      fi
+    }}
 
     # Define all variables first
     # Figure out ports 
@@ -420,8 +591,10 @@ class RayLauncher(ComputeLauncher):
     cleanup() {{
         exit_code=$?
         echo "======================================="
-        echo "Initiating cluster shutdown (payload exit code: $exit_code)..."
+        echo "[$({date_fmt})] Initiating cluster shutdown (payload exit code: $exit_code, signal: ${{1:-none}})..."
         echo "======================================="
+
+        # Capture error logs if job failed
         if [[ "$exit_code" -ne 0 ]]; then
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
             echo "PAYLOAD FAILED OR SCRIPT EXITED UNEXPECTEDLY! Capturing logs..." >&2
@@ -433,22 +606,68 @@ class RayLauncher(ComputeLauncher):
             tail -n 50 $(find {temp_dir_path}/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
             echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
         fi
+
+        # Terminate worker processes
         if [ ${{#WORKER_PIDS[@]}} -gt 0 ]; then
-            echo "Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
+            echo "[$({date_fmt})] Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
             kill -TERM "${{WORKER_PIDS[@]}}" 2>/dev/null || true
             sleep 2
             kill -9 "${{WORKER_PIDS[@]}}" 2>/dev/null || true
         fi
-        echo "Force stopping Ray head node..."
-        ray stop --force 2>/dev/null || true
-        echo "Cleaning up temporary files..."
+
+        # Stop Ray head with timeout
+        echo "[$({date_fmt})] Force stopping Ray head node..."
+        run_with_timeout 30 ray stop --force 2>/dev/null || {{
+            echo "[$({date_fmt})] ⚠ Ray stop timed out, force killing..."
+            pkill -9 -f "ray::" 2>/dev/null || true
+        }}
+
+        # Stop background log sync
+        if [[ -n "${{LOG_SYNC_PID:-}}" ]]; then
+            echo "[$({date_fmt})] Stopping background log sync (PID: $LOG_SYNC_PID)..."
+            kill -9 "$LOG_SYNC_PID" 2>/dev/null || true
+        fi
+
+        # Final sync of any remaining logs
+        echo "[$({date_fmt})] Final log sync from {temp_dir_path}..."
+        for session_dir in "{temp_dir_path}"/session_*/logs; do
+          if [[ -d "$session_dir" ]]; then
+            session_name=$(basename "$(dirname "$session_dir")")
+            target_dir="{working_dir}/ray_logs/$session_name/logs"
+            mkdir -p "$target_dir" 2>/dev/null || true
+            rsync -a "$session_dir"/ "$target_dir/" 2>/dev/null || true
+          fi
+        done
+
+        echo "[$({date_fmt})] Cleaning up temporary files..."
         rm -rf {temp_dir_path} 2>/dev/null || true
-        echo "Shutdown complete"
+        echo "[$({date_fmt})] ✓ Shutdown complete"
     }}
-    trap cleanup EXIT SIGINT SIGTERM
+    trap cleanup EXIT SIGINT SIGTERM ERR
+
+    # Start continuous log archival in background (survives scancel)
+    # Only sync logs/, not runtime files
+    ray_logs_archive="{working_dir}/ray_logs"
+    mkdir -p "$ray_logs_archive" 2>/dev/null || true
+
+    {{
+      while true; do
+        for session_dir in "{temp_dir_path}"/session_*/logs; do
+          if [[ -d "$session_dir" ]]; then
+            session_name=$(basename "$(dirname "$session_dir")")
+            target_dir="$ray_logs_archive/$session_name/logs"
+            mkdir -p "$target_dir" 2>/dev/null || true
+            rsync -a "$session_dir"/ "$target_dir/" 2>/dev/null || true
+          fi
+        done
+        sleep 5
+      done
+    }} &
+    LOG_SYNC_PID=$!
+    echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
 
     # ===== 1. Start Head Node =====
-    echo "Starting Ray head on this node ($(hostname)) at $ip_head..."
+    echo "[$({date_fmt})] Starting Ray head on this node ($(hostname)) at $ip_head..."
     ray start {head_cmd_str}
     export RAY_ADDRESS="$ip_head"
 

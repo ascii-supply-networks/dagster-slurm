@@ -56,7 +56,9 @@ def pack_environment_with_pixi(
         env_prefix = f"{env_vars} "
 
     reproducible_cmd = f"{env_prefix}{shlex.join(pack_cmd)}"
-    logger.info(f"Pack command (reproducible): {reproducible_cmd}")
+    logger.info(
+        f"Pack command (reproducible): {reproducible_cmd} - see stdout logs for details"
+    )
     logger.debug(f"Timeout: {timeout}s")
     if cwd:
         logger.debug(f"Working directory: {cwd}")
