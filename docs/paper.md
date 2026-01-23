@@ -71,8 +71,8 @@ This leads to duplicated logic, fragile deployments, and a loss of telemetry. **
 The integration is composed of three layers:
 
 1. **Resource definitions** – `ComputeResource`, `SlurmResource`, `SlurmSessionResource`, and `SSHConnectionResource` are Dagster `ConfigurableResource` objects. They encapsulate queue defaults, SSH authentication (including ControlMaster fallback, password-based jump hosts, and interactive OTP prompts), and execution modes.
-2. **Launchers and Pipes clients** – Launchers (Bash, Ray) translate payloads into execution plans. 
-The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes @dagsterpipes. Spark and custom launchers are planned for near future release
+2. **Launchers and Pipes clients** – Launchers (Bash, Ray) translate payloads into execution plans.
+   The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes @dagsterpipes. Spark and custom launchers are planned for near future release
 3. **Operational helpers** – Environment deployment scripts, heterogeneous job managers, metrics collectors, and SSH pooling utilities target HPC constraints such as login-node sandboxes, session allocations, and queue observability.
 
 This layered approach keeps Dagster’s user code agnostic to the underlying transport while retaining the full control plane visibility of the orchestrator.
@@ -130,12 +130,12 @@ Session reuse and heterogeneous jobs remain under active development; early adop
 We validate the approach along three dimensions:
 
 - **Reproducibility** – Integration tests run inside GitHub Actions using a containerised Slurm cluster.
-The pipeline provisions the environment with Pixi, deploys it once via `pixi run deploy-prod-docker`, and then runs Dagster assets through all four execution modes.
-This continuous integration approach aligns with emerging best practices for reproducible HPC workflows @hayotsasson2025address.
+  The pipeline provisions the environment with Pixi, deploys it once via `pixi run deploy-prod-docker`, and then runs Dagster assets through all four execution modes.
+  This continuous integration approach aligns with emerging best practices for reproducible HPC workflows @hayotsasson2025address.
 - **HPC readiness** – The project has been exercised on academic clusters such as VSC-5 (Austria) and Leonardo (Italy).
-SSH ControlMaster fallbacks, password-based jump hosts, `.bashrc` hygiene, queue/QoS/reservation overrides, and verification snippets (`squeue`, `scontrol`) are documented for both sites.
+  SSH ControlMaster fallbacks, password-based jump hosts, `.bashrc` hygiene, queue/QoS/reservation overrides, and verification snippets (`squeue`, `scontrol`) are documented for both sites.
 - **Observability** – Slurm job IDs, CPU efficiency, memory, and node-hours are exposed as Dagster metadata entries, while Ray clusters stream their stdout/stderr back through Pipes.
-This enables conventional Dagster asset checks and alerting to operate unchanged.
+  This enables conventional Dagster asset checks and alerting to operate unchanged.
 
 # Impact and Future Work
 

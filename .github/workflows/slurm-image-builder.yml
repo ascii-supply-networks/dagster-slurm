@@ -2,10 +2,10 @@ name: SLURM Cluster Image Builder
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'services/slurm/**'
-      - 'docker-compose.yml'
+      - "services/slurm/**"
+      - "docker-compose.yml"
   workflow_dispatch:
 
 concurrency:
@@ -15,15 +15,25 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
-  SLURM_VERSION: 25-05-3-1
+  SLURM_VERSION: 25-11-2-1
 
 jobs:
   build-slurm-image:
-    name: Build and Push SLURM Image
-    runs-on: ubuntu-latest
+    name: Build and Push SLURM Image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: arm-runner
+            arch: arm64
 
     steps:
       - name: Checkout repository
@@ -43,14 +53,14 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             # Create a 'latest' tag for pushes to the main branch (good for consumers)
-            type=raw,value=latest,enable={{is_default_branch}}
-            
+            type=raw,value=latest-${{ matrix.arch }},enable={{is_default_branch}}
+
             # === USE THE VERSION TO CREATE A STABLE TAG ===
-            # This creates a tag like '25-05-3-1'
-            type=raw,value=${{ env.SLURM_VERSION }}
+            # This creates a tag like '25-11-2-1-amd64'
+            type=raw,value=${{ env.SLURM_VERSION }}-${{ matrix.arch }}
 
             # Create a unique tag based on the commit SHA (for traceability)
-            type=sha,prefix=,suffix=,format=short
+            type=sha,prefix=,suffix=-${{ matrix.arch }},format=short
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,8 +69,38 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./services/slurm
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  create-manifest:
+    name: Create Multi-Arch Manifest
+    runs-on: ubuntu-latest
+    needs: build-slurm-image
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest for latest
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-arm64
+
+      - name: Create and push multi-arch manifest for version
+        run: |
+          docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SLURM_VERSION }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SLURM_VERSION }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SLURM_VERSION }}-arm64

@@ -10,42 +10,27 @@ requires-python = ">=3.12,<3.13"
 platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
 channels = ["conda-forge"]
 
+[tool.pixi.pypi-options]
+# Prefer binary wheels over building from source
+# needed for docling apparently
+extra-index-urls = []
+
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
 
 [tool.pixi.environments]
-secops = { features = [
-  "secops",
-], solve-group = "secops", no-default-feature = true }
-opstooling = { features = [
-  "opstooling",
-], solve-group = "opstooling", no-default-feature = true }
-ci-basics = { features = [
-  "ci-basics",
-  "opstooling",
-], solve-group = "ci-basics" }
-dev = { features = [
-  "my-infrastructure",
-  "dagster-basics",
-  "dagster-webserver",
-  "submission",
-  "cluster",
-  "hpc-workload",
-  "cluster-dev",
-  "ci-basics",
-  "dagster-scaffolding",
-], solve-group = "dagster-slurm-example" }
+secops = { features = ["secops"], solve-group = "secops", no-default-feature = true }
+opstooling = { features = ["opstooling"], solve-group = "opstooling", no-default-feature = true }
+ci-basics = { features = ["ci-basics", "opstooling"], solve-group = "ci-basics" }
+dev = { features = ["my-infrastructure", "dagster-basics", "dagster-webserver", "submission", "cluster", "hpc-workload", "workload-document-processing", "cluster-dev", "ci-basics", "dagster-scaffolding"], solve-group = "dagster-slurm-example" }
 
-packaged-cluster = { features = [
-  "submission",
-  "cluster",
-  "cluster-prod",
-], solve-group = "dagster-slurm-example-cluster-submission" }
+packaged-cluster = { features = ["submission", "cluster", "cluster-prod"], solve-group = "dagster-slurm-example-cluster-submission" }
+
+workload-document-processing = { features = ["submission", "cluster", "cluster-prod", "workload-document-processing"], solve-group = "dagster-slurm-example-workload-docling" }
 
 [tool.pixi.feature.ci-basics.dependencies]
-yamllint = ">=1.35.1,<2"
-taplo = ">=0.9.3,<0.10"
+dprint = ">=0.50.0,<1"
 pytest = ">=8.3.4,<9"
 pytest-mock = ">=3.14.0,<4"
 pytest-cov = "~=6.0.0"
@@ -75,10 +60,16 @@ dagster-ray = ">=0.4.0,<1"
 pandas = ">=2.3.1,<3"
 
 [tool.pixi.feature.cluster.pypi-dependencies]
-ray = { version = "~=2.50.0", extras = ["data", "default"] }
+ray = { version = "~=2.53.0", extras = ["data", "default"] }
 dagster-ray = ">=0.4.0,<0.25"
 dagster-pipes = "~=1.12.0"
 dagster = "~=1.12.0"
+
+[tool.pixi.feature.workload-document-processing.dependencies]
+pylatexenc = ">=2.10,<3"
+
+[tool.pixi.feature.workload-document-processing.pypi-dependencies]
+docling = ">=2.68.0,<3"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
@@ -110,35 +101,28 @@ create-dagster = "~=1.12.0"
 [tool.pixi.tasks]
 
 [tool.pixi.tasks.start]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_IS_DEV_CLI = "True", DAGSTER_DEPLOYMENT = "development" }
 description = "Start dagster webserver in dev mode"
 
 [tool.pixi.tasks.start-staging]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "staging_docker" }
 description = "Start dagster webserver in staging mode"
 
-[tool.pixi.tasks.start-staging-hpc]
-cmd = "pixi run -e dev --frozen dagster dev"
-cwd = "."
-env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
-description = "Start dagster webserver in staging mode connected to supercomputer using SSH"
-
 [tool.pixi.tasks.deploy-prod-docker]
-cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py"
+cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --build-missing"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Package and deploy environment for HPC environment"
 
 [tool.pixi.tasks.deploy-prod-docker-aarch]
-cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --platform linux-aarch64"
+cmd = "pixi run -e dev --frozen python scripts/deploy_environment.py --platform linux-aarch64 --build-missing"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Package and deploy ARM64 environment for HPC environment"
-
 
 [tasks.deploy-prod-aarch]
 description = "Packs and deploys the ARM64 production environment to the HPC cluster."
@@ -146,24 +130,23 @@ cmd = "python scripts/deploy_environment.py --platform linux-aarch64"
 
 # TODO: for PROD mode we have to package and deploy OUT OF BAND! and need to create a task for this
 [tool.pixi.tasks.start-prod-docker]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_docker" }
 description = "Start dagster webserver in production mode"
 
 [tool.pixi.tasks.start-staging-supercomputer]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "staging_supercomputer" }
 description = "Start dagster webserver in staging mode with real HPC"
 
 # WARNING must pre-deploy!
 [tool.pixi.tasks.start-production-supercomputer]
-cmd = "pixi run -e dev --frozen dagster dev"
+cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
 env = { DAGSTER_DEPLOYMENT = "production_supercomputer" }
 description = "Start dagster webserver in production mode with real HPC"
-
 
 # TODO: add more launcher modes for the other variants
 
@@ -185,9 +168,8 @@ cmd = "pixi build -o dist"
 cwd = "./projects/dagster-slurm-example"
 
 [tool.pixi.tasks.pack]
-# --ignore-pypi-non-wheel
 # For now, deliberately not inject workload here (fast mode)
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
 description = "Pack dev environment"
 depends-on = [
   "build-shared-library",
@@ -195,14 +177,13 @@ depends-on = [
   "build-hpc-workload",
   "build-example",
 ]
-
 [tool.pixi.tasks.pack-only]
 # Same as pack but without rebuilding - for cache-friendly repeated runs
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-64 --create-executable --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda --inject projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda pyproject.toml"
 description = "Pack dev environment (no rebuild, cache-friendly)"
 
 [tool.pixi.tasks.pack-aarch]
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch"
 depends-on = [
   "build-shared-library",
@@ -212,7 +193,7 @@ depends-on = [
 
 [tool.pixi.tasks.pack-only-aarch]
 # Same as pack-aarch but without rebuilding - for cache-friendly repeated runs
-cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
+cmd = "pixi run -e opstooling --frozen pixi-pack --environment packaged-cluster --platform linux-aarch64 --ignore-pypi-non-wheel --inject projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda --inject ../dist/dagster_slurm-*-py3-none-any.whl --create-executable --inject projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda pyproject.toml"
 description = "Pack dev environment for aarch (no rebuild, cache-friendly)"
 
 [tool.pixi.tasks.clean]
@@ -232,12 +213,12 @@ cmd = "./scripts/git_clean_local_branches.sh"
 description = "cleanup local non used branches"
 
 [tool.pixi.tasks.fmt]
-cmd = "pixi run -e ci-basics --frozen ruff format ./projects && ruff check --fix ./projects && yamllint -c yamllintconfig.yaml projects && taplo fmt"
+cmd = "ruff format ./projects && ruff check --fix ./projects && dprint fmt"
 description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./projects && yamllint -c yamllintconfig.yaml ./projects && taplo check && ty check ./projects"
+cmd = "ruff check ./projects && dprint check && ty check ./projects"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]
@@ -262,7 +243,6 @@ directory_type = "project"
 root_module = "dagster_slurm_example"
 registry_modules = ["dagster_slurm_example.components.*"]
 
-
 [tool.ruff]
 exclude = [".git", "__pycache__", "build", "dist", ".pixi", "*.ipynb"]
 
@@ -275,16 +255,12 @@ select = ["F", "E", "W", "C", "B", "I"]
 [tool.ruff.lint.mccabe]
 max-complexity = 5
 
-[tool.taplo]
-exclude = ["pixi.lock"]
-
 [tool.pytest.ini_options]
 filterwarnings = [
   "ignore::dagster._utils.warnings.BetaWarning",
   "ignore::dagster._utils.warnings.PreviewWarning",
 ]
 markers = ["data: tests using real input data"]
-
 
 [tool.ty.environment]
 python-version = "3.12"

@@ -1,15 +1,14 @@
 services:
   # For each slurm service, we define it again but ONLY specify the 'image'.
   # This tells Docker Compose to IGNORE the 'build' section from the base file.
-
   slurmdbd:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
 
   slurmctld:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
 
   c1:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}
 
   c2:
-    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-05-3-1}
+    image: ghcr.io/ascii-supply-networks/dagster-slurm/slurm-docker-cluster:${IMAGE_TAG:-25-11-2-1}

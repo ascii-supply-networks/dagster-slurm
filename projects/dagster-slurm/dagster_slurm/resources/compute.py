@@ -224,8 +224,10 @@ class ComputeResource(ConfigurableResource):
 
         elif self.mode == ExecutionMode.SLURM:
             # Per-asset mode: each asset = separate sbatch job
+            if not self.slurm:
+                raise ValueError("slurm resource is required for SLURM mode")
             return SlurmPipesClient(
-                slurm_resource=self.slurm,  # type: ignore
+                slurm_resource=self.slurm,
                 launcher=effective_launcher,
                 session_resource=None,  # No session
                 cleanup_on_failure=self.cleanup_on_failure,
@@ -238,12 +240,16 @@ class ComputeResource(ConfigurableResource):
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
             # Session mode: shared allocation, operator fusion
+            if not self.slurm or not self.session:
+                raise ValueError(
+                    "slurm and session resources are required for SLURM_SESSION mode"
+                )
             # Initialize session if not already done
-            if not self.session._initialized:  # type: ignore
-                self.session.setup_for_execution(context)  # type: ignore
+            if not self.session._initialized:
+                self.session.setup_for_execution(context)
 
             return SlurmPipesClient(
-                slurm_resource=self.slurm,  # type: ignore
+                slurm_resource=self.slurm,
                 launcher=effective_launcher,
                 session_resource=self.session,
                 cleanup_on_failure=self.cleanup_on_failure,
@@ -256,8 +262,10 @@ class ComputeResource(ConfigurableResource):
 
         else:  # ExecutionMode.SLURM_HETJOB
             # Heterogeneous job mode: handled by run_hetjob()
+            if not self.slurm:
+                raise ValueError("slurm resource is required for SLURM_HETJOB mode")
             return SlurmPipesClient(
-                slurm_resource=self.slurm,  # type: ignore
+                slurm_resource=self.slurm,
                 launcher=effective_launcher,
                 session_resource=None,
                 cleanup_on_failure=self.cleanup_on_failure,
@@ -617,12 +625,12 @@ class ComputeResource(ConfigurableResource):
                 # Update launcher to connect to existing cluster
                 if hasattr(effective_launcher, "ray_address"):
                     # Ray launcher
-                    effective_launcher = effective_launcher.model_copy(  # type: ignore
+                    effective_launcher = effective_launcher.model_copy(
                         update={"ray_address": cluster_address}
                     )
                 elif hasattr(effective_launcher, "master_url"):
                     # Spark launcher
-                    effective_launcher = effective_launcher.model_copy(  # type: ignore
+                    effective_launcher = effective_launcher.model_copy(
                         update={"master_url": cluster_address}
                     )
 
@@ -720,6 +728,8 @@ class ComputeResource(ConfigurableResource):
         """
         if self.mode != ExecutionMode.SLURM_HETJOB:
             raise ValueError("run_hetjob only supported in slurm-hetjob mode")
+        if not self.slurm:
+            raise ValueError("slurm resource is required for hetjob execution")
         self._log_configuration_once()
 
         logger = get_dagster_logger()
@@ -729,9 +739,12 @@ class ComputeResource(ConfigurableResource):
 
         # Prepare work directory
         run_id = context.run_id or uuid.uuid4().hex
-        working_dir = f"{self.slurm.remote_base}/hetjobs/{run_id}"  # type: ignore
+        working_dir = f"{self.slurm.remote_base}/hetjobs/{run_id}"
 
-        with SSHConnectionPool(self.slurm.ssh) as ssh_pool:  # type: ignore
+        auth_provider = getattr(self.slurm, "_auth_provider", None)
+        if auth_provider and callable(getattr(auth_provider, "ensure", None)):
+            auth_provider.ensure()
+        with SSHConnectionPool(self.slurm.ssh) as ssh_pool:
             # Create working directory
             ssh_pool.run(f"mkdir -p {working_dir}")
 
@@ -744,7 +757,12 @@ class ComputeResource(ConfigurableResource):
                 "_get_pack_command",
                 lambda: ["pixi", "run", "--frozen", "pack-only"],
             )()
-            pack_file = pack_environment_with_pixi(pack_cmd=pack_cmd)
+            env_overrides = {}
+            if self.pack_platform:
+                env_overrides["SLURM_PACK_PLATFORM"] = self.pack_platform
+            pack_file = pack_environment_with_pixi(
+                pack_cmd=pack_cmd, env_overrides=env_overrides or None
+            )
 
             # Upload packed environment
             remote_pack_file = f"{working_dir}/{pack_file.name}"
@@ -782,7 +800,7 @@ class ComputeResource(ConfigurableResource):
                     "DAGSTER_PIPES_MESSAGES": f"{working_dir}/{asset_key}_messages.jsonl",
                 }
 
-                execution_plan = launcher.prepare_execution(  # type: ignore
+                execution_plan = launcher.prepare_execution(
                     payload_path=remote_payload,
                     python_executable=python_executable,
                     working_dir=working_dir,
@@ -821,7 +839,7 @@ class ComputeResource(ConfigurableResource):
 
             # Create heterogeneous job manager
             manager = HeterogeneousJobManager(
-                slurm_resource=self.slurm,  # type: ignore
+                slurm_resource=self.slurm,
                 ssh_pool=ssh_pool,
                 working_dir=working_dir,
             )

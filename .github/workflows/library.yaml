@@ -2,14 +2,14 @@ name: build, test, release
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'projects/**'
+      - "projects/**"
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'projects/**'
+      - "projects/**"
   workflow_dispatch:
 
 concurrency:
@@ -19,7 +19,7 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
-  SLURM_VERSION: 25-05-3-1
+  SLURM_VERSION: 25-11-2-1
 
 jobs:
   validate-pr:
@@ -53,6 +53,7 @@ jobs:
   validation:
     name: Validate library
     runs-on: ubuntu-latest
+    # runs-on: paid-ci-runner-more-disk
     permissions:
       contents: read
       pull-requests: read
@@ -66,9 +67,10 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.3
         with:
-            pixi-version: v0.61.0
-            cache: true
-            frozen: true
+          pixi-version: v0.63.2
+          cache: true
+          frozen: true
+
       - run: pixi install -e build && pixi run -e build --frozen lint
 
       - name: Run unit tests without real SLURM
@@ -139,7 +141,7 @@ jobs:
           echo "--> 'submitter' user shell validity:"
           docker exec slurmctld getent passwd $SSH_USER
           docker exec slurmctld grep "$(getent passwd $SSH_USER | cut -d: -f7)" /etc/shells || echo "WARNING: User's shell may not be in /etc/shells"
-          
+
           echo "--> Network listener INSIDE container:"
           docker exec slurmctld ss -ltn | grep ':22 '
 
@@ -165,7 +167,7 @@ jobs:
             -o KexAlgorithms=+diffie-hellman-group14-sha256 \
             -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256 \
             -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
-            
+
             echo "======================================================================="
             echo "❌ ERROR: SSH connection failed. This is likely due to a crypto mismatch or auth issue."
             echo "======================================================================="
@@ -182,7 +184,6 @@ jobs:
 
           echo "✅ All SSH checks passed successfully."
 
-      
       - name: debugging deploy
         env:
           SLURM_EDGE_NODE_HOST: localhost
@@ -190,7 +191,22 @@ jobs:
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
           SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
-        run: cd examples && pixi run deploy-prod-docker
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          cd examples
+          if ! pixi run deploy-prod-docker; then
+            echo "Deploy failed; dumping pack debug output..."
+            pixi run -e opstooling --frozen python scripts/pack_environment.py --env packaged-cluster --platform auto --build-missing --debug || true
+            echo "Listing examples/ and dist/ for context..."
+            ls -la
+            ls -la dist || true
+            ls -la projects || true
+            ls -la projects/*/dist || true
+            ls -la projects/*/dist/*.conda || true
+            ls -la ../dist || true
+            exit 1
+          fi
 
       - name: Run integration tests against SLURM cluster
         env:
@@ -199,6 +215,9 @@ jobs:
           SLURM_EDGE_NODE_USER: submitter
           SLURM_EDGE_NODE_PASSWORD: submitter
           SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
+          # Set SLURM_JOB_ID to enable Ray port randomization in local mode tests
+          # This prevents port 6379 conflicts (Redis default port) in CI
+          SLURM_JOB_ID: ${{ github.run_id }}
         run: pixi run -e build --frozen testpixi-integration
 
       - name: Stop SLURM Cluster and Clean Up
@@ -240,9 +259,9 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.3
         with:
-            pixi-version: v0.61.0
-            cache: true
-            frozen: true
+          pixi-version: v0.63.2
+          cache: true
+          frozen: true
 
       - run: pixi run -e build --frozen sync
 
@@ -263,14 +282,14 @@ jobs:
           if ! git diff --staged --quiet; then
             git commit -m "chore: additional changes [skip ci]"
           fi
-          
+
           # Push changes and tags
           git push origin main
           git push --tags
-          
+
           # Create GitHub pre-release
           uv run semantic-release publish
-      
+
       - name: Publish pre-release to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -283,10 +302,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: validation
     permissions:
-      contents: write       # Push commits, tags, and create releases
-      pull-requests: read   # Read PR information for changelog generation
-      issues: read          # Read issues for linking in releases
-      packages: write       # Publish packages to GitHub Packages
+      contents: write # Push commits, tags, and create releases
+      pull-requests: read # Read PR information for changelog generation
+      issues: read # Read issues for linking in releases
+      packages: write # Publish packages to GitHub Packages
       id-token: write
     if: github.event_name == 'workflow_dispatch'
     environment: release
@@ -309,16 +328,16 @@ jobs:
           GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
           set -e
-          
+
           # Get current version from pyproject.toml
           CURRENT_VERSION=$(grep "version =" pyproject.toml | head -1 | cut -d'"' -f2)
           echo "📋 Current version: $CURRENT_VERSION"
-          
+
           # Check if current version is a prerelease
           if echo "$CURRENT_VERSION" | grep -E "(rc|alpha|beta)" >/dev/null; then
             PRERELEASE_TAG="v$CURRENT_VERSION"
             echo "🔍 Looking for prerelease tag: $PRERELEASE_TAG"
-            
+
             # Check if the prerelease exists and is marked as prerelease
             if gh release view "$PRERELEASE_TAG" >/dev/null 2>&1; then
               IS_PRERELEASE=$(gh release view "$PRERELEASE_TAG" --json isPrerelease --jq '.isPrerelease')
@@ -345,9 +364,9 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.3
         with:
-            pixi-version: v0.61.0
-            cache: true
-            frozen: true
+          pixi-version: v0.63.2
+          cache: true
+          frozen: true
 
       - run: pixi run -e build --frozen sync
 
@@ -371,7 +390,7 @@ jobs:
           git push origin main
           git push --tags
           uv run semantic-release publish
-          
+
       - name: Publish to PyPI (Trusted Publishing)
         if: github.event.inputs.release_type != 'prerelease'
         uses: pypa/gh-action-pypi-publish@release/v1

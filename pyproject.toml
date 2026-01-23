@@ -19,8 +19,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "yamllint>=1.35.1,<2",
-  "taplo>=0.9.3,<0.10",
   "pytest>=8.3.4,<9",
   "pytest-mock>=3.14.0,<4",
   "pytest-cov~=7.0.0",
@@ -36,8 +34,11 @@ channels = ["conda-forge"]
 
 [tool.pixi.environments]
 build = { features = ["build"], solve-group = "build" }
-
 docs = { features = ["docs"], solve-group = "docs" }
+
+[tool.pixi.feature.build.dependencies]
+dprint = ">=0.50.0,<1"
+
 [tool.pixi.feature.build.pypi-dependencies]
 uv = ">=0.8.6"
 build = ">=1.3.0"
@@ -65,18 +66,18 @@ dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
-fmt = { cmd = "uv run -- ruff format projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo fmt", description = "Format" }
-lint = { cmd = "uv run -- ruff check projects && uv run -- yamllint -c examples/yamllintconfig.yaml projects && uv run -- taplo check && ty check --python .pixi/envs/build projects", description = "Lint" }
+fmt = { cmd = "uv run -- ruff check --fix projects && uv run -- ruff format projects && dprint fmt", description = "Format" }
+lint = { cmd = "uv run -- ruff check projects && dprint check && ty check --python .pixi/envs/build projects", description = "Lint" }
+fmt-docs = { cmd = "dprint fmt docs/**/*.md", description = "Format documentation markdown" }
+lint-docs = { cmd = "dprint check docs/**/*.md", description = "Check documentation markdown formatting" }
 test = { cmd = "uv run -- pytest -m 'not (needs_slurm_docker or slow)' projects", description = "Run all unit tests" }
 testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-report=term-missing projects", description = "Run all unit tests in pixi build env" }
-
 
 test-integration = { cmd = "uv run -- pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
 testpixi-integration = { cmd = "pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
 
 test-integration-slow = { cmd = "uv run -- pytest -m 'slow' projects", description = "Run all integration tests" }
 testpixi-integration-slow = { cmd = "pytest -m 'slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
-
 
 [tool.pixi.feature.build.tasks.sync]
 cmd = "uv sync --all-packages"
@@ -89,8 +90,13 @@ description = "uv sync with upgrade"
 [tool.pixi.feature.build.tasks.build-lib]
 cmd = "uv build --all-packages"
 cwd = "projects"
+description = "Build the library (default - no clean)"
+
+[tool.pixi.feature.build.tasks.clean-build-lib]
+cmd = "uv build --all-packages"
+cwd = "projects"
 depends-on = ["clean-lib"]
-description = "Cleanly build the library"
+description = "Clean cache first, then build the library"
 
 [tool.pixi.feature.build.tasks.publish-lib]
 cmd = "uv publish --token $PYPI_TOKEN"
@@ -151,19 +157,16 @@ cwd = "slides"
 depends-on = ["slides-install"]
 description = "build static files"
 
-
 [tool.pixi.feature.docs.tasks.slides-build-base]
 cmd = "bun run build-base"
 cwd = "slides"
 depends-on = ["slides-install"]
 description = "build static slides with base"
 
-
 [tool.pixi.feature.docs.tasks.docs-collect-slides]
 cmd = "bash -lc 'set -euo pipefail; rm -rf docs/static/slides; cp -R slides/dist/. docs/static/slides'"
 depends-on = ["slides-build-base"]
 description = "Copy Slidev dist into Docusaurus static/"
-
 
 [tool.commitizen]
 name = "cz_conventional_commits"

@@ -39,6 +39,13 @@ RUN set -ex \
        nc \
        sshpass \
        sudo \
+       libxcb \
+       libXext \
+       libXrender \
+       libSM \
+       libICE \
+       libgomp \
+       mesa-libGL \
     && yum clean all \
     && rm -rf /var/cache/yum
 
@@ -67,17 +74,23 @@ RUN set -ex \
 COPY submitter.bashrc /home/submitter/.bashrc
 RUN chown submitter:submitter /home/submitter/.bashrc \
     && chmod +x /home/submitter/.bashrc
-    
+
+# Set DATA environment variable for data directory (container processes)
+ENV DATA=/data_and_logs
+
+# Also set DATA in /etc/environment for system-wide availability (SSH sessions, SLURM jobs)
+RUN echo "DATA=/data_and_logs" >> /etc/environment
 
 EXPOSE 22
 
 RUN pip3 install Cython pytest
 
 ARG GOSU_VERSION=1.17
+ARG TARGETARCH
 
 RUN set -ex \
-    && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-amd64" \
-    && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-amd64.asc" \
+    && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-${TARGETARCH}" \
+    && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-${TARGETARCH}.asc" \
     && export GNUPGHOME="$(mktemp -d)" \
     && gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
     && gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu \
@@ -85,7 +98,7 @@ RUN set -ex \
     && chmod +x /usr/local/bin/gosu \
     && gosu nobody true
 
-ARG SLURM_TAG="slurm-25-05-3-1"
+ARG SLURM_TAG="slurm-25-11-2-1"
 
 RUN set -ex \
     && git clone -b ${SLURM_TAG} --single-branch --depth=1 https://github.com/SchedMD/slurm.git \
@@ -109,6 +122,7 @@ RUN set -ex \
         /var/lib/slurmd \
         /var/log/slurm \
         /data \
+        /data_and_logs \
     && touch /var/lib/slurmd/node_state \
         /var/lib/slurmd/front_end_state \
         /var/lib/slurmd/job_state \
@@ -119,6 +133,7 @@ RUN set -ex \
         /var/lib/slurmd/qos_usage \
         /var/lib/slurmd/fed_mgr_state \
     && chown -R slurm:slurm /var/*/slurm* \
+    && chown -R submitter:submitter /data_and_logs \
     && /sbin/create-munge-key
 
 COPY slurm.conf /etc/slurm/slurm.conf

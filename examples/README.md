@@ -20,6 +20,7 @@ cd dagster-slurm/examples
 #### local execution
 
 Execute without slurm.
+
 - Small data
 - Rapid local prototyping
 
@@ -69,7 +70,6 @@ SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 
 # see the JQ command below for dynamically setting this
 # DAGSTER_PROD_ENV_PATH=/home/submitter/pipelines/deployments/<<<your deployment >>>
-
 ```
 
 ```bash

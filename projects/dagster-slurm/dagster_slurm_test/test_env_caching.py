@@ -394,7 +394,7 @@ class DummySlurmClient(SlurmPipesClient):
         # Skip parent init; we only need isinstance checks to pass.
         self.kwargs = None
 
-    def run(  # type: ignore[override]
+    def run(
         self,
         context,
         *,

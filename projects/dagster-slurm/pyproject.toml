@@ -61,6 +61,4 @@ python = ">=3.12,<3.13"
 ray = ["ray>=2.48.0"]
 
 [tool.pixi.package.build]
-backend = { name = "pixi-build-python", version = "*", channels = [
-  "https://prefix.dev/conda-forge",
-] }
+backend = { name = "pixi-build-python", version = "*", channels = ["https://prefix.dev/conda-forge"] }

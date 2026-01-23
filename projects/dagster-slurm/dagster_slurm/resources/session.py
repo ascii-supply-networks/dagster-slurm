@@ -57,7 +57,7 @@ class SlurmSessionResource(ConfigurableResource):
     _execution_semaphore: Optional[threading.Semaphore] = PrivateAttr(default=None)
     _initialized: bool = PrivateAttr(default=False)
 
-    def setup_for_execution(  # type: ignore
+    def setup_for_execution(  # type: ignore[override]
         self, context: InitResourceContext
     ) -> "SlurmSessionResource":
         """Called by Dagster when resource is initialized for a run.
@@ -68,23 +68,23 @@ class SlurmSessionResource(ConfigurableResource):
 
         self.logger = get_dagster_logger()
         self.context = context
-        self._execution_semaphore = threading.Semaphore(self.max_concurrent_jobs)  # type: ignore
+        self._execution_semaphore = threading.Semaphore(self.max_concurrent_jobs)
 
         # Only create allocation if session mode is enabled
         if self.enable_session:
             # Start SSH pool
-            self._ssh_pool = SSHConnectionPool(self.slurm.ssh)  # type: ignore
-            self._ssh_pool.__enter__()  # type: ignore
+            self._ssh_pool = SSHConnectionPool(self.slurm.ssh)
+            self._ssh_pool.__enter__()
 
             # Create allocation
-            self._allocation = self._create_allocation(context)  # type: ignore
+            self._allocation = self._create_allocation(context)
             self.logger.info(
-                f"Session resource initialized with allocation {self._allocation.slurm_job_id}"  # type: ignore
+                f"Session resource initialized with allocation {self._allocation.slurm_job_id}"
             )
         else:
             self.logger.info("Session mode disabled")
 
-        self._initialized = True  # type: ignore
+        self._initialized = True
 
         return self
 
@@ -113,7 +113,7 @@ class SlurmSessionResource(ConfigurableResource):
             except Exception as e:
                 self.logger.warning(f"Error closing SSH pool: {e}")
 
-        self._initialized = False  # type: ignore
+        self._initialized = False
 
     def execute_in_session(
         self,
@@ -246,6 +246,9 @@ class SlurmSessionResource(ConfigurableResource):
         job_id = int(match.group(1))
         self.logger.info(f"Allocation submitted: job {job_id}")
 
+        # Query estimated start time for pending allocation
+        self._log_estimated_start_time(job_id)
+
         # Wait for allocation to start
         self._wait_for_allocation_start(job_id, working_dir, timeout=120)
 
@@ -260,6 +263,15 @@ class SlurmSessionResource(ConfigurableResource):
             nodes=nodes,
             working_dir=working_dir,
             config=self,
+        )
+
+    def _log_estimated_start_time(self, job_id: int) -> None:
+        """Log commands to check queue status for a pending allocation job."""
+        # Just log the commands - don't try to parse output (Slurm versions vary too much)
+        self.logger.info(
+            f"Allocation job {job_id} submitted. Check queue status with:\n"
+            f"  squeue --start -j {job_id}\n"
+            f"  squeue --start -j {job_id} --json | jq '.jobs[0].start_time'"
         )
 
     def _wait_for_allocation_start(

@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from loguru import logger
+import shlex
 import json
 
 from dagster_slurm import SSHConnectionResource
@@ -32,7 +33,24 @@ def main():
     parser.add_argument(
         "--platform",
         help="Specify the target platform for pixi pack (e.g., 'linux-aarch64', 'linux-64').",
-        default="linux-64",
+        choices=["linux-64", "linux-aarch64", "osx-arm64", "auto"],
+        default="auto",
+    )
+    parser.add_argument(
+        "--workload",
+        help="Select workload environment for the packed environment.",
+        choices=["packaged-cluster", "workload-document-processing"],
+        default="packaged-cluster",
+    )
+    parser.add_argument(
+        "--build-missing",
+        action="store_true",
+        help="Build missing artifacts before packing.",
+    )
+    parser.add_argument(
+        "--allow-missing-injects",
+        action="store_true",
+        help="Skip missing inject artifacts instead of failing.",
     )
     parser.add_argument(
         "--output-json",
@@ -41,12 +59,12 @@ def main():
         default="deployment_metadata.json",
     )
     args = parser.parse_args()  
-    env_path = ".env" 
+    env_path = ".env"
     if os.path.exists(env_path):
         dotenv.load_dotenv(env_path)
-        print(f"Environment loaded from {env_path}")
+        logger.info(f"Environment loaded from {env_path}")
     else:
-        print(f"No .env file found at {env_path}")
+        logger.info(f"No .env file found at {env_path} (skipping).")
     try:
         base_path = os.environ["SLURM_DEPLOYMENT_BASE_PATH"]
         ssh_host = os.environ["SLURM_EDGE_NODE_HOST"]
@@ -61,12 +79,17 @@ def main():
         if key_path and password:
             raise ValueError("Authentication conflict: You cannot set both SLURM_EDGE_NODE_KEY_PATH and SLURM_EDGE_NODE_PASSWORD.")
 
+        extra_opts = shlex.split(os.getenv("SLURM_EDGE_NODE_OPTS_EXTRA", ""))
+        if extra_opts:
+            logger.info(f"Using extra SSH options: {extra_opts}")
+
         ssh_config = SSHConnectionResource(
             host=ssh_host,
             port=ssh_port,
             user=ssh_user,
             key_path=key_path,
             password=password,
+            extra_opts=extra_opts,
         )
         auth_method = "key-based" if key_path else "password-based"
         logger.info(f"Loaded SSH configuration for {ssh_config.user}@{ssh_config.host} (using {auth_method} auth).")
@@ -85,11 +108,23 @@ def main():
     logger.info(f"Target deployment path on remote: {deployment_path}")
 
     logger.info("Packing environment using pixi...")
-    pack_cmd_map = {
-        "linux-64": ["pixi", "run", "--frozen", "pack"],
-        "linux-aarch64": ["pixi", "run", "--frozen", "pack-aarch"],
-    }
-    pack_cmd = pack_cmd_map.get(args.platform) if args.platform else ["pixi", "run", "--frozen", "pack"]
+    pack_cmd = [
+        "pixi",
+        "run",
+        "-e",
+        "opstooling",
+        "--frozen",
+        "python",
+        "scripts/pack_environment.py",
+        "--env",
+        args.workload,
+        "--platform",
+        args.platform,
+    ]
+    if args.build_missing:
+        pack_cmd.append("--build-missing")
+    if args.allow_missing_injects:
+        pack_cmd.append("--allow-missing-injects")
     logger.info(f"Using pack command: {pack_cmd}")
     
     try:

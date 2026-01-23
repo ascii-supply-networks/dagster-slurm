@@ -9,11 +9,9 @@ maybe this project can support making HPC systems more accessible**.
 
 <img referrerpolicy="no-referrer-when-downgrade" src="https://telemetry.dagster-slurm.geoheil.com/a.png?x-pxid=994a20b8-4be7-4297-9f42-657b0d1f1a07&page=README-Pypi.md" />
 
-
 ## Basic example
 
 https://github.com/ascii-supply-networks/dagster-slurm/tree/main/examples
-
 
 ### prerequisites
 
@@ -27,13 +25,14 @@ Example
 
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
-docker compose up -d --build
+docker compose up
 cd dagster-slurm/examples
 ```
 
 #### local execution
 
 Execute without slurm.
+
 - Small data
 - Rapid local prototyping
 
@@ -83,7 +82,6 @@ SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 
 # see the JQ command below for dynamically setting this
 # DAGSTER_PROD_ENV_PATH=/home/submitter/pipelines/deployments/<<<your deployment >>>
-
 ```
 
 ```bash
@@ -172,7 +170,6 @@ If your cluster needs OS-level tweaks before Ray starts (for example, higher fil
 ```
 
 You can attach these overrides inside a site profile (see `SUPERCOMPUTER_SITE_OVERRIDES` in the example resources).
-
 
 ## contributing
 

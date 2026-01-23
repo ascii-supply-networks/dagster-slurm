@@ -9,7 +9,6 @@ sidebar_position: 1
 **A European sovereign GPU cloud does not come out of nowhere.
 Maybe this project can support making HPC systems more accessible.**
 
-
 ## What Dagster-Slurm technically delivers
 
 - **Deterministic runtimes:** `pixi` and `pixi-pack` freeze your dependencies, upload the bundle to the HPC edge, and install exactly once per version.
@@ -33,7 +32,7 @@ Maybe this project can support making HPC systems more accessible.**
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-docker compose up -d --build
+docker compose up
 cd examples
 ```
 
@@ -48,7 +47,6 @@ pixi run start
 ```
 
 Navigate to [http://localhost:3000](http://localhost:3000) to view the Dagster UI with assets running in-process.
-
 
 ## 2. Using Dagster
 
@@ -71,9 +69,7 @@ To further explore your asset runs, return to the Assets tab and select process_
 Here, you can review all past runs of that asset, compare their performance, and analyze trends across executions (see screenshot below).
 Depending on your Dagster configuration, you can also log and visualize additional metrics or properties.
 
-
 ![Screenshot comparing multiple Dagster runs](../static/img/process_data_asset_view.png)
-
 
 ## 3. Point to your own HPC cluster
 
@@ -84,23 +80,23 @@ Depending on your Dagster configuration, you can also log and visualize addition
 
 **Required environment variables**
 
-| Variable | Purpose | Notes |
-| --- | --- | --- |
-| `SLURM_EDGE_NODE_HOST` | SSH hostname of the login/edge node. | - |
-| `SLURM_EDGE_NODE_PORT` | SSH port. | Defaults to `22` on most clusters. |
-| `SLURM_EDGE_NODE_USER` | Username used for SSH and job submission. | Often tied to an LDAP or project account. |
-| `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH` | Authentication method. | Prefer key-based auth; set whichever your site supports. |
-| `SLURM_EDGE_NODE_FORCE_TTY` (optional) | Request a pseudo-terminal (`-tt`). | Set to `true` on clusters that insist on interactive sessions. Leave `false` when using a jump host. |
-| `SLURM_EDGE_NODE_POST_LOGIN_COMMAND` (optional) | Command prefix run immediately after login. | Supports `{cmd}` placeholder; useful when you cannot use `ProxyJump`. |
-| `SLURM_EDGE_NODE_JUMP_HOST` / `_USER` / `_PORT` / `_PASSWORD` (optional) | Configure an SSH jump host (uses `ssh -J`). | Lets you hop via `vmos`/bastion nodes; password-based auth is supported. |
-| `SLURM_DEPLOYMENT_BASE_PATH` | Remote directory where dagster-slurm uploads job bundles. | Should be writable and have sufficient quota. |
-| `SLURM_PARTITION` | Default partition/queue name. | Override per asset for specialised queues. |
-| `SLURM_GPU_PARTITION` (optional) | GPU-enabled partition. | Useful when mixing CPU and GPU jobs. |
-| `SLURM_QOS` (optional) | QoS or account string. | Required on clusters that enforce QoS selection. |
-| `SLURM_SUPERCOMPUTER_SITE` (optional) | Enables site-specific overrides (`vsc5`, `leonardo`, …). | Adds TTY/post-login hops or queue defaults. |
-| `DAGSTER_DEPLOYMENT` | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project. |
-| `CI_DEPLOYED_ENVIRONMENT_PATH` (production only) | Path to a pre-built environment bundle on the cluster. | Required when using `production_supercomputer`. |
-| `DAGSTER_SLURM_SSH_CONTROL_DIR` (optional) | Directory for SSH ControlMaster sockets. | Override when `/tmp` is not writable; defaults to `~/.ssh/dagster-slurm`. |
+| Variable                                                                 | Purpose                                                                                       | Notes                                                                                                |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `SLURM_EDGE_NODE_HOST`                                                   | SSH hostname of the login/edge node.                                                          | -                                                                                                    |
+| `SLURM_EDGE_NODE_PORT`                                                   | SSH port.                                                                                     | Defaults to `22` on most clusters.                                                                   |
+| `SLURM_EDGE_NODE_USER`                                                   | Username used for SSH and job submission.                                                     | Often tied to an LDAP or project account.                                                            |
+| `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH`                  | Authentication method.                                                                        | Prefer key-based auth; set whichever your site supports.                                             |
+| `SLURM_EDGE_NODE_FORCE_TTY` (optional)                                   | Request a pseudo-terminal (`-tt`).                                                            | Set to `true` on clusters that insist on interactive sessions. Leave `false` when using a jump host. |
+| `SLURM_EDGE_NODE_POST_LOGIN_COMMAND` (optional)                          | Command prefix run immediately after login.                                                   | Supports `{cmd}` placeholder; useful when you cannot use `ProxyJump`.                                |
+| `SLURM_EDGE_NODE_JUMP_HOST` / `_USER` / `_PORT` / `_PASSWORD` (optional) | Configure an SSH jump host (uses `ssh -J`).                                                   | Lets you hop via `vmos`/bastion nodes; password-based auth is supported.                             |
+| `SLURM_DEPLOYMENT_BASE_PATH`                                             | Remote directory where dagster-slurm uploads job bundles.                                     | Should be writable and have sufficient quota.                                                        |
+| `SLURM_PARTITION`                                                        | Default partition/queue name.                                                                 | Override per asset for specialised queues.                                                           |
+| `SLURM_GPU_PARTITION` (optional)                                         | GPU-enabled partition.                                                                        | Useful when mixing CPU and GPU jobs.                                                                 |
+| `SLURM_QOS` (optional)                                                   | QoS or account string.                                                                        | Required on clusters that enforce QoS selection.                                                     |
+| `SLURM_SUPERCOMPUTER_SITE` (optional)                                    | Enables site-specific overrides (`vsc5`, `leonardo`, …).                                      | Adds TTY/post-login hops or queue defaults.                                                          |
+| `DAGSTER_DEPLOYMENT`                                                     | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project.                                                       |
+| `CI_DEPLOYED_ENVIRONMENT_PATH` (production only)                         | Path to a pre-built environment bundle on the cluster.                                        | Required when using `production_supercomputer`.                                                      |
+| `DAGSTER_SLURM_SSH_CONTROL_DIR` (optional)                               | Directory for SSH ControlMaster sockets.                                                      | Override when `/tmp` is not writable; defaults to `~/.ssh/dagster-slurm`.                            |
 
 Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
 
@@ -110,9 +106,9 @@ Set the variables in a `.env` file or your orchestrator’s secret store. Passwo
 
 `ComputeResource` currently supports two stable execution modes:
 
-| Mode | Description | Typical use |
-| --- | --- | --- |
-| `local` | Runs assets without SSH or Slurm. | Developer laptops and CI smoke tests. |
+| Mode    | Description                                | Typical use                                        |
+| ------- | ------------------------------------------ | -------------------------------------------------- |
+| `local` | Runs assets without SSH or Slurm.          | Developer laptops and CI smoke tests.              |
 | `slurm` | Submits one Slurm job per asset execution. | Staging clusters and production deployments today. |
 
 > Session-based reuse (`slurm-session`) and heterogeneous job submissions (`slurm-hetjob`) are active areas of development. The configuration stubs remain in the codebase but are not yet ready for day-to-day operations.
@@ -121,9 +117,9 @@ Launchers (Bash, Ray, Spark—WIP, or custom) can be chosen globally or per asse
 
 ## Staging vs. production modes
 
-| Mode | Environment packaging | Typical use case |
-| --- | --- | --- |
-| `staging_supercomputer` | Builds/publishes pixi environments on demand for each run. Startup is slower, but ideal while iterating or validating new dependencies. | Dry runs, QA, exploratory workloads. |
+| Mode                       | Environment packaging                                                                                                                                       | Typical use case                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `staging_supercomputer`    | Builds/publishes pixi environments on demand for each run. Startup is slower, but ideal while iterating or validating new dependencies.                     | Dry runs, QA, exploratory workloads.                             |
 | `production_supercomputer` | Expects a pre-deployed environment (referenced via `CI_DEPLOYED_ENVIRONMENT_PATH`). Launches quickly because the runtime is already present on the cluster. | Business-critical pipelines that require deterministic runtimes. |
 
 In practice, use staging while developing or testing new packages, then promote the bundle via CI and switch the deployment to production once the artifact is published.

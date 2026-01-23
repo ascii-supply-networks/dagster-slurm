@@ -1265,3 +1265,5 @@ examples/activate.sh
 examples/environment.sh
 examples/deployment_metadata.json
 examples/.tmp_dagster_home_*/*
+examples/environment-workload-*.sh
+examples/environment-packaged-cluster-*.sh

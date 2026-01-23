@@ -1,6 +1,4 @@
-sidebar_position: 3
-title: Spark and slurm
----
+## sidebar_position: 3title: Spark and slurm
 
 > ⚠️ Spark launcher support is work in progress. Functionality and configuration will change—please treat this guide as a placeholder and track progress on GitHub.
 

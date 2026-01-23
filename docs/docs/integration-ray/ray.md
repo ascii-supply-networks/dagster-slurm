@@ -126,9 +126,9 @@ The launcher exposes the head node address via Ray defaults, so `ray.init(addres
 
 ## Execution modes and Ray behaviour
 
-| Mode | Behaviour |
-| --- | --- |
-| `local` | Starts a local Ray runtime on the Dagster node. Ideal for development, no Slurm required. |
+| Mode    | Behaviour                                                                                                                      |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `local` | Starts a local Ray runtime on the Dagster node. Ideal for development, no Slurm required.                                      |
 | `slurm` | Submits a Slurm job per asset; the `RayLauncher` bootstraps a Ray cluster inside that allocation and tears it down afterwards. |
 
 > Session reuse and heterogeneous jobs are planned enhancements. Their configuration knobs remain in the API but are considered experimental until documented otherwise.
@@ -156,6 +156,10 @@ Ray workers inherit that environment automatically.
 - Dagster logs capture Ray's stdout/stderr from the head node. Use the Dagster UI metadata for quick metrics.
 - Enable the Ray dashboard by exposing the web UI through SSH tunnelling (`ray_args=["--dashboard-host=0.0.0.0"]`), then forward the port from the edge node.
 - Slurm usage metrics (CPU efficiency, memory high-water mark, elapsed time) appear in the asset materialization metadata automatically.
+
+## Real-world examples
+
+- **[Document processing with docling](../applications/document-preprocessing-docling.md)** – PDF to markdown conversion with Ray Data, including architecture, scaling, and troubleshooting
 
 ## Troubleshooting
 

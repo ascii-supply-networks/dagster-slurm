@@ -1,5 +1,6 @@
 """Environment packaging using pixi pack."""
 
+import os
 import glob
 import re
 import shlex
@@ -16,6 +17,7 @@ def pack_environment_with_pixi(
     project_dir: Optional[Path] = None,
     pack_cmd: Optional[list[str]] = None,
     timeout: int = 600,
+    env_overrides: Optional[dict[str, str]] = None,
 ) -> Path:
     """Pack environment using 'pixi pack'.
 
@@ -47,17 +49,62 @@ def pack_environment_with_pixi(
     # pixi will automatically walk up to find pixi.toml
     cwd = str(project_dir.resolve()) if project_dir else None
 
-    logger.debug(f"Command: {shlex.join(pack_cmd)}")
-    logger.debug(f"Timeout: {timeout}s")
+    # Build reproducible command string with environment variables
+    env_prefix = ""
+    if env_overrides:
+        env_vars = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_overrides.items())
+        env_prefix = f"{env_vars} "
 
+    reproducible_cmd = f"{env_prefix}{shlex.join(pack_cmd)}"
+    logger.info(
+        f"Pack command (reproducible): {reproducible_cmd} - see stdout logs for details"
+    )
+    logger.debug(f"Timeout: {timeout}s")
+    if cwd:
+        logger.debug(f"Working directory: {cwd}")
+
+    process = None
     try:
-        result = subprocess.run(
+        env = None
+        if env_overrides:
+            env = os.environ.copy()
+            env.update(env_overrides)
+        else:
+            env = os.environ.copy()
+
+        # Enable unbuffered output
+        env["PYTHONUNBUFFERED"] = "1"
+
+        # Don't capture output - let it go directly to stdout/stderr
+        # This prevents buffering issues and deadlocks
+        # Flush before starting to ensure previous logs are visible
+        import sys
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        process = subprocess.Popen(
             pack_cmd,
             cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            stdin=subprocess.DEVNULL,  # Close stdin to prevent blocking on input
+            stdout=sys.stdout,  # Explicitly pass stdout instead of None
+            stderr=sys.stderr,  # Explicitly pass stderr instead of None
+            env=env,
         )
+
+        # Wait for process to complete with timeout
+        returncode = process.wait(timeout=timeout)
+
+        # Create a result-like object for compatibility
+        # stdout/stderr are empty since we didn't capture
+        class Result:
+            def __init__(self, returncode: int, stdout: str, stderr: str):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        result = Result(returncode, "", "")
+
     except FileNotFoundError as e:
         raise RuntimeError(
             f"Failed to run pixi command. Is pixi installed?\n"
@@ -65,22 +112,19 @@ def pack_environment_with_pixi(
             f"Error: {e}"
         ) from e
     except subprocess.TimeoutExpired:
+        if process is not None:
+            process.kill()
         raise RuntimeError(
             f"pixi pack timed out after {timeout} seconds. "
             f"This may indicate a problem with the environment or network. "
             f"Consider increasing the timeout parameter."
         )
 
-    # Log pixi output to Dagster logs
-    if result.stdout:
-        logger.info(f"pixi pack stdout:\n{result.stdout}")
-    if result.stderr:
-        # stderr might contain warnings/progress, log as debug
-        logger.debug(f"pixi pack stderr:\n{result.stderr}")
-
     if result.returncode != 0:
         stderr = result.stderr.strip()
         stdout = result.stdout.strip()
+        logger.error("Pack command failed. Reproduce with:")
+        logger.error(shlex.join(pack_cmd))
 
         # Check for common errors
         if "could not find a `pixi.toml`" in stderr.lower():
@@ -301,8 +345,8 @@ def _find_pack_file(search_dir: Path) -> Optional[Path]:
     # Look for both executable and tarball formats
     candidates = []
 
-    # pixi-pack with --create-executable creates: environment.sh
-    for pattern in ["environment.sh", "*.tar.bz2"]:
+    # pixi-pack with --create-executable creates: environment.sh (or renamed variants)
+    for pattern in ["environment.sh", "environment-*.sh", "*.tar.bz2"]:
         matches = glob.glob(str(search_dir / pattern))
         candidates.extend(matches)
 
@@ -316,8 +360,9 @@ def _find_pack_file(search_dir: Path) -> Optional[Path]:
 
 def _format_size(size_bytes: int) -> str:
     """Format bytes as human-readable size."""
+    size: float = float(size_bytes)
     for unit in ["B", "KiB", "MiB", "GiB"]:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.2f} {unit}"
-        size_bytes /= 1024.0  # type: ignore
-    return f"{size_bytes:.2f} TiB"
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} TiB"

@@ -34,19 +34,18 @@ Hydrating supercomputers with Dagster and Slurm to enhance developer experience.
 - **Metrics Collection**: Automatic collection of Slurm job metrics (CPU efficiency, memory, node-hours)
 - **Production-Prepared**: Proper error handling, cleanup, health checks
 
-### 📊 Metrics 
+### 📊 Metrics
 
-Automatic metrics collection for all jobs: 
+Automatic metrics collection for all jobs:
 
 - Node-hours consumed
 - CPU efficiency
 - Max memory usage
 - Elapsed time
-     
-Visible in Dagster UI metadata. 
+
+Visible in Dagster UI metadata.
 
 ![Screenshot comparing multiple Dagster runs](docs/static/img/process_data_run_view.png)
-
 
 ### 🏗️ Architecture
 
@@ -84,6 +83,7 @@ To use your own full-blown HPC deployment you would have to adapt the SSH connec
 ## Supporters
 
 This work was kindly supported by:
+
 - [ASCII](https://ascii.ac.at/)
 - [CSH](https://www.csh.ac.at/)
 - [EUROCC AI Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375): This work was completed in part at the EUROCC AI Hackathon, part of the Open Hackathons program. The authors would like to acknowledge OpenACC-Standard.org for their support.

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://dprint.dev/schemas/v0.json",
+  "projectType": "openSource",
+  "incremental": true,
+  "includes": [
+    "**/*.{md,json,toml,yaml,yml}"
+  ],
+  "excludes": [
+    "**/.pixi/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.git/**",
+    "**/pixi.lock",
+    "**/uv.lock",
+    "**/package-lock.json",
+    "**/bun.lockb",
+    "**/.ruff_cache/**",
+    "**/.venv/**"
+  ],
+  "plugins": [
+    "https://plugins.dprint.dev/markdown-0.17.8.wasm",
+    "https://plugins.dprint.dev/json-0.19.4.wasm",
+    "https://plugins.dprint.dev/toml-0.6.3.wasm",
+    "https://plugins.dprint.dev/g-plane/pretty_yaml-v0.6.0.wasm"
+  ],
+  "markdown": {
+    "lineWidth": 120,
+    "emphasisKind": "asterisks",
+    "strongKind": "asterisks",
+    "textWrap": "maintain"
+  },
+  "json": {
+    "indentWidth": 2
+  },
+  "toml": {
+    "indentWidth": 2
+  },
+  "yaml": {
+    "indentWidth": 2
+  }
+}

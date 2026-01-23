@@ -171,7 +171,7 @@ class SSHConnectionPool:
     def _run_with_password(self, cmd, password, timeout=30):
         """Run SSH command with password using pexpect."""
         try:
-            import pexpect  # type: ignore
+            import pexpect
         except ImportError:
             raise RuntimeError(
                 "Password authentication requires 'pexpect' library.\n"
@@ -449,6 +449,7 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 scp_cmd = [
                     "scp",
+                    "-C",  # Enable compression (critical for large files!)
                     "-o",
                     f"ControlPath={self.control_path}",
                     "-P",
@@ -457,6 +458,7 @@ class SSHConnectionPool:
             else:
                 scp_cmd = [
                     "scp",
+                    "-C",  # Enable compression (critical for large files!)
                     "-P",
                     str(self.config.port),
                     "-o",
@@ -509,6 +511,7 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 proc = subprocess.run(scp_cmd, capture_output=True, text=True)
                 returncode = proc.returncode
+                stdout = proc.stdout
                 stderr = proc.stderr
             else:
                 if self.config.uses_password_auth or (
@@ -518,13 +521,17 @@ class SSHConnectionPool:
                         scp_cmd, self._collect_passwords(), timeout=300
                     )
                     returncode = result.returncode
+                    stdout = result.stdout
                     stderr = result.stderr
                 else:
                     proc = subprocess.run(scp_cmd, capture_output=True, text=True)
                     returncode = proc.returncode
+                    stdout = proc.stdout
                     stderr = proc.stderr
 
         if returncode != 0:
             raise RuntimeError(
-                f"SCP upload failed: {local_path} -> {remote_path}\nstderr: {stderr}"
+                f"SCP upload failed: {local_path} -> {remote_path}\n"
+                f"stdout: {stdout}\n"
+                f"stderr: {stderr}"
             )
