@@ -159,8 +159,7 @@ Ray workers inherit that environment automatically.
 
 ## Real-world examples
 
-- **[Document processing with docling](./docling-example.md)** – Quick start guide for PDF to markdown conversion
-  - [Full application documentation](../applications/document-preprocessing-docling.md) with architecture, scaling, and troubleshooting
+- **[Document processing with docling](../applications/document-preprocessing-docling.md)** – PDF to markdown conversion with Ray Data, including architecture, scaling, and troubleshooting
 
 ## Troubleshooting
 
