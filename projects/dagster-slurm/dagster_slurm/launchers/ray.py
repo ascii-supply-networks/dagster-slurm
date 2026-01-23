@@ -437,7 +437,7 @@ class RayLauncher(ComputeLauncher):
                 "--dashboard-port=$dash_port",
                 f"--num-gpus={self.num_gpus_per_node}",
                 "--redis-password=$redis_password",
-                f"--temp-dir=$RAY_CLUSTER_TMP",
+                "--temp-dir=$RAY_CLUSTER_TMP",
             ]
             + common_args
             + self.ray_start_args

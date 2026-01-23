@@ -66,7 +66,7 @@ dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
 clean-lib = { cmd = "uv clean", cwd = "projects/dagster-slurm" }
 release = { cmd = "uv run semantic-release publish", description = "Make new release" }
 
-fmt = { cmd = "uv run -- ruff format projects && dprint fmt", description = "Format" }
+fmt = { cmd = "uv run -- ruff check --fix projects && uv run -- ruff format projects && dprint fmt", description = "Format" }
 lint = { cmd = "uv run -- ruff check projects && dprint check && ty check --python .pixi/envs/build projects", description = "Lint" }
 fmt-docs = { cmd = "dprint fmt docs/**/*.md", description = "Format documentation markdown" }
 lint-docs = { cmd = "dprint check docs/**/*.md", description = "Check documentation markdown formatting" }
