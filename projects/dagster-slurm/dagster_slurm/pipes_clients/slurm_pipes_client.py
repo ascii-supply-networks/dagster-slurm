@@ -1473,26 +1473,12 @@ class SlurmPipesClient(PipesClient):
             return ""
 
     def _log_estimated_start_time(
-        self, job_id: int, ssh_pool: SSHConnectionPool
+        self, job_id: int, _ssh_pool: SSHConnectionPool
     ) -> None:
-        """Query and log the estimated start time for a pending job."""
-        try:
-            # Query full queue info (skip header with tail -n +2)
-            squeue_cmd = f"squeue --start -j {job_id} -o '%.18i %.9P %.8j %.8u %.2t %.19S %.6D %R' | tail -n +2"
-            self.logger.debug(f"Queue status command: {squeue_cmd}")
-
-            full_output = ssh_pool.run(f"{squeue_cmd} 2>/dev/null || true")
-            data_line = full_output.strip()
-
-            if data_line:
-                # Don't parse, just show raw squeue output
-                self.logger.debug(f"Job {job_id} queue status: {data_line}")
-            else:
-                # No queue info available (job already started/running)
-                self.logger.debug(f"Job {job_id} already running (not in queue)")
-
-        except Exception as e:
-            # Non-critical - just log as debug and continue
-            self.logger.debug(
-                f"Could not query estimated start time for job {job_id}: {e}"
-            )
+        """Log commands to check queue status for a pending job."""
+        # Just log the commands - don't try to parse output (Slurm versions vary too much)
+        self.logger.info(
+            f"Job {job_id} submitted. Check queue status with:\n"
+            f"  squeue --start -j {job_id}\n"
+            f"  squeue --start -j {job_id} --json | jq '.jobs[0].start_time'"
+        )

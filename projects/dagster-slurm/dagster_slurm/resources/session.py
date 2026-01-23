@@ -266,29 +266,13 @@ class SlurmSessionResource(ConfigurableResource):
         )
 
     def _log_estimated_start_time(self, job_id: int) -> None:
-        """Query and log the estimated start time for a pending allocation job."""
-        try:
-            # Query estimated start time
-            output = self._ssh_pool.run(  # type: ignore
-                f"squeue --start -j {job_id} -h -o '%S' 2>/dev/null || true"
-            )
-            estimated_start = output.strip()
-
-            if estimated_start and estimated_start != "N/A":
-                self.logger.info(
-                    f"Allocation job {job_id} --> Estimated start time: {estimated_start}"
-                )
-            else:
-                # No estimate available (job may start immediately or already started)
-                self.logger.debug(
-                    f"No estimated start time for allocation {job_id} (immediate start or already running)"
-                )
-
-        except Exception as e:
-            # Non-critical - just log as debug and continue
-            self.logger.debug(
-                f"Could not query estimated start time for allocation {job_id}: {e}"
-            )
+        """Log commands to check queue status for a pending allocation job."""
+        # Just log the commands - don't try to parse output (Slurm versions vary too much)
+        self.logger.info(
+            f"Allocation job {job_id} submitted. Check queue status with:\n"
+            f"  squeue --start -j {job_id}\n"
+            f"  squeue --start -j {job_id} --json | jq '.jobs[0].start_time'"
+        )
 
     def _wait_for_allocation_start(
         self,
