@@ -235,7 +235,6 @@ def _get_final_state(ssh_pool, job_id: int) -> str:
 
 
 @pytest.mark.needs_slurm_docker
-@pytest.mark.slow
 def test_terminate_run_cancels_slurm_job(
     slurm_resource_for_testing,
     slurm_cluster_ready,
@@ -277,7 +276,6 @@ def test_terminate_run_cancels_slurm_job(
 
 
 @pytest.mark.needs_slurm_docker
-@pytest.mark.slow
 def test_sigterm_preserves_slurm_job(
     slurm_resource_for_testing,
     slurm_cluster_ready,
