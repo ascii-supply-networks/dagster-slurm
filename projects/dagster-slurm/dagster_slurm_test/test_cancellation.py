@@ -223,269 +223,41 @@ def test_sigterm_received_reset_in_finally():
     assert client._sigterm_received is False
 
 
-def test_pre_submission_check_blocks_on_sigterm():
-    """Pre-submission checks should abort when _sigterm_received is True."""
+def test_pre_submission_check_allows_sigterm_on_reboot():
+    """Pre-submission check should NOT abort on SIGTERM when the run is NOT
+    CANCELING (i.e. Dagster reboot, not user cancel)."""
     client = _make_client()
     client._sigterm_received = True
     client._cancellation_requested = False
 
-    # Simulate the pre-submission guard
-    if client._cancellation_requested or client._sigterm_received:
-        raised = True
-    else:
-        raised = False
+    with patch.object(client, "_is_run_canceling", return_value=False):
+        # Simulate the pre-submission guard (matches production code)
+        if client._cancellation_requested or (
+            client._sigterm_received and client._is_run_canceling(None)
+        ):
+            raised = True
+        else:
+            raised = False
+
+    assert raised is False
+
+
+def test_pre_submission_check_blocks_on_sigterm_with_canceling():
+    """Pre-submission check SHOULD abort when SIGTERM + run is CANCELING
+    (user clicked Terminate Run)."""
+    client = _make_client()
+    client._sigterm_received = True
+    client._cancellation_requested = False
+
+    with patch.object(client, "_is_run_canceling", return_value=True):
+        if client._cancellation_requested or (
+            client._sigterm_received and client._is_run_canceling(None)
+        ):
+            raised = True
+        else:
+            raised = False
 
     assert raised is True
-
-
-# ---------------------------------------------------------------------------
-# Reattach tests (no Slurm docker needed)
-# ---------------------------------------------------------------------------
-
-
-def test_find_previous_slurm_job_active_from_parent():
-    """When a parent run's dir has slurm output and squeue shows RUNNING."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = "parent-run-123"
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-    mock_context.instance.get_runs.return_value = []
-
-    mock_ssh_pool = MagicMock()
-    mock_ssh_pool.run.side_effect = [
-        # ls slurm-*.out → found a file
-        "/remote/pipelines/runs/parent-run-123/slurm-99.out\n",
-        # squeue -j 99 → RUNNING
-        "RUNNING\n",
-    ]
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-
-    assert result is not None
-    job_id, run_dir, status = result
-    assert job_id == 99
-    assert run_dir == "/remote/pipelines/runs/parent-run-123"
-    assert status == "active"
-
-
-def test_find_previous_slurm_job_completed_via_sacct():
-    """When squeue is empty but sacct shows COMPLETED, return completed job."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = "parent-run-123"
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-    mock_context.instance.get_runs.return_value = []
-
-    mock_ssh_pool = MagicMock()
-    mock_ssh_pool.run.side_effect = [
-        # ls slurm-*.out → found a file
-        "/remote/pipelines/runs/parent-run-123/slurm-99.out\n",
-        # squeue -j 99 → empty (not running)
-        "\n",
-        # sacct -j 99 → COMPLETED
-        "COMPLETED\n",
-    ]
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-
-    assert result is not None
-    job_id, run_dir, status = result
-    assert job_id == 99
-    assert run_dir == "/remote/pipelines/runs/parent-run-123"
-    assert status == "completed"
-
-
-def test_find_previous_slurm_job_none_when_failed():
-    """When sacct shows FAILED, return None (don't reattach to a failed job)."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = "parent-run-123"
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-    mock_context.instance.get_runs.return_value = []
-
-    mock_ssh_pool = MagicMock()
-    mock_ssh_pool.run.side_effect = [
-        # ls slurm-*.out → found a file
-        "/remote/pipelines/runs/parent-run-123/slurm-99.out\n",
-        # squeue -j 99 → empty
-        "\n",
-        # sacct -j 99 → FAILED
-        "FAILED\n",
-    ]
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-    assert result is None
-
-
-def test_find_previous_slurm_job_no_output_files():
-    """When run_dir has no slurm output files, skip to next candidate."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = "parent-run-123"
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-    mock_context.instance.get_runs.return_value = []
-
-    mock_ssh_pool = MagicMock()
-    # ls returns empty (no slurm-*.out files)
-    mock_ssh_pool.run.return_value = "\n"
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-    assert result is None
-
-
-def test_find_previous_slurm_job_falls_through_to_general_query():
-    """When parent's run dir has no output files, check other candidates."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = "parent-run-123"
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-
-    mock_other_run = MagicMock()
-    mock_other_run.run_id = "other-run-789"
-    mock_context.instance.get_runs.return_value = [mock_other_run]
-
-    mock_ssh_pool = MagicMock()
-    mock_ssh_pool.run.side_effect = [
-        # ls for parent → no files
-        "\n",
-        # ls for other-run → found a file
-        "/remote/pipelines/runs/other-run-789/slurm-42.out\n",
-        # squeue -j 42 → RUNNING
-        "RUNNING\n",
-    ]
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-
-    assert result is not None
-    job_id, run_dir, status = result
-    assert job_id == 42
-    assert run_dir == "/remote/pipelines/runs/other-run-789"
-    assert status == "active"
-
-
-def test_find_previous_slurm_job_from_failed_runs():
-    """When no parent run, query recent FAILURE runs and check by job ID."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = None
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-
-    mock_failed_run = MagicMock()
-    mock_failed_run.run_id = "old-run-789"
-    mock_context.instance.get_runs.return_value = [mock_failed_run]
-
-    mock_ssh_pool = MagicMock()
-    mock_ssh_pool.run.side_effect = [
-        # ls slurm-*.out → found a file
-        "/remote/pipelines/runs/old-run-789/slurm-42.out\n",
-        # squeue -j 42 → RUNNING
-        "RUNNING\n",
-    ]
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-
-    assert result is not None
-    job_id, run_dir, status = result
-    assert job_id == 42
-    assert run_dir == "/remote/pipelines/runs/old-run-789"
-    assert status == "active"
-
-
-def test_find_previous_slurm_job_skips_current_run():
-    """The current run_id is excluded from candidates."""
-    client = _make_client()
-
-    mock_context = MagicMock()
-    mock_context.run.parent_run_id = None
-    mock_context.run.run_id = "current-run-456"
-    mock_context.run.job_name = "my_job"
-
-    mock_same_run = MagicMock()
-    mock_same_run.run_id = "current-run-456"
-    mock_context.instance.get_runs.return_value = [mock_same_run]
-
-    mock_ssh_pool = MagicMock()
-
-    result = client._find_previous_slurm_job(
-        mock_context, mock_ssh_pool, "/remote/pipelines"
-    )
-    assert result is None
-    mock_ssh_pool.run.assert_not_called()
-
-
-def test_reattach_skips_submission():
-    """When _find_previous_slurm_job returns a job, _execute_standalone is NOT called."""
-    client = _make_client()
-
-    with (
-        patch.object(
-            client,
-            "_find_previous_slurm_job",
-            return_value=(12345, "/remote/runs/old-run", "active"),
-        ) as mock_find,
-        patch.object(client, "_execute_standalone") as mock_execute,
-        patch.object(client, "_wait_for_job_with_streaming"),
-        patch.object(client, "_maybe_emit_final_logs"),
-        patch.object(client, "_schedule_async_cleanup"),
-        patch.object(client, "metrics_collector") as mock_metrics,
-    ):
-        mock_metrics.collect_job_metrics.side_effect = Exception("skip")
-
-        mock_context = MagicMock()
-        mock_context.run.run_id = "new-run-789"
-        mock_context.run.parent_run_id = None
-        mock_context.op_execution_context = MagicMock()
-
-        # Mock SSHConnectionPool as a context manager
-        mock_ssh_pool = MagicMock()
-        mock_ssh_pool.__enter__ = MagicMock(return_value=mock_ssh_pool)
-        mock_ssh_pool.__exit__ = MagicMock(return_value=False)
-        mock_ssh_pool.control_path = "/tmp/ctrl"
-
-        with (
-            patch(
-                "dagster_slurm.pipes_clients.slurm_pipes_client.SSHConnectionPool",
-                return_value=mock_ssh_pool,
-            ),
-            patch(
-                "dagster_slurm.pipes_clients.slurm_pipes_client.open_pipes_session"
-            ) as mock_pipes,
-        ):
-            mock_session = MagicMock()
-            mock_pipes.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_pipes.return_value.__exit__ = MagicMock(return_value=False)
-
-            client.run(
-                context=mock_context,
-                payload_path="script.py",
-            )
-
-        mock_find.assert_called_once()
-        mock_execute.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

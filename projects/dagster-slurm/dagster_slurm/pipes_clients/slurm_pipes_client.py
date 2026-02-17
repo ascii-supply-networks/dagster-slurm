@@ -175,85 +175,6 @@ class SlurmPipesClient(PipesClient):
 
                 remote_base = self._get_remote_base(run_id, ssh_pool)
 
-                # --- Reattach path ---
-                # Check if a previous run left a Slurm job (active or
-                # already completed) for this asset.  If so, skip env
-                # prep / payload upload / submission.
-                previous = self._find_previous_slurm_job(context, ssh_pool, remote_base)
-                if previous:
-                    job_id, run_dir, job_status = previous
-                    self.logger.info(
-                        f"Reattaching to Slurm job {job_id} "
-                        f"(status={job_status}) in {run_dir}"
-                    )
-
-                    messages_path = f"{run_dir}/messages.jsonl"
-                    context_injector = PipesEnvContextInjector()
-                    message_reader = SSHMessageReader(
-                        remote_path=messages_path,
-                        ssh_config=self.slurm.ssh,
-                        control_path=ssh_pool.control_path,
-                        ssh_pool=ssh_pool,
-                    )
-
-                    with open_pipes_session(
-                        context=context.op_execution_context,
-                        context_injector=context_injector,
-                        message_reader=message_reader,
-                        extras=extras,
-                    ) as session:
-                        self._current_job_id = job_id
-
-                        if job_status == "active":
-                            # Job is still running — monitor until completion
-                            self._wait_for_job_with_streaming(
-                                job_id,
-                                ssh_pool,
-                                run_dir,
-                                message_reader=message_reader,
-                                op_context=context.op_execution_context,
-                            )
-
-                        # Job completed (either just now or before we got here)
-                        self._maybe_emit_final_logs(
-                            message_reader=message_reader,
-                            ssh_pool=ssh_pool,
-                            run_dir=run_dir,
-                            job_id=job_id,
-                        )
-
-                        self.logger.info(
-                            f"Reattached job {job_id} completed successfully"
-                        )
-
-                        # Collect metrics
-                        try:
-                            metrics = self.metrics_collector.collect_job_metrics(
-                                job_id, ssh_pool
-                            )
-                            metadata = {
-                                "slurm_job_id": job_id,
-                                "node_hours": metrics.node_hours,
-                                "cpu_efficiency_pct": round(
-                                    metrics.cpu_efficiency * 100, 2
-                                ),
-                                "max_memory_mb": round(metrics.max_rss_mb, 2),
-                                "elapsed_seconds": round(metrics.elapsed_seconds, 2),
-                            }
-                            context.add_output_metadata(metadata)
-                        except Exception as e:
-                            self.logger.warning(f"Failed to collect metrics: {e}")
-
-                    # Cleanup (unless debug mode)
-                    if not self.debug_mode:
-                        try:
-                            self._schedule_async_cleanup(ssh_pool, run_dir)
-                        except Exception as e:
-                            self.logger.warning(f"Cleanup failed: {e}")
-
-                    return PipesClientCompletedInvocation(session)
-
-                # --- Normal path (no existing job) ---
                 run_dir = f"{remote_base}/runs/{run_id}"
                 messages_path = f"{run_dir}/messages.jsonl"
                 self.logger.debug(f"Creating remote run directory: {run_dir}")
@@ -268,8 +189,14 @@ class SlurmPipesClient(PipesClient):
                     pre_deployed_env_path_override=pre_deployed_env_path_override,
                 )
 
-                # Check for cancellation
-                if self._cancellation_requested or self._sigterm_received:
+                # Check for cancellation – only abort on user-initiated cancel
+                # (CANCELING status), NOT on reboot SIGTERM (run stays STARTED).
+                # Allowing submission to proceed on reboot means the next run can
+                # reattach to the Slurm job.
+                if self._cancellation_requested or (
+                    self._sigterm_received
+                    and self._is_run_canceling(context.op_execution_context)
+                ):
                     raise RuntimeError("Execution cancelled before job submission")
 
                 # Upload payload unless instructed to reuse an existing remote copy
@@ -331,8 +258,12 @@ class SlurmPipesClient(PipesClient):
                         activation_script=activation_script,
                     )
 
-                    # Check for cancellation before submission
-                    if self._cancellation_requested or self._sigterm_received:
+                    # Check for cancellation before submission – same logic as
+                    # above: only abort on user cancel, not reboot SIGTERM.
+                    if self._cancellation_requested or (
+                        self._sigterm_received
+                        and self._is_run_canceling(context.op_execution_context)
+                    ):
                         raise RuntimeError("Execution cancelled before job submission")
 
                     # Execute with real-time log streaming
@@ -491,154 +422,6 @@ class SlurmPipesClient(PipesClient):
         except Exception as exc:
             self.logger.debug(f"Could not check run cancel status: {exc}")
             return False
-
-    def _find_previous_slurm_job(
-        self,
-        context: AssetExecutionContext,
-        ssh_pool: SSHConnectionPool,
-        remote_base: str,
-    ) -> Optional[tuple[int, str, str]]:
-        """Check if a previous run left a Slurm job for this asset.
-
-        When Dagster reboots, the run fails but the Slurm job keeps running
-        (or may have already completed).  On retry or re-materialisation we
-        look for that orphaned job so we can reattach instead of submitting
-        a duplicate.
-
-        No run tags are needed: the run_id already determines the remote
-        directory (``{remote_base}/runs/{run_id}``) and the Slurm job name
-        (``dagster_{run_id}``).  We query Dagster's instance DB for recent
-        failed/interrupted runs of the same job and then ask ``squeue`` /
-        ``sacct`` whether the corresponding Slurm job is still alive or
-        has already completed.
-
-        Returns:
-            ``(job_id, run_dir, status)`` where *status* is one of:
-
-            * ``"active"`` — job is running/pending, caller should monitor
-            * ``"completed"`` — job finished successfully, caller should
-              collect results
-
-            Returns ``None`` when no reattachable job is found.
-        """
-        try:
-            instance = context.instance
-        except Exception:
-            self.logger.debug("Reattach: no Dagster instance, skipping")
-            return None
-
-        seen: set[str] = set()
-        candidate_run_ids: list[str] = []
-
-        # 1. Retry case: parent run is the most likely candidate
-        parent_run_id = getattr(context.run, "parent_run_id", None)
-        if parent_run_id:
-            self.logger.debug(f"Reattach: parent run {parent_run_id}")
-            candidate_run_ids.append(parent_run_id)
-            seen.add(parent_run_id)
-
-        # 2. Always also query recent failed/interrupted runs for the same
-        #    job — the parent's Slurm job may already be gone, but a
-        #    different recent run may still have one active.
-        try:
-            from dagster import DagsterRunStatus, RunsFilter
-
-            job_name = context.run.job_name if context.run else None
-            if job_name:
-                recent_runs = instance.get_runs(
-                    filters=RunsFilter(
-                        job_name=job_name,
-                        statuses=[
-                            DagsterRunStatus.FAILURE,
-                            DagsterRunStatus.STARTED,
-                        ],
-                    ),
-                    limit=5,
-                )
-                for run in recent_runs:
-                    if run.run_id in seen or run.run_id == context.run.run_id:
-                        continue
-                    self.logger.debug(
-                        f"Reattach: candidate {run.run_id} (status={run.status})"
-                    )
-                    candidate_run_ids.append(run.run_id)
-                    seen.add(run.run_id)
-        except Exception as exc:
-            self.logger.debug(f"Reattach: could not query recent runs: {exc}")
-
-        if not candidate_run_ids:
-            self.logger.debug("Reattach: no candidate runs found")
-            return None
-
-        self.logger.debug(f"Reattach: checking {len(candidate_run_ids)} candidate(s)")
-
-        # 3. For each candidate, find the Slurm job ID from the output
-        #    files on disk (slurm-{JOB_ID}.out), then query by job ID.
-        #    This avoids sacct/squeue --name= which fails when Slurm
-        #    truncates long job names.
-        for old_run_id in candidate_run_ids:
-            run_dir = f"{remote_base}/runs/{old_run_id}"
-
-            # 3a. Discover job ID from slurm-*.out files in the run dir
-            try:
-                ls_output = ssh_pool.run(
-                    f"ls {run_dir}/slurm-*.out 2>/dev/null || true"
-                )
-            except Exception:
-                ls_output = ""
-
-            slurm_job_id = None
-            for line in ls_output.strip().splitlines():
-                fname = line.strip().rsplit("/", 1)[-1]
-                # Parse "slurm-25.out" → 25
-                match = re.match(r"slurm-(\d+)\.out", fname)
-                if match:
-                    slurm_job_id = int(match.group(1))
-                    break
-
-            if slurm_job_id is None:
-                self.logger.debug(f"Reattach: no slurm-*.out in {run_dir}, skipping")
-                continue
-
-            self.logger.debug(f"Reattach: found job {slurm_job_id} in {run_dir}")
-
-            # 3b. Check squeue (is the job still active?)
-            try:
-                output = ssh_pool.run(
-                    f"squeue -h -j {slurm_job_id} -o '%T' 2>/dev/null || true"
-                )
-                state = output.strip()
-                if state and state not in TERMINAL_STATES:
-                    self.logger.info(
-                        f"Reattach: Slurm job {slurm_job_id} is {state}, "
-                        f"reattaching to run {old_run_id}"
-                    )
-                    return (slurm_job_id, run_dir, "active")
-            except Exception as exc:
-                self.logger.debug(f"Reattach: squeue -j {slurm_job_id} failed: {exc}")
-
-            # 3c. Check sacct (did the job already complete?)
-            try:
-                sacct_output = ssh_pool.run(
-                    f"sacct -X -n -j {slurm_job_id} -o State -P 2>/dev/null || true"
-                )
-                state = sacct_output.strip().split()[0] if sacct_output.strip() else ""
-                self.logger.debug(f"Reattach: sacct -j {slurm_job_id} → {state!r}")
-                if state == "COMPLETED":
-                    self.logger.info(
-                        f"Reattach: Slurm job {slurm_job_id} COMPLETED, "
-                        f"collecting results from run {old_run_id}"
-                    )
-                    return (slurm_job_id, run_dir, "completed")
-                elif state:
-                    self.logger.debug(
-                        f"Reattach: job {slurm_job_id} has state {state}, skipping"
-                    )
-            except Exception as exc:
-                self.logger.debug(f"Reattach: sacct -j {slurm_job_id} failed: {exc}")
-
-        self.logger.debug("Reattach: no reattachable Slurm jobs found")
-        return None
 
     def _cancel_slurm_job(self, job_id: int):
         """Cancel a Slurm job.
@@ -1113,8 +896,11 @@ class SlurmPipesClient(PipesClient):
             extra_opts=extra_slurm_opts,
         )
 
-        # Check for cancellation before submission
-        if self._cancellation_requested or self._sigterm_received:
+        # Check for cancellation before submission – only abort on user
+        # cancel, not reboot SIGTERM.
+        if self._cancellation_requested or (
+            self._sigterm_received and self._is_run_canceling(op_context)
+        ):
             raise RuntimeError("Execution cancelled before job submission")
 
         # Submit
@@ -1494,15 +1280,17 @@ class SlurmPipesClient(PipesClient):
                         self._cancel_slurm_job(job_id)
                         raise RuntimeError(f"Job {job_id} cancelled")
                     else:
-                        self.logger.warning(
+                        # Reboot / restart — keep monitoring.  The Slurm job
+                        # is still running; the process survives the signal
+                        # and the polling loop continues until the job
+                        # completes normally and the Dagster run succeeds.
+                        self.logger.info(
                             "SIGTERM received but run is NOT CANCELING "
-                            f"– detaching from Slurm job {job_id}. "
-                            "The job will continue running on the cluster."
+                            f"– continuing to monitor Slurm job {job_id}."
                         )
-                        raise RuntimeError(
-                            f"Detached from job {job_id} due to signal "
-                            "(job NOT cancelled)"
-                        )
+                        # Clear the flag so we don't log every iteration.
+                        # A subsequent SIGTERM will set it again.
+                        self._sigterm_received = False
 
                 # Get current job state
                 state = self._get_job_state(job_id, ssh_pool)
@@ -1663,7 +1451,6 @@ class SlurmPipesClient(PipesClient):
                 setattr(message_reader, "_streamed_lines", existing)
             except Exception as exc:  # pragma: no cover - best effort bookkeeping
                 self.logger.debug(f"Failed to record streamed bytes: {exc}")
-            self._current_job_id = None
 
     def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:
         """Build SSH tail command for streaming logs.
