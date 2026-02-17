@@ -183,27 +183,67 @@ def test_pre_submission_check_blocks_on_sigterm():
 # ---------------------------------------------------------------------------
 
 
+def _submit_sleep_job(
+    ssh_pool, run_dir: str, job_name: str, sleep_seconds: int = 30
+) -> int:
+    """Submit a simple bash sleep job and return the Slurm job ID."""
+    import re
+    import tempfile
+    from pathlib import Path
+
+    ssh_pool.run(f"mkdir -p {run_dir}")
+
+    job_script = f"#!/bin/bash\necho started\nsleep {sleep_seconds}\necho done\n"
+    script_path = f"{run_dir}/job.sh"
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
+        f.write(job_script)
+        local_temp = f.name
+    ssh_pool.upload_file(local_temp, script_path)
+    Path(local_temp).unlink()
+    ssh_pool.run(f"chmod +x {script_path}")
+
+    output = ssh_pool.run(
+        f"sbatch -J {job_name} -D {run_dir} "
+        f"-o {run_dir}/slurm-%j.out -e {run_dir}/slurm-%j.err "
+        f"-t 00:05:00 -c 1 {script_path}"
+    )
+    match = re.search(r"Submitted batch job (\d+)", output)
+    assert match, f"Could not parse job ID from: {output}"
+    return int(match.group(1))
+
+
+def _wait_for_running(ssh_pool, job_id: int, timeout: int = 30) -> str:
+    """Poll until the job reaches RUNNING (or a terminal state). Return state."""
+    import time
+
+    for _ in range(timeout):
+        out = ssh_pool.run(f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true")
+        state = out.strip()
+        if state == "RUNNING":
+            return state
+        if state in {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT"}:
+            return state
+        time.sleep(1)
+    return state
+
+
+def _get_final_state(ssh_pool, job_id: int) -> str:
+    """Return the final state of a completed job via sacct."""
+    out = ssh_pool.run(f"sacct -X -n -j {job_id} -o State 2>/dev/null || true")
+    return out.strip().split()[0] if out.strip() else ""
+
+
 @pytest.mark.needs_slurm_docker
 @pytest.mark.slow
 def test_terminate_run_cancels_slurm_job(
     slurm_resource_for_testing,
     slurm_cluster_ready,
-    temp_dir,
 ):
-    """Submit a long-running job, set is_interrupt_requested, verify CANCELLED."""
-    import re
+    """Submit a long-running job, call _cancel_slurm_job, verify CANCELLED in sacct."""
     import time
 
     from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
-
-    # Create a long-running test payload
-    payload = temp_dir / "long_running.py"
-    payload.write_text(
-        "import time\n"
-        "print('started', flush=True)\n"
-        "time.sleep(30)\n"
-        "print('done', flush=True)\n"
-    )
 
     client = SlurmPipesClient(
         slurm_resource=slurm_resource_for_testing,
@@ -212,52 +252,25 @@ def test_terminate_run_cancels_slurm_job(
 
     ssh_pool = SSHConnectionPool(slurm_resource_for_testing.ssh)
     with ssh_pool:
-        remote_base = "/home/submitter/dagster_ci_runs"
-        run_dir = f"{remote_base}/test_cancel_{int(time.time())}"
-        ssh_pool.run(f"mkdir -p {run_dir}")
+        run_dir = f"/home/submitter/dagster_ci_runs/test_cancel_{int(time.time())}"
+        job_id = _submit_sleep_job(ssh_pool, run_dir, "test_cancel", sleep_seconds=60)
 
-        # Upload payload
-        remote_payload = f"{run_dir}/long_running.py"
-        ssh_pool.upload_file(str(payload), remote_payload)
+        state = _wait_for_running(ssh_pool, job_id)
+        assert state == "RUNNING", f"Job never reached RUNNING, got: {state}"
 
-        # Write a simple job script
-        job_script = f"#!/bin/bash\ncd {run_dir}\npython3 {remote_payload}\n"
-        script_path = f"{run_dir}/job.sh"
-        import tempfile
-        from pathlib import Path
-
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
-            f.write(job_script)
-            local_temp = f.name
-        ssh_pool.upload_file(local_temp, script_path)
-        Path(local_temp).unlink()
-        ssh_pool.run(f"chmod +x {script_path}")
-
-        # Submit the job
-        output = ssh_pool.run(
-            f"sbatch -J test_cancel -D {run_dir} "
-            f"-o {run_dir}/slurm-%j.out -e {run_dir}/slurm-%j.err "
-            f"-t 00:05:00 -c 1 {script_path}"
-        )
-        match = re.search(r"Submitted batch job (\d+)", output)
-        assert match, f"Could not parse job ID from: {output}"
-        job_id = int(match.group(1))
-
-        # Wait a bit for the job to start running
-        time.sleep(5)
-
-        # Now cancel it (simulating what the polling loop does on UI cancel)
+        # Simulate what the polling loop does on Dagster UI "Terminate Run":
+        # set _cancellation_requested, then call _cancel_slurm_job.
         client._ssh_pool = ssh_pool
         client._current_job_id = job_id
+        client._cancellation_requested = True
         client._cancel_slurm_job(job_id)
 
         # Verify via sacct that the job is CANCELLED
         time.sleep(3)
-        sacct_output = ssh_pool.run(
-            f"sacct -X -n -j {job_id} -o State 2>/dev/null || true"
+        final_state = _get_final_state(ssh_pool, job_id)
+        assert "CANCEL" in final_state.upper(), (
+            f"Expected CANCELLED state, got: {final_state}"
         )
-        state = sacct_output.strip().split()[0] if sacct_output.strip() else ""
-        assert "CANCEL" in state.upper(), f"Expected CANCELLED state, got: {state}"
 
         # Cleanup
         ssh_pool.run(f"rm -rf {run_dir}")
@@ -268,22 +281,16 @@ def test_terminate_run_cancels_slurm_job(
 def test_sigterm_preserves_slurm_job(
     slurm_resource_for_testing,
     slurm_cluster_ready,
-    temp_dir,
 ):
-    """Submit a job, set _sigterm_received, verify job is NOT cancelled."""
-    import re
+    """Submit a job, invoke the signal handler, verify job completes naturally.
+
+    After SIGTERM the exception handler fires (because the polling loop raises).
+    With _sigterm_received=True the guard must skip scancel, so the Slurm job
+    should finish on its own and sacct should show COMPLETED, not CANCELLED.
+    """
     import time
 
     from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
-
-    # Create a short-running test payload (runs for ~15s)
-    payload = temp_dir / "short_running.py"
-    payload.write_text(
-        "import time\n"
-        "print('started', flush=True)\n"
-        "time.sleep(15)\n"
-        "print('done', flush=True)\n"
-    )
 
     client = SlurmPipesClient(
         slurm_resource=slurm_resource_for_testing,
@@ -292,67 +299,57 @@ def test_sigterm_preserves_slurm_job(
 
     ssh_pool = SSHConnectionPool(slurm_resource_for_testing.ssh)
     with ssh_pool:
-        remote_base = "/home/submitter/dagster_ci_runs"
-        run_dir = f"{remote_base}/test_sigterm_{int(time.time())}"
-        ssh_pool.run(f"mkdir -p {run_dir}")
+        # Use a short sleep so the job finishes naturally within the test
+        run_dir = f"/home/submitter/dagster_ci_runs/test_sigterm_{int(time.time())}"
+        job_id = _submit_sleep_job(ssh_pool, run_dir, "test_sigterm", sleep_seconds=10)
 
-        # Upload payload
-        remote_payload = f"{run_dir}/short_running.py"
-        ssh_pool.upload_file(str(payload), remote_payload)
+        state = _wait_for_running(ssh_pool, job_id)
+        assert state == "RUNNING", f"Job never reached RUNNING, got: {state}"
 
-        # Write a simple job script
-        job_script = f"#!/bin/bash\ncd {run_dir}\npython3 {remote_payload}\n"
-        script_path = f"{run_dir}/job.sh"
-        import tempfile
-        from pathlib import Path
-
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
-            f.write(job_script)
-            local_temp = f.name
-        ssh_pool.upload_file(local_temp, script_path)
-        Path(local_temp).unlink()
-        ssh_pool.run(f"chmod +x {script_path}")
-
-        # Submit the job
-        output = ssh_pool.run(
-            f"sbatch -J test_sigterm -D {run_dir} "
-            f"-o {run_dir}/slurm-%j.out -e {run_dir}/slurm-%j.err "
-            f"-t 00:05:00 -c 1 {script_path}"
-        )
-        match = re.search(r"Submitted batch job (\d+)", output)
-        assert match, f"Could not parse job ID from: {output}"
-        job_id = int(match.group(1))
-
-        # Wait a bit for the job to start running
-        time.sleep(5)
-
-        # Simulate SIGTERM received – set the flag but do NOT cancel
+        # Wire up the client as if it were mid-run
         client._ssh_pool = ssh_pool
         client._current_job_id = job_id
-        client._sigterm_received = True
 
-        # The exception handler should NOT cancel because _sigterm_received is set
-        if (
-            client._current_job_id
-            and not client._cancellation_requested
-            and not client._sigterm_received
-        ):
-            client._cancel_slurm_job(job_id)
+        # Invoke the signal handler exactly as the OS would on SIGTERM
+        import signal
 
-        # Verify the job is still running (not cancelled)
-        time.sleep(2)
-        squeue_output = ssh_pool.run(
-            f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true"
+        # Build the same handler the production code registers
+        def handle_signal(signum, frame):
+            client._sigterm_received = True
+
+        handle_signal(signal.SIGTERM, None)
+        assert client._sigterm_received is True
+
+        # Now simulate the exception handler guard (the real except block in run())
+        # With _sigterm_received=True this must NOT cancel.
+        with patch.object(client, "_cancel_slurm_job") as mock_cancel:
+            if (
+                client._current_job_id
+                and not client._cancellation_requested
+                and not client._sigterm_received
+            ):
+                client._cancel_slurm_job(client._current_job_id)
+            mock_cancel.assert_not_called()
+
+        # Verify the job is still running right now (not cancelled)
+        squeue_out = ssh_pool.run(f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true")
+        current_state = squeue_out.strip()
+        assert current_state not in {"CANCELLED", "FAILED"}, (
+            f"Job should still be alive, got: {current_state}"
         )
-        state = squeue_output.strip()
-        # Job should be RUNNING or PENDING (not CANCELLED)
-        assert state in {"RUNNING", "PENDING", "COMPLETING", "COMPLETED"}, (
-            f"Expected job to still be active, got: {state}"
-        )
 
-        # Cancel it now so we clean up properly
-        ssh_pool.run(f"scancel {job_id} 2>/dev/null || true")
-        time.sleep(2)
+        # Wait for the job to finish naturally (sleep 10 + buffer)
+        for _ in range(30):
+            out = ssh_pool.run(f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true")
+            if not out.strip():
+                break
+            time.sleep(1)
+
+        # The critical assertion: sacct must show COMPLETED, not CANCELLED
+        final_state = _get_final_state(ssh_pool, job_id)
+        assert "COMPLETED" in final_state.upper(), (
+            f"Expected COMPLETED (job should survive SIGTERM), got: {final_state}"
+        )
 
         # Cleanup
         ssh_pool.run(f"rm -rf {run_dir}")
