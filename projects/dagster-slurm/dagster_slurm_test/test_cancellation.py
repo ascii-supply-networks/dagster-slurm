@@ -5,6 +5,7 @@ Unit tests verify that:
 - The exception handler skips scancel when SIGTERM was received
 - The exception handler still calls scancel on genuine errors
 - Dagster UI "Terminate Run" still calls scancel via the polling loop
+- Reattach helpers work correctly (tags, asset key extraction, job lookup)
 """
 
 import signal
@@ -18,7 +19,12 @@ from dagster_slurm import (
     SSHConnectionResource,
     SlurmQueueConfig,
 )
-from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
+from dagster_slurm.pipes_clients.slurm_pipes_client import (
+    SlurmPipesClient,
+    _TAG_ASSET_KEY,
+    _TAG_JOB_ID,
+    _TAG_RUN_DIR,
+)
 
 
 def _make_client() -> SlurmPipesClient:
@@ -258,6 +264,252 @@ def test_pre_submission_check_blocks_on_sigterm_with_canceling():
             raised = False
 
     assert raised is True
+
+
+# ---------------------------------------------------------------------------
+# Reattach helper unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_store_job_tags():
+    """_store_job_tags writes correct tag keys/values to the instance."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.run_id = "test-run-id"
+
+    client._store_job_tags(mock_op_context, 42, "/tmp/run_dir", "my_asset")
+
+    mock_op_context.instance.add_run_tags.assert_called_once_with(
+        "test-run-id",
+        {
+            _TAG_JOB_ID: "42",
+            _TAG_RUN_DIR: "/tmp/run_dir",
+            _TAG_ASSET_KEY: "my_asset",
+        },
+    )
+
+
+def test_store_job_tags_no_asset_key():
+    """_store_job_tags omits asset key tag when asset_key is None."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.run_id = "test-run-id"
+
+    client._store_job_tags(mock_op_context, 42, "/tmp/run_dir", None)
+
+    mock_op_context.instance.add_run_tags.assert_called_once_with(
+        "test-run-id",
+        {
+            _TAG_JOB_ID: "42",
+            _TAG_RUN_DIR: "/tmp/run_dir",
+        },
+    )
+
+
+def test_store_job_tags_none_context():
+    """_store_job_tags does nothing when op_context is None."""
+    client = _make_client()
+    # Should not raise
+    client._store_job_tags(None, 42, "/tmp/run_dir", "my_asset")
+
+
+def test_get_asset_key_string_single_asset():
+    """_get_asset_key_string returns the asset key as a string."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.asset_key = MagicMock()
+    mock_op_context.asset_key.__str__ = MagicMock(return_value="AssetKey(['my_asset'])")
+
+    result = client._get_asset_key_string(mock_op_context)
+    assert result == "AssetKey(['my_asset'])"
+
+
+def test_get_asset_key_string_no_asset():
+    """_get_asset_key_string returns None for non-asset ops."""
+    client = _make_client()
+    mock_op_context = MagicMock(spec=[])  # No attributes at all
+
+    result = client._get_asset_key_string(mock_op_context)
+    assert result is None
+
+
+def test_find_reattachable_job_from_parent_run():
+    """_find_reattachable_job finds job from parent run's tags (retry path)."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+
+    parent_run = MagicMock()
+    parent_run.tags = {
+        _TAG_JOB_ID: "42",
+        _TAG_RUN_DIR: "/tmp/old_run_dir",
+    }
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+
+    mock_ssh_pool = MagicMock()
+
+    with patch.object(client, "_is_job_still_running", return_value=True):
+        result = client._find_reattachable_job(
+            mock_op_context, mock_ssh_pool, "my_asset"
+        )
+
+    assert result is not None
+    assert result["job_id"] == "42"
+    assert result["run_dir"] == "/tmp/old_run_dir"
+
+
+def test_find_reattachable_job_from_failed_run_query():
+    """_find_reattachable_job finds job from recent FAILURE runs."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = None
+
+    failed_run = MagicMock()
+    failed_run.tags = {
+        _TAG_JOB_ID: "99",
+        _TAG_RUN_DIR: "/tmp/failed_run_dir",
+        _TAG_ASSET_KEY: "my_asset",
+    }
+    mock_op_context.instance.get_runs.return_value = [failed_run]
+
+    mock_ssh_pool = MagicMock()
+
+    with patch.object(client, "_is_job_still_running", return_value=True):
+        result = client._find_reattachable_job(
+            mock_op_context, mock_ssh_pool, "my_asset"
+        )
+
+    assert result is not None
+    assert result["job_id"] == "99"
+    assert result["run_dir"] == "/tmp/failed_run_dir"
+
+
+def test_find_reattachable_job_returns_none_without_tags():
+    """_find_reattachable_job returns None when parent run has no tags."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+
+    parent_run = MagicMock()
+    parent_run.tags = {}  # No reattach tags
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+    mock_op_context.instance.get_runs.return_value = []
+
+    mock_ssh_pool = MagicMock()
+
+    result = client._find_reattachable_job(mock_op_context, mock_ssh_pool, "my_asset")
+    assert result is None
+
+
+def test_find_reattachable_job_returns_completed_job():
+    """_find_reattachable_job returns the candidate even when the job
+    has already completed — the caller decides whether to adopt the
+    result or resubmit."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+
+    parent_run = MagicMock()
+    parent_run.tags = {
+        _TAG_JOB_ID: "42",
+        _TAG_RUN_DIR: "/tmp/old_run_dir",
+    }
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+
+    mock_ssh_pool = MagicMock()
+
+    with patch.object(client, "_get_job_state", return_value="COMPLETED"):
+        result = client._find_reattachable_job(
+            mock_op_context, mock_ssh_pool, "my_asset"
+        )
+
+    assert result is not None
+    assert result["job_id"] == "42"
+
+
+def test_find_reattachable_job_returns_none_when_job_unknown():
+    """_find_reattachable_job returns None when Slurm has no record of
+    the job (empty state from squeue + sacct)."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+
+    parent_run = MagicMock()
+    parent_run.tags = {
+        _TAG_JOB_ID: "42",
+        _TAG_RUN_DIR: "/tmp/old_run_dir",
+    }
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+
+    mock_ssh_pool = MagicMock()
+
+    with patch.object(client, "_get_job_state", return_value=""):
+        result = client._find_reattachable_job(
+            mock_op_context, mock_ssh_pool, "my_asset"
+        )
+
+    assert result is None
+
+
+def test_find_reattachable_job_none_context():
+    """_find_reattachable_job returns None when op_context is None."""
+    client = _make_client()
+    result = client._find_reattachable_job(None, MagicMock(), "my_asset")
+    assert result is None
+
+
+def test_is_job_still_running_true():
+    """_is_job_still_running returns True for active states."""
+    client = _make_client()
+    mock_ssh_pool = MagicMock()
+
+    for state in ["RUNNING", "PENDING", "CONFIGURING", "COMPLETING"]:
+        with patch.object(client, "_get_job_state", return_value=state):
+            assert client._is_job_still_running(42, mock_ssh_pool) is True
+
+
+def test_is_job_still_running_false():
+    """_is_job_still_running returns False for terminal/empty states."""
+    client = _make_client()
+    mock_ssh_pool = MagicMock()
+
+    for state in ["COMPLETED", "FAILED", "CANCELLED", ""]:
+        with patch.object(client, "_get_job_state", return_value=state):
+            assert client._is_job_still_running(42, mock_ssh_pool) is False
+
+
+def test_interruptible_sleep_swallows_dagster_interrupt():
+    """_interruptible_sleep catches DagsterExecutionInterruptedError."""
+    from dagster._utils.interrupts import _received_interrupt
+
+    client = _make_client()
+
+    # Create a fake exception with a matching name
+    class DagsterExecutionInterruptedError(Exception):
+        pass
+
+    _received_interrupt["received"] = True
+
+    with patch(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.time.sleep",
+        side_effect=DagsterExecutionInterruptedError("test"),
+    ):
+        # Should NOT raise
+        client._interruptible_sleep(1, 42)
+
+    assert _received_interrupt["received"] is False
+
+
+def test_interruptible_sleep_propagates_other_exceptions():
+    """_interruptible_sleep re-raises non-interrupt exceptions."""
+    client = _make_client()
+
+    with patch(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.time.sleep",
+        side_effect=ValueError("unrelated error"),
+    ):
+        with pytest.raises(ValueError, match="unrelated error"):
+            client._interruptible_sleep(1, 42)
 
 
 # ---------------------------------------------------------------------------
