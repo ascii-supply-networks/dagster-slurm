@@ -86,6 +86,7 @@ class SlurmPipesClient(PipesClient):
         self._current_job_id = None
         self._ssh_pool = None
         self._cancellation_requested = False
+        self._sigterm_received = False
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
 
@@ -148,18 +149,22 @@ class SlurmPipesClient(PipesClient):
         run_dir = None
         job_id = None
 
-        # Setup cancellation handler
-        def handle_cancellation(signum, frame):
-            self.logger.warning(f"⚠️  Termination signal received (signal {signum})")
-
-            if self._current_job_id:
-                self.logger.info(f"Cancelling SLURM job {self._current_job_id}...")
-                self._cancellation_requested = True
-                self._cancel_slurm_job(self._current_job_id)
+        # Setup signal handler – on SIGTERM/SIGINT we only set a flag so the
+        # polling loop can exit cleanly.  We intentionally do NOT call scancel
+        # here because a Dagster UI reboot sends SIGTERM and the Slurm job
+        # should keep running on the cluster.  User-initiated cancellation
+        # (via the "Terminate Run" button) is handled by the polling loop's
+        # `is_interrupt_requested` check which *does* call scancel.
+        def handle_signal(signum, frame):
+            self.logger.warning(
+                f"Signal {signum} received. Slurm job will NOT be cancelled "
+                "and will continue running on the cluster."
+            )
+            self._sigterm_received = True
 
         # Register signal handlers
-        original_sigint = signal.signal(signal.SIGINT, handle_cancellation)
-        original_sigterm = signal.signal(signal.SIGTERM, handle_cancellation)
+        original_sigint = signal.signal(signal.SIGINT, handle_signal)
+        original_sigterm = signal.signal(signal.SIGTERM, handle_signal)
 
         try:
             with ssh_pool:
@@ -182,7 +187,7 @@ class SlurmPipesClient(PipesClient):
                 )
 
                 # Check for cancellation
-                if self._cancellation_requested:
+                if self._cancellation_requested or self._sigterm_received:
                     raise RuntimeError("Execution cancelled before job submission")
 
                 # Upload payload unless instructed to reuse an existing remote copy
@@ -245,7 +250,7 @@ class SlurmPipesClient(PipesClient):
                     )
 
                     # Check for cancellation before submission
-                    if self._cancellation_requested:
+                    if self._cancellation_requested or self._sigterm_received:
                         raise RuntimeError("Execution cancelled before job submission")
 
                     # Execute with real-time log streaming
@@ -339,8 +344,14 @@ class SlurmPipesClient(PipesClient):
                         self.logger.warning(f"Cleanup failed: {e}")
 
         except Exception as e:
-            # Cancel job if it's running and not already cancelled
-            if self._current_job_id and not self._cancellation_requested:
+            # Cancel job if it's running and not already cancelled.
+            # When SIGTERM was received (e.g. Dagster UI reboot) we must NOT
+            # cancel the Slurm job – it should keep running on the cluster.
+            if (
+                self._current_job_id
+                and not self._cancellation_requested
+                and not self._sigterm_received
+            ):
                 self.logger.warning(
                     f"Cancelling job {self._current_job_id} due to error"
                 )
@@ -375,6 +386,7 @@ class SlurmPipesClient(PipesClient):
             self._current_job_id = None
             self._ssh_pool = None
             self._cancellation_requested = False
+            self._sigterm_received = False
 
         return PipesClientCompletedInvocation(session)
 
@@ -852,7 +864,7 @@ class SlurmPipesClient(PipesClient):
         )
 
         # Check for cancellation before submission
-        if self._cancellation_requested:
+        if self._cancellation_requested or self._sigterm_received:
             raise RuntimeError("Execution cancelled before job submission")
 
         # Submit
@@ -1219,10 +1231,17 @@ class SlurmPipesClient(PipesClient):
                     self._cancel_slurm_job(job_id)
                     raise RuntimeError(f"Job {job_id} cancelled")
 
-                # Check for signal-based cancellation (signal handler)
-                if self._cancellation_requested:
-                    self.logger.warning("⚠️  Cancellation detected via signal")
-                    raise RuntimeError(f"Job {job_id} cancelled")
+                # Check for SIGTERM/SIGINT (e.g. Dagster UI reboot).
+                # Exit the loop but do NOT cancel the Slurm job – it should
+                # continue running on the cluster.
+                if self._sigterm_received:
+                    self.logger.warning(
+                        "SIGTERM/SIGINT received – detaching from Slurm job "
+                        f"{job_id}. The job will continue running on the cluster."
+                    )
+                    raise RuntimeError(
+                        f"Detached from job {job_id} due to signal (job NOT cancelled)"
+                    )
 
                 # Get current job state
                 state = self._get_job_state(job_id, ssh_pool)
