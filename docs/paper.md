@@ -29,7 +29,7 @@ affiliations:
    index: 1
  - name: Austrian Supply Chain Intelligence Institute (ASCII)
    index: 2
-- name: AI Factory Austria
+ - name: AI Factory Austria
    index: 3
 
 date: 1st November 2025
