@@ -173,5 +173,5 @@ You can attach these overrides inside a site profile (see `SUPERCOMPUTER_SITE_OV
 
 ## contributing
 
-See Details here: [docs](docs) for how to contribute!
+See the [contributing guide](../../docs/docs/contributing/contributing.md) for how to contribute!
 Help building and maintaining this project is welcome.

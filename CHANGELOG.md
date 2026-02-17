@@ -9,7 +9,6 @@
 - Example docling ray ([#90](https://github.com/ascii-supply-networks/dagster-slurm/pull/90),
   [`39a9cc7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/39a9cc7a43aa17d888a6f094ddfccc73d181f80f))
 
-
 ## v1.10.0 (2026-01-12)
 
 ## v1.9.0-rc.1 (2026-01-12)

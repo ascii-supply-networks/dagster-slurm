@@ -22,11 +22,15 @@ authors:
   - name: Georg Heiler
     orcid: 0000-0002-8684-1163
     affiliation: "1, 2"
+  - name: Martin Pfister
+    affiliation: "3"
 affiliations:
  - name: Complexity Science Hub Vienna (CSH)
    index: 1
  - name: Austrian Supply Chain Intelligence Institute (ASCII)
    index: 2
+- name: AI Factory Austria
+   index: 3
 
 date: 1st November 2025
 bibliography: paper.bib
@@ -46,8 +50,8 @@ This paper introduces **dagster-slurm**, an open-source integration that allows 
 The project packages dependencies with Pixi @pixi, submits workloads through Slurm using Dagster Pipes @dagsterpipes, and streams logs plus scheduler metrics back to the Dagster UI.
 
 The key contribution is a unified compute resource (`ComputeResource`) that hides SSH transport (including password-only jump hosts and OTP prompts), dependency packaging, and queue configuration while still respecting Slurm’s scheduling semantics.
-Today the project ships with two production-ready execution modes—`local` for laptop/CI development and `slurm` for one-job-per-asset submissions.
-Experimental support for session-based reuse and heterogeneous jobs is work in progress. Launchers for Bash, Ray, and Spark (work in progress) ship out of the box and can be extended.
+The project ships two production-ready execution modes—`local` for laptop/CI development and `slurm` for one-job-per-asset submissions—and two stable launchers: Bash for script-based workloads and Ray for multi-node distributed computing.
+Experimental support for Spark, session-based allocation reuse, and heterogeneous jobs is under active development.
 
 # Statement of Need
 
@@ -57,13 +61,30 @@ Reproducibility challenges in HPC environments are well documented, and Antunes 
 Courtes et al. @Courtes9882991 further examine the tension between reproducibility and performance, demonstrating that these goals need not be mutually exclusive.
 
 The 2024 Community Workshop on Practical Reproducibility in HPC produced a comprehensive report highlighting cost-effective reproducibility challenges and the need for tools that bridge development and production environments @keahey_2025_15306610.
-Existing solutions either ignore the orchestrator (hand-written Slurm scripts) or bypass the scheduler entirely (running ad-hoc services).
-This leads to duplicated logic, fragile deployments, and a loss of telemetry. **dagster-slurm** was created to:
+A rich ecosystem of Python-based HPC workflow tools already exists.
+Parsl @parsl provides a parallel scripting library with multi-site execution, dependency tracking, and SSH-based remote submission.
+Executorlib @executorlib extends Python's standard `concurrent.futures.Executor` to HPC schedulers, offering per-function resource control, local-to-cluster portability, and support for heterogeneous workloads combining MPI and GPU libraries.
+Jobflow @jobflow manages complex computational workflows with decorator-based task definitions, and PSI/J @psij offers a portable submission interface across schedulers.
+The Common Workflow Language community maintains an extensive catalogue of further systems @cwl_wiki.
+These frameworks provide mature solutions for constructing and executing task graphs on HPC resources, often including local execution modes for rapid prototyping.
 
-- Preserve Dagster’s asset-based design, lineage tracking, and alerting for workloads that ultimately run on Slurm-managed hardware.
-- Remove the need to rewrite orchestration glue when moving from development to production supercomputers.
-- Provide a batteries-included path for packaging Python environments reproducibly (Pixi https://pixi.sh/latest/ + pixi-pack, https://github.com/Quantco/pixi-pack) and deploying them in air-gapped environments.
-- Offer a clear path to advanced HPC patterns (session reuse for long-lived clusters, heterogeneous Slurm jobs) while keeping the current stable surface area intentionally small; these features are being iterated on in the open.
+dagster-slurm does not aim to replace any of these tools; it occupies a complementary niche.
+HPC workflow managers typically orchestrate *compute tasks* within the HPC ecosystem—submitting jobs, tracking task dependencies, and managing scheduler resources on one or more clusters.
+These task-based approaches work well for individual researchers and small teams who define end-to-end pipelines in a single codebase.
+A data orchestrator like Dagster operates at a different level: it models the dataflow as a *graph of persistent assets* (datasets, models, tables) rather than a graph of tasks to execute.
+This asset-based paradigm makes the shared state of a data platform explicit—every asset has a declared type, upstream dependencies, and freshness expectations @dagster—which streamlines collaboration when many contributors work on the same dataflow graph, because changes to one asset's logic automatically propagate through the dependency structure without requiring coordination across teams.
+Dagster manages the end-to-end dataflow across heterogeneous, polyglot infrastructure—cloud object stores, on-premise databases, container platforms, and HPC clusters alike—while providing lineage tracking, a web UI for operational monitoring, scheduling, and alerting.
+dagster-slurm bridges these two worlds by extending Dagster's control plane to Slurm-managed hardware.
+This serves research teams whose pipelines span multiple compute tiers: data ingestion and preprocessing on institutional servers or cloud machines, GPU-intensive model training on an HPC partition, and downstream analytics or publication steps elsewhere.
+Teams already invested in Dagster for the non-HPC parts of their pipeline can reach supercomputers without adopting a second orchestration framework, and teams using HPC workflow managers for the compute-intensive stages can wrap those invocations inside Dagster assets to gain lineage and observability over the full dataflow.
+This lowers the entry barrier to sovereign AI infrastructure: data engineering and machine-learning teams without a traditional HPC background can leverage publicly funded European supercomputers through the same tooling they already use for cloud workloads, rather than having to acquire Slurm expertise first.
+**dagster-slurm** was created to:
+
+- Lower the barrier to sovereign HPC adoption. HPC environments are complex; dagster-slurm provides the familiar Dagster developer experience so that beginners can reach production supercomputers without mastering Slurm scripting first.
+- Enable rapid local prototyping. The same asset code runs locally without queues, eliminating long wait times during development, and can be re-pointed to a different HPC cluster when the primary system is congested.
+- Orchestrate across compute tiers. A typical scientific pipeline does not run entirely on HPC GPUs—cheap preprocessing can happen on a cloud VM while only the training step targets the supercomputer. dagster-slurm keeps the full dataflow graph visible and schedulable in one place.
+- Provide batteries-included environment packaging. Pixi and pixi-pack produce reproducible, self-contained bundles deployable in air-gapped HPC centres.
+- Surface structured observability. Slurm job IDs, CPU efficiency, memory usage, and live log streams appear directly in the Dagster UI, benefiting beginners navigating HPC for the first time and experts managing production workloads alike.
 - Encourage research software engineering best practices as outlined by Eisty et al. @eisty2025, covering planning, testing, documentation, and maintenance across the development lifecycle.
 
 # System Overview
@@ -72,10 +93,19 @@ The integration is composed of three layers:
 
 1. **Resource definitions** – `ComputeResource`, `SlurmResource`, `SlurmSessionResource`, and `SSHConnectionResource` are Dagster `ConfigurableResource` objects. They encapsulate queue defaults, SSH authentication (including ControlMaster fallback, password-based jump hosts, and interactive OTP prompts), and execution modes.
 2. **Launchers and Pipes clients** – Launchers (Bash, Ray) translate payloads into execution plans.
-   The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes @dagsterpipes. Spark and custom launchers are planned for near future release
+   The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes @dagsterpipes. Custom launchers can be added by extending the `ComputeLauncher` base class.
 3. **Operational helpers** – Environment deployment scripts, heterogeneous job managers, metrics collectors, and SSH pooling utilities target HPC constraints such as login-node sandboxes, session allocations, and queue observability.
 
-This layered approach keeps Dagster’s user code agnostic to the underlying transport while retaining the full control plane visibility of the orchestrator.
+This layered approach keeps Dagster's user code agnostic to the underlying transport while retaining the full control plane visibility of the orchestrator.
+
+dagster-slurm builds on Dagster's `ConfigurableResource` and Pipes protocols rather than on IOManagers.
+The system automatically transfers payload scripts and execution environments (via pixi-pack and SCP) and streams structured messages, metadata, and logs back through Dagster Pipes.
+Data management is deliberately left to the user because I/O strategies vary widely across HPC sites and use cases.
+In local development mode, datasets are typically small and reside on the developer's machine, keeping the prototyping loop fast.
+In production, data usually lives on shared parallel filesystems (GPFS, Lustre) or on S3-compatible object stores co-located with the cluster.
+The recommended pattern is a deployment-mode-aware path switch—for example an environment variable or Dagster configuration value that resolves to a local directory during development and to the shared filesystem mount on the supercomputer—so that asset code remains unchanged across tiers.
+This is intentional: HPC workloads typically operate on large datasets where automatic serialization across network boundaries would be impractical, and researchers retain full control over data locality and I/O strategy.
+
 As illustrated in Figure \ref{fig:architecture}, the same scalable job can follow multiple paths:
 direct local execution for development, automated testing through CI/CD chains, or production deployment to HPC clusters via SSH-accessible edge nodes.
 
@@ -144,10 +174,10 @@ By eliminating duplicated scripts and surfacing rich observability, the integrat
 Future work focuses on:
 
 - Deepening heterogeneous job support (automatic fusion of dependent assets, richer allocation policies).
-- Exploring pilot-job back ends (e.g., RADICAL-Pilot, QCG) for even finer-grained scheduling inside allocations, and non-interactive OTP integrations for environments with strict MFA policies.
-- Extending language/runtime coverage via additional launchers (MPI, GPU-accelerated frameworks) and multi-language Pipes integrations.
+- Maturing the Spark launcher from its current experimental state to production readiness and adding support for further frameworks (MPI, GPU-accelerated libraries).
+- Exploring pilot-job back ends (e.g., RADICAL-Pilot, QCG) for finer-grained scheduling inside allocations, and non-interactive OTP integrations for strict MFA environments.
 
-Community contributions—issue reports, cluster-specific recipes, and new launchers—are actively encouraged at <https://github.com/ascii-supply-networks/dagster-slurm>.
+Community contributions—issue reports, cluster-specific recipes, and new launchers—are actively encouraged at <https://github.com/ascii-supply-networks/dagster-slurm>. Questions and discussions are welcome on [GitHub Discussions](https://github.com/ascii-supply-networks/dagster-slurm/discussions).
 
 # Acknowledgements
 
