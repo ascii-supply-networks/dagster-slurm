@@ -161,7 +161,7 @@ def example_project_dir() -> Path:
     """Returns the path to the example project directory."""
     path = Path(__file__).parent.parent.parent.parent / "examples"
     if not path.is_dir():
-        pytest.fail(f"Example project directory not found at: {path}")
+        pytest.fail(f"Example project directory not found at: {path}")  # type: ignore[invalid-argument-type]
     return path
 
 
@@ -188,7 +188,7 @@ def slurm_cluster_ready():
             print(f"⏳ Waiting for SLURM... ({attempt + 1}/12)")
             time.sleep(5)
 
-    pytest.fail("❌ SLURM cluster is not ready")
+    pytest.fail("SLURM cluster is not ready")  # type: ignore[invalid-argument-type]
 
 
 @pytest.fixture(scope="session")
@@ -234,7 +234,7 @@ def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
             continue
 
     if not key_installed:
-        pytest.fail("Failed to install SSH key on SLURM Docker cluster")
+        pytest.fail("Failed to install SSH key on SLURM Docker cluster")  # type: ignore[invalid-argument-type]
 
     return key_path
 
@@ -320,7 +320,7 @@ def _ensure_remote_deployment(
         return new_path
 
     logger.error("Remote deployment verification failed for path %s", new_path)
-    pytest.fail("Production deployment could not be validated even after rebuild")
+    pytest.fail("Production deployment could not be validated even after rebuild")  # type: ignore[invalid-argument-type]
 
     return new_path  # pragma: no cover
 
