@@ -31,9 +31,9 @@ workload-document-processing = { features = ["submission", "cluster", "cluster-p
 
 [tool.pixi.feature.ci-basics.dependencies]
 dprint = ">=0.50.0,<1"
-pytest = ">=8.3.4,<9"
+pytest = ">=8.3.4,<10"
 pytest-mock = ">=3.14.0,<4"
-pytest-cov = "~=6.0.0"
+pytest-cov = "~=7.0.0"
 ruff = ">=0.12.8,<1"
 ty = ">=0.0.2,<1"
 [tool.pixi.feature.ci-basics.pypi-dependencies]
