@@ -495,3 +495,7 @@ if __name__ == "__main__":
         finally:
             if ray.is_initialized():
                 ray.shutdown()
+
+
+def foo():
+    return 1
