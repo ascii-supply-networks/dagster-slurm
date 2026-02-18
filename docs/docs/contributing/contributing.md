@@ -1,21 +1,47 @@
 ---
 sidebar_position: 2
-title: Tooling setup
+title: Contributing
 ---
 
-## Call for contribution
+## Contributing to dagster-slurm
 
-As part of the hackathon (https://www.openhackathons.org/s/siteevent/a0CUP000013Tp8f2AC/se000375) we intend to work on this integration.
-We are looking for more hands to join in - or review the task list so that we can make sure we are not missing anything.
+We welcome contributions of all kinds—bug fixes, documentation improvements, new launchers, and cluster-specific recipes.
 
-- Tasks for implementation: https://github.com/orgs/ascii-supply-networks/projects/4
-- Project lives here https://github.com/ascii-supply-networks/dagster-slurm
+**How to get started:**
 
-See the (draft) [documentation](https://dagster-slurm.geoheil.com/)
+1. Browse open issues, especially those labelled [`good first issue`](https://github.com/ascii-supply-networks/dagster-slurm/issues?q=label%3A%22good+first+issue%22).
+2. Check the [project board](https://github.com/orgs/ascii-supply-networks/projects/4) for planned work.
+3. Fork the repository and create a feature branch.
+4. Follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`).
+5. Run formatting and linting before pushing:
+   ```bash
+   pixi run -e build --frozen fmt
+   pixi run -e build --frozen lint
+   ```
+6. Open a pull request against `main`.
 
-> We are actively looking for contributions to bring this package to life together
+**Coding conventions:** Python 3.12, 4-space indentation, type hints on public APIs.
 
-## Contributing
+## Reporting Issues
+
+Found a bug or have a feature request? [Open an issue](https://github.com/ascii-supply-networks/dagster-slurm/issues/new).
+
+To help us resolve issues quickly, please include:
+
+- **dagster-slurm version**
+- **Python version and OS**
+- **Slurm version** (if applicable, run `sinfo --version`)
+- A **minimal reproducible example** (ideally as a full git repository including the pixi-based dependencies with a lockfile and ideally reproduciblle with the docker-based local slurm cluster)
+- Full **traceback or error output**
+- **Expected vs. actual behaviour**
+
+## Seeking Support
+
+- **GitHub Discussions** — For questions, how-to requests, and general feedback, use [GitHub Discussions](https://github.com/ascii-supply-networks/dagster-slurm/discussions). This is the preferred channel for conversations that are not confirmed bugs.
+- **GitHub Issues** — For confirmed bugs and feature requests.
+- **Dagster Community Slack** — For questions that span the broader Dagster ecosystem, join the [Dagster Slack](https://dagster.io/community).
+
+## Development Setup
 
 You have to have uv installed for the library development - but pixi for executing the examples.
 
