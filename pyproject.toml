@@ -75,6 +75,8 @@ testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-rep
 
 test-integration = { cmd = "uv run -- pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
 testpixi-integration = { cmd = "pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+# to run a single test i.e. for verifying cancellation see
+# pixi run -e build --frozen -- uv run pytest projects/dagster-slurm/dagster_slurm_test/test_cancellation.py::test_terminate_run_cancels_slurm_job -v -p no:xdist --capture=no
 
 test-integration-slow = { cmd = "uv run -- pytest -m 'slow' projects", description = "Run all integration tests" }
 testpixi-integration-slow = { cmd = "pytest -m 'slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
