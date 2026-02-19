@@ -12,7 +12,6 @@
 - Revision 1 ([#97](https://github.com/ascii-supply-networks/dagster-slurm/pull/97),
   [`530e8ab`](https://github.com/ascii-supply-networks/dagster-slurm/commit/530e8ab4a52ff69bd257f4a48686cf80282bac33))
 
-
 ## v1.10.0-rc.1 (2026-01-23)
 
 ### Features

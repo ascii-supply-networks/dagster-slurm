@@ -19,7 +19,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3.4,<9",
+  "pytest>=8.3.4,<10",
   "pytest-mock>=3.14.0,<4",
   "pytest-cov~=7.0.0",
   "ruff>=0.12.8,<1",
@@ -43,7 +43,7 @@ dprint = ">=0.50.0,<1"
 uv = ">=0.8.6"
 build = ">=1.3.0"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
-pytest = ">=8.3.4,<9"
+pytest = ">=8.3.4,<10"
 pytest-cov = "~=7.0.0"
 pexpect = "~=4.9.0"
 ty = ">=0.0.4,<1"
@@ -75,6 +75,8 @@ testpixi = { cmd = "pytest -m 'not (needs_slurm_docker or slow)' --cov --cov-rep
 
 test-integration = { cmd = "uv run -- pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' projects", description = "Run all integration tests" }
 testpixi-integration = { cmd = "pytest -p no:xdist --capture=no -m 'needs_slurm_docker and not slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }
+# to run a single test i.e. for verifying cancellation see
+# pixi run -e build --frozen -- uv run pytest projects/dagster-slurm/dagster_slurm_test/test_cancellation.py::test_terminate_run_cancels_slurm_job -v -p no:xdist --capture=no
 
 test-integration-slow = { cmd = "uv run -- pytest -m 'slow' projects", description = "Run all integration tests" }
 testpixi-integration-slow = { cmd = "pytest -m 'slow' --cov --cov-report=term-missing projects", description = "Run all integration tests in pixi build env" }

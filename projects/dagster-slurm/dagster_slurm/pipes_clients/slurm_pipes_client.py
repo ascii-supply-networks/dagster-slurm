@@ -14,12 +14,15 @@ from typing import Any, Dict, Optional
 
 from dagster import (
     AssetExecutionContext,
+    DagsterRunStatus,
+    OpExecutionContext,
     PipesClient,
     PipesEnvContextInjector,
     get_dagster_logger,
     open_pipes_session,
 )
 from dagster._core.pipes.client import PipesClientCompletedInvocation
+from dagster._utils.interrupts import _received_interrupt
 
 from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
@@ -29,6 +32,10 @@ from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..resources.session import SlurmSessionResource
 from ..resources.slurm import SlurmResource
+
+_TAG_JOB_ID = "dagster_slurm/job_id"
+_TAG_RUN_DIR = "dagster_slurm/run_dir"
+_TAG_ASSET_KEY = "dagster_slurm/asset_key"
 
 
 class SlurmPipesClient(PipesClient):
@@ -86,6 +93,7 @@ class SlurmPipesClient(PipesClient):
         self._current_job_id = None
         self._ssh_pool = None
         self._cancellation_requested = False
+        self._sigterm_received = False
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
 
@@ -148,18 +156,27 @@ class SlurmPipesClient(PipesClient):
         run_dir = None
         job_id = None
 
-        # Setup cancellation handler
-        def handle_cancellation(signum, frame):
-            self.logger.warning(f"⚠️  Termination signal received (signal {signum})")
-
-            if self._current_job_id:
-                self.logger.info(f"Cancelling SLURM job {self._current_job_id}...")
-                self._cancellation_requested = True
-                self._cancel_slurm_job(self._current_job_id)
+        # Setup signal handler – on SIGTERM/SIGINT we only set a flag so the
+        # polling loop can exit cleanly.  We intentionally do NOT call scancel
+        # here because a Dagster UI reboot sends SIGTERM and the Slurm job
+        # should keep running on the cluster.  User-initiated cancellation
+        # (via the "Terminate Run" button) is handled by the polling loop's
+        # `is_interrupt_requested` check which *does* call scancel.
+        def handle_signal(signum, frame):
+            self.logger.warning(
+                f"Signal {signum} received. Slurm job will NOT be cancelled "
+                "and will continue running on the cluster."
+            )
+            self._sigterm_received = True
+            # Prevent Dagster's executor from detecting the interrupt and
+            # failing the run after our step completes successfully.  This
+            # is needed for the in-process executor where our handler and
+            # Dagster's capture_interrupts share the same process.
+            _received_interrupt["received"] = False
 
         # Register signal handlers
-        original_sigint = signal.signal(signal.SIGINT, handle_cancellation)
-        original_sigterm = signal.signal(signal.SIGTERM, handle_cancellation)
+        original_sigint = signal.signal(signal.SIGINT, handle_signal)
+        original_sigterm = signal.signal(signal.SIGTERM, handle_signal)
 
         try:
             with ssh_pool:
@@ -167,10 +184,142 @@ class SlurmPipesClient(PipesClient):
                 self._control_path = ssh_pool.control_path
 
                 remote_base = self._get_remote_base(run_id, ssh_pool)
+
                 run_dir = f"{remote_base}/runs/{run_id}"
                 messages_path = f"{run_dir}/messages.jsonl"
                 self.logger.debug(f"Creating remote run directory: {run_dir}")
                 ssh_pool.run(f"mkdir -p {run_dir}")
+
+                # --- Reattach path: check for a previous Slurm job ---
+                # On retry after a failed run (e.g. Dagster restart with
+                # multiprocess executor), we look for the Slurm job that
+                # was submitted by the previous attempt.  Three outcomes:
+                #   1. Job still running → reattach and monitor
+                #   2. Job already COMPLETED → collect metrics, skip submission
+                #   3. Job failed / not found → fall through to normal path
+                op_ctx = context.op_execution_context
+                asset_key_str = self._get_asset_key_string(op_ctx)
+                reattach_info = self._find_reattachable_job(
+                    op_ctx, ssh_pool, asset_key_str
+                )
+                if reattach_info:
+                    old_job_id_str = reattach_info["job_id"]
+                    old_run_dir = reattach_info["run_dir"]
+                    old_job_id = int(old_job_id_str)
+                    old_job_state = self._get_job_state(old_job_id, ssh_pool).upper()
+
+                    if self._is_job_still_running(old_job_id, ssh_pool):
+                        # Case 1: job still active — reattach to monitoring
+                        self.logger.info(
+                            f"Reattaching to running Slurm job {old_job_id} "
+                            f"(state={old_job_state}, run_dir={old_run_dir})"
+                        )
+                        self._current_job_id = old_job_id
+                        job_id = old_job_id
+                        run_dir = old_run_dir
+                        self._store_job_tags(op_ctx, old_job_id, run_dir, asset_key_str)
+
+                        message_reader = SSHMessageReader(
+                            remote_path=f"{run_dir}/messages.jsonl",
+                            ssh_config=self.slurm.ssh,
+                            control_path=ssh_pool.control_path,
+                            ssh_pool=ssh_pool,
+                        )
+                        context_injector = PipesEnvContextInjector()
+                        with open_pipes_session(
+                            context=op_ctx,
+                            context_injector=context_injector,
+                            message_reader=message_reader,
+                            extras=extras,
+                        ) as session:
+                            self._wait_for_job_with_streaming(
+                                old_job_id,
+                                ssh_pool,
+                                run_dir,
+                                message_reader=message_reader,
+                                op_context=op_ctx,
+                            )
+
+                            self._maybe_emit_final_logs(
+                                message_reader=message_reader,
+                                ssh_pool=ssh_pool,
+                                run_dir=run_dir,
+                                job_id=old_job_id,
+                            )
+
+                            self.logger.info(
+                                f"Reattached job {old_job_id} completed successfully"
+                            )
+
+                            self._collect_and_emit_metrics(
+                                old_job_id, ssh_pool, context
+                            )
+
+                            # Clear tags to prevent stale reattach
+                            self._store_job_tags(op_ctx, old_job_id, "", "")
+
+                        # Cleanup
+                        if not self.debug_mode:
+                            try:
+                                self._schedule_async_cleanup(ssh_pool, run_dir)
+                            except Exception as e:
+                                self.logger.warning(f"Cleanup failed: {e}")
+
+                        return PipesClientCompletedInvocation(session)
+
+                    if old_job_state == "COMPLETED":
+                        # Case 2: job already finished successfully —
+                        # collect metrics from sacct without resubmitting.
+                        self.logger.info(
+                            f"Previous Slurm job {old_job_id} already COMPLETED. "
+                            "Collecting metrics — no new submission needed."
+                        )
+                        self._current_job_id = old_job_id
+                        job_id = old_job_id
+                        run_dir = old_run_dir
+
+                        context_injector = PipesEnvContextInjector()
+                        message_reader = SSHMessageReader(
+                            remote_path=f"{run_dir}/messages.jsonl",
+                            ssh_config=self.slurm.ssh,
+                            control_path=ssh_pool.control_path,
+                            ssh_pool=ssh_pool,
+                        )
+                        with open_pipes_session(
+                            context=op_ctx,
+                            context_injector=context_injector,
+                            message_reader=message_reader,
+                            extras=extras,
+                        ) as session:
+                            self._maybe_emit_final_logs(
+                                message_reader=message_reader,
+                                ssh_pool=ssh_pool,
+                                run_dir=run_dir,
+                                job_id=old_job_id,
+                            )
+
+                            self._collect_and_emit_metrics(
+                                old_job_id, ssh_pool, context
+                            )
+
+                            # Clear tags to prevent stale reattach
+                            self._store_job_tags(op_ctx, old_job_id, "", "")
+
+                        # Cleanup
+                        if not self.debug_mode:
+                            try:
+                                self._schedule_async_cleanup(ssh_pool, run_dir)
+                            except Exception as e:
+                                self.logger.warning(f"Cleanup failed: {e}")
+
+                        return PipesClientCompletedInvocation(session)
+
+                    # Case 3: job failed or unknown state — log and fall
+                    # through to normal submission path.
+                    self.logger.info(
+                        f"Previous Slurm job {old_job_id} has state "
+                        f"'{old_job_state}' — submitting a new job."
+                    )
 
                 activation_script, python_executable = self._prepare_environment(
                     ssh_pool=ssh_pool,
@@ -181,8 +330,14 @@ class SlurmPipesClient(PipesClient):
                     pre_deployed_env_path_override=pre_deployed_env_path_override,
                 )
 
-                # Check for cancellation
-                if self._cancellation_requested:
+                # Check for cancellation – only abort on user-initiated cancel
+                # (CANCELING status), NOT on reboot SIGTERM (run stays STARTED).
+                # Allowing submission to proceed on reboot means the next run can
+                # reattach to the Slurm job.
+                if self._cancellation_requested or (
+                    self._sigterm_received
+                    and self._is_run_canceling(context.op_execution_context)
+                ):
                     raise RuntimeError("Execution cancelled before job submission")
 
                 # Upload payload unless instructed to reuse an existing remote copy
@@ -244,8 +399,12 @@ class SlurmPipesClient(PipesClient):
                         activation_script=activation_script,
                     )
 
-                    # Check for cancellation before submission
-                    if self._cancellation_requested:
+                    # Check for cancellation before submission – same logic as
+                    # above: only abort on user cancel, not reboot SIGTERM.
+                    if self._cancellation_requested or (
+                        self._sigterm_received
+                        and self._is_run_canceling(context.op_execution_context)
+                    ):
                         raise RuntimeError("Execution cancelled before job submission")
 
                     # Execute with real-time log streaming
@@ -277,59 +436,11 @@ class SlurmPipesClient(PipesClient):
 
                     self.logger.info(f"Job {job_id} completed successfully")
 
-                    # Collect metrics
-                    try:
-                        metrics = self.metrics_collector.collect_job_metrics(
-                            job_id, ssh_pool
-                        )
-                        metadata = {
-                            "slurm_job_id": job_id,
-                            "node_hours": metrics.node_hours,
-                            "cpu_efficiency_pct": round(
-                                metrics.cpu_efficiency * 100, 2
-                            ),
-                            "max_memory_mb": round(metrics.max_rss_mb, 2),
-                            "elapsed_seconds": round(metrics.elapsed_seconds, 2),
-                        }
+                    self._collect_and_emit_metrics(job_id, ssh_pool, context)
 
-                        # Multi-asset executions require specifying the output name.
-                        output_names = []
-
-                        selected = getattr(context, "selected_output_names", None)
-                        if selected:
-                            output_names = [name for name in selected if name]
-                        elif getattr(context, "op_execution_context", None):
-                            nested = getattr(
-                                context.op_execution_context,
-                                "selected_output_names",
-                                None,
-                            )
-                            if nested:
-                                output_names = [name for name in nested if name]
-
-                        if not output_names:
-                            op_def = getattr(context, "op_def", None)
-                            output_defs = getattr(op_def, "output_defs", None)
-                            if output_defs:
-                                output_names = [
-                                    str(output_def.name)
-                                    for output_def in output_defs
-                                    if output_def.name is not None
-                                ]
-
-                        if not output_names:
-                            context.add_output_metadata(metadata)
-                        elif len(output_names) == 1:
-                            context.add_output_metadata(
-                                metadata, output_name=output_names[0]
-                            )
-                        else:
-                            for output_name in output_names:
-                                context.add_output_metadata(
-                                    metadata, output_name=output_name
-                                )
-                    except Exception as e:
-                        self.logger.warning(f"Failed to collect metrics: {e}")
+                    # Clear reattach tags so stale tags don't trigger
+                    # false reattach on a future run.
+                    self._store_job_tags(context.op_execution_context, job_id, "", "")
 
                 # Cleanup (unless debug mode)
                 if not self.debug_mode:
@@ -339,7 +450,27 @@ class SlurmPipesClient(PipesClient):
                         self.logger.warning(f"Cleanup failed: {e}")
 
         except Exception as e:
-            # Cancel job if it's running and not already cancelled
+            # When SIGTERM was received (e.g. Dagster UI reboot) or the
+            # multiprocess executor's termination thread injected an async
+            # DagsterExecutionInterruptedError, we must NOT cancel the
+            # Slurm job and must NOT clean up remote files – the job is
+            # still running on the cluster and needs them.
+            exc_name = type(e).__name__
+            is_executor_interrupt = (
+                "Interrupt" in exc_name or "DagsterExecution" in exc_name
+            )
+            if self._sigterm_received or (
+                is_executor_interrupt
+                and not self._is_run_canceling(context.op_execution_context)
+            ):
+                self.logger.warning(
+                    f"Detaching due to {'SIGTERM' if self._sigterm_received else exc_name}. "
+                    f"Slurm job {self._current_job_id} "
+                    f"and remote directory {run_dir} are preserved."
+                )
+                raise
+
+            # Cancel job if it's running and not already cancelled.
             if self._current_job_id and not self._cancellation_requested:
                 self.logger.warning(
                     f"Cancelling job {self._current_job_id} due to error"
@@ -357,7 +488,7 @@ class SlurmPipesClient(PipesClient):
                     self.logger.warning(f"Cleanup failed: {cleanup_error}")
             elif self.debug_mode and run_dir:
                 self.logger.warning(
-                    f"🐛 DEBUG MODE: Keeping failed run directory for inspection: {run_dir}"
+                    f"DEBUG MODE: Keeping failed run directory for inspection: {run_dir}"
                 )
                 self.logger.warning(
                     f"   To inspect: ssh {self.slurm.ssh.user}@{self.slurm.ssh.host} -p {self.slurm.ssh.port}"
@@ -367,6 +498,11 @@ class SlurmPipesClient(PipesClient):
             raise
 
         finally:
+            # Clear Dagster's interrupt flag BEFORE restoring handlers, so
+            # the executor (in-process case) does not see a stale interrupt
+            # and fail the run after our step completed successfully.
+            _received_interrupt["received"] = False
+
             # Restore original signal handlers
             signal.signal(signal.SIGINT, original_sigint)
             signal.signal(signal.SIGTERM, original_sigterm)
@@ -375,8 +511,213 @@ class SlurmPipesClient(PipesClient):
             self._current_job_id = None
             self._ssh_pool = None
             self._cancellation_requested = False
+            self._sigterm_received = False
 
         return PipesClientCompletedInvocation(session)
+
+    def _is_run_canceling(self, op_context: Optional[OpExecutionContext]) -> bool:
+        """Check if the Dagster run is being cancelled by the user.
+
+        Queries the Dagster instance database for a fresh run status.
+        Returns True when the user clicked "Terminate Run" in the UI
+        (run status = CANCELING).  Returns False on reboot / unknown.
+        """
+        if op_context is None:
+            return False
+        try:
+            run = op_context.instance.get_run_by_id(op_context.run_id)
+            return run is not None and run.status == DagsterRunStatus.CANCELING
+        except Exception as exc:
+            self.logger.debug(f"Could not check run cancel status: {exc}")
+            return False
+
+    def _get_asset_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> Optional[str]:
+        """Best-effort extraction of asset key as a string."""
+        if op_context is None:
+            return None
+        try:
+            # Single-asset context
+            asset_key = getattr(op_context, "asset_key", None)
+            if asset_key is not None:
+                return str(asset_key)
+        except Exception:
+            pass
+        try:
+            # Multi-asset context
+            selected = getattr(op_context, "selected_asset_keys", None)
+            if selected:
+                return "/".join(str(k) for k in sorted(selected))
+        except Exception:
+            pass
+        return None
+
+    def _store_job_tags(
+        self,
+        op_context: Optional[OpExecutionContext],
+        job_id: int,
+        run_dir: str,
+        asset_key: Optional[str],
+    ) -> None:
+        """Write reattach tags to the Dagster run. Best-effort."""
+        if op_context is None:
+            return
+        try:
+            tags = {
+                _TAG_JOB_ID: str(job_id),
+                _TAG_RUN_DIR: run_dir,
+            }
+            if asset_key:
+                tags[_TAG_ASSET_KEY] = asset_key
+            op_context.instance.add_run_tags(op_context.run_id, tags)
+        except Exception as exc:
+            self.logger.debug(f"Could not store reattach tags: {exc}")
+
+    def _find_reattachable_job(
+        self,
+        op_context: Optional[OpExecutionContext],
+        ssh_pool: SSHConnectionPool,
+        asset_key: Optional[str],
+    ) -> Optional[Dict[str, str]]:
+        """Look for a Slurm job from a previous failed Dagster run.
+
+        Returns ``{"job_id": "...", "run_dir": "..."}`` for the first
+        candidate whose job is still known to Slurm (running **or**
+        completed), or ``None`` if no usable candidate exists.  The
+        caller inspects the actual job state to decide whether to
+        reattach (still running), adopt the result (completed), or
+        fall through to a fresh submission (failed / unknown).
+        """
+        if op_context is None:
+            return None
+
+        candidates: list[Dict[str, str]] = []
+
+        # Strategy 1: Retry path – check parent run's tags
+        try:
+            parent_run_id = getattr(op_context.dagster_run, "parent_run_id", None)
+            if parent_run_id:
+                parent_run = op_context.instance.get_run_by_id(parent_run_id)
+                if parent_run and parent_run.tags.get(_TAG_JOB_ID):
+                    candidates.append(
+                        {
+                            "job_id": parent_run.tags[_TAG_JOB_ID],
+                            "run_dir": parent_run.tags.get(_TAG_RUN_DIR, ""),
+                        }
+                    )
+        except Exception as exc:
+            self.logger.debug(f"Could not check parent run tags: {exc}")
+
+        # Strategy 2: Re-materialize path – query recent FAILURE runs
+        if not candidates and asset_key:
+            try:
+                from dagster import DagsterRunStatus
+                from dagster._core.storage.dagster_run import RunsFilter
+
+                failed_runs = op_context.instance.get_runs(
+                    filters=RunsFilter(
+                        tags={_TAG_ASSET_KEY: asset_key},
+                        statuses=[DagsterRunStatus.FAILURE],
+                    ),
+                    limit=5,
+                )
+                for run in failed_runs:
+                    jid = run.tags.get(_TAG_JOB_ID)
+                    rdir = run.tags.get(_TAG_RUN_DIR)
+                    if jid and rdir:
+                        candidates.append({"job_id": jid, "run_dir": rdir})
+            except Exception as exc:
+                self.logger.debug(f"Could not query failed runs: {exc}")
+
+        # Return first candidate whose job is known to Slurm (any state).
+        # An empty state means the job_id is completely unknown — skip it.
+        for cand in candidates:
+            try:
+                state = self._get_job_state(int(cand["job_id"]), ssh_pool)
+                if state:
+                    return cand
+            except (ValueError, TypeError):
+                continue
+
+        return None
+
+    def _is_job_still_running(self, job_id: int, ssh_pool: SSHConnectionPool) -> bool:
+        """Return True if the Slurm job is in an active state."""
+        state = self._get_job_state(job_id, ssh_pool).upper()
+        return state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}
+
+    def _interruptible_sleep(self, seconds: float, job_id: int) -> None:
+        """Sleep that catches async DagsterExecutionInterruptedError.
+
+        The multiprocess executor's termination thread can inject this
+        exception via ``PyThreadState_SetAsyncExc``.  We catch and swallow
+        it so the polling loop can continue monitoring the Slurm job.
+        """
+        try:
+            time.sleep(seconds)
+        except Exception as exc:
+            name = type(exc).__name__
+            if "Interrupt" in name or "DagsterExecution" in name:
+                self.logger.info(
+                    f"Caught async {name} during sleep for job {job_id} "
+                    "– swallowing so polling continues."
+                )
+                _received_interrupt["received"] = False
+                return
+            raise
+
+    def _collect_and_emit_metrics(
+        self,
+        job_id: int,
+        ssh_pool: SSHConnectionPool,
+        context: AssetExecutionContext,
+    ) -> None:
+        """Collect Slurm job metrics via sacct and attach as output metadata."""
+        try:
+            metrics = self.metrics_collector.collect_job_metrics(job_id, ssh_pool)
+            metadata = {
+                "slurm_job_id": job_id,
+                "node_hours": metrics.node_hours,
+                "cpu_efficiency_pct": round(metrics.cpu_efficiency * 100, 2),
+                "max_memory_mb": round(metrics.max_rss_mb, 2),
+                "elapsed_seconds": round(metrics.elapsed_seconds, 2),
+            }
+
+            # Multi-asset executions require specifying the output name.
+            output_names: list[str] = []
+
+            selected = getattr(context, "selected_output_names", None)
+            if selected:
+                output_names = [name for name in selected if name]
+            elif getattr(context, "op_execution_context", None):
+                nested = getattr(
+                    context.op_execution_context,
+                    "selected_output_names",
+                    None,
+                )
+                if nested:
+                    output_names = [name for name in nested if name]
+
+            if not output_names:
+                op_def = getattr(context, "op_def", None)
+                output_defs = getattr(op_def, "output_defs", None)
+                if output_defs:
+                    output_names = [
+                        str(output_def.name)
+                        for output_def in output_defs
+                        if output_def.name is not None
+                    ]
+
+            if not output_names:
+                context.add_output_metadata(metadata)
+            elif len(output_names) == 1:
+                context.add_output_metadata(metadata, output_name=output_names[0])
+            else:
+                for output_name in output_names:
+                    context.add_output_metadata(metadata, output_name=output_name)
+        except Exception as e:
+            self.logger.warning(f"Failed to collect metrics: {e}")
 
     def _cancel_slurm_job(self, job_id: int):
         """Cancel a Slurm job.
@@ -710,7 +1051,7 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         message_reader,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
-        op_context=None,
+        op_context: Optional[OpExecutionContext] = None,
     ) -> int:
         """Execute as standalone sbatch job with real-time log streaming.
 
@@ -851,8 +1192,11 @@ class SlurmPipesClient(PipesClient):
             extra_opts=extra_slurm_opts,
         )
 
-        # Check for cancellation before submission
-        if self._cancellation_requested:
+        # Check for cancellation before submission – only abort on user
+        # cancel, not reboot SIGTERM.
+        if self._cancellation_requested or (
+            self._sigterm_received and self._is_run_canceling(op_context)
+        ):
             raise RuntimeError("Execution cancelled before job submission")
 
         # Submit
@@ -867,6 +1211,10 @@ class SlurmPipesClient(PipesClient):
         job_id = int(match.group(1))
         self._current_job_id = job_id
         self.logger.info(f"Submitted job {job_id}")
+
+        # Store reattach tags so a future run can find this job
+        asset_key_str = self._get_asset_key_string(op_context)
+        self._store_job_tags(op_context, job_id, run_dir, asset_key_str)
 
         # Query estimated start time for pending jobs
         self._log_estimated_start_time(job_id, ssh_pool)
@@ -1084,7 +1432,7 @@ class SlurmPipesClient(PipesClient):
         run_dir: str,
         message_reader,
         poll_timeout: int = 3600,
-        op_context=None,  # OpExecutionContext for checking Dagster cancellation
+        op_context: Optional[OpExecutionContext] = None,
     ):
         """Wait for job completion while streaming stdout/stderr and robustly
         polling the job state.
@@ -1101,7 +1449,9 @@ class SlurmPipesClient(PipesClient):
         stdout_path = f"{run_dir}/slurm-{job_id}.out"
         stderr_path = f"{run_dir}/slurm-{job_id}.err"
 
-        time.sleep(2)  # Wait for job to start and create log files
+        self._interruptible_sleep(
+            2, job_id
+        )  # Wait for job to start and create log files
 
         stop_streaming = threading.Event()
         streamed_lines = {"stdout": 0, "stderr": 0}
@@ -1199,175 +1549,231 @@ class SlurmPipesClient(PipesClient):
         last_state = None
         state_check_count = 0
 
-        # Poll job status
+        # Poll job status.
+        # The outer try/finally handles cleanup.  Each iteration of the
+        # while-loop is wrapped in its own try/except to catch async
+        # DagsterExecutionInterruptedError that the multiprocess executor's
+        # termination thread injects via PyThreadState_SetAsyncExc.  This
+        # exception can fire at *any* bytecode boundary (not just during
+        # sleep), so wrapping only time.sleep is insufficient.
         try:
             while True:
-                # Check for overall timeout
-                if time.time() - start_time > poll_timeout:
-                    raise RuntimeError(
-                        f"Timed out after {poll_timeout}s waiting for job {job_id} to complete."
-                    )
-
-                # Check for Dagster UI cancellation
-                if (
-                    op_context
-                    and hasattr(op_context, "is_interrupt_requested")
-                    and op_context.is_interrupt_requested
-                ):
-                    self.logger.warning("⚠️  Cancellation detected via Dagster UI")
-                    self._cancellation_requested = True
-                    self._cancel_slurm_job(job_id)
-                    raise RuntimeError(f"Job {job_id} cancelled")
-
-                # Check for signal-based cancellation (signal handler)
-                if self._cancellation_requested:
-                    self.logger.warning("⚠️  Cancellation detected via signal")
-                    raise RuntimeError(f"Job {job_id} cancelled")
-
-                # Get current job state
-                state = self._get_job_state(job_id, ssh_pool)
-
-                # Track state changes
-                if state != last_state:
-                    if state:
-                        self.logger.debug(
-                            f"Job {job_id} state changed: {last_state} -> {state}"
+                try:
+                    # Check for overall timeout
+                    if time.time() - start_time > poll_timeout:
+                        raise RuntimeError(
+                            f"Timed out after {poll_timeout}s waiting for job {job_id} to complete."
                         )
-                    last_state = state
-                    state_check_count = 0
-                else:
-                    state_check_count += 1
 
-                # Handle empty state
-                if not state:
-                    state_check_count += 1
+                    # Check for Dagster UI cancellation by querying the run
+                    # status from the database.  When the user clicks
+                    # "Terminate Run", Dagster sets the run to CANCELING.
+                    if self._is_run_canceling(op_context):
+                        self.logger.warning("Cancellation detected via Dagster UI")
+                        self._cancellation_requested = True
+                        self._cancel_slurm_job(job_id)
+                        raise RuntimeError(f"Job {job_id} cancelled")
 
-                    if state_check_count >= 2:
-                        resolved_state = None
-                        try:
-                            detailed_output = ssh_pool.run(
-                                f"sacct -j {job_id} -o JobID,State,ExitCode -P 2>/dev/null || true"
+                    # Check for SIGTERM/SIGINT.
+                    # When the user clicks "Terminate Run", Dagster sets the run
+                    # status to CANCELING *before* sending SIGTERM.  A plain
+                    # reboot/restart only sends SIGTERM (run stays STARTED).
+                    # We re-check the database to tell them apart.
+                    if self._sigterm_received:
+                        if self._is_run_canceling(op_context):
+                            self.logger.warning(
+                                "SIGTERM received and run is CANCELING "
+                                "– user-initiated cancel, cancelling Slurm job."
                             )
+                            self._cancellation_requested = True
+                            self._cancel_slurm_job(job_id)
+                            raise RuntimeError(f"Job {job_id} cancelled")
+                        else:
+                            # Reboot / restart — keep monitoring.  The Slurm job
+                            # is still running; the process survives the signal
+                            # and the polling loop continues until the job
+                            # completes normally and the Dagster run succeeds.
+                            self.logger.info(
+                                "SIGTERM received but run is NOT CANCELING "
+                                f"– continuing to monitor Slurm job {job_id}."
+                            )
+                            # Clear the flag so we don't log every iteration.
+                            # A subsequent SIGTERM will set it again.
+                            self._sigterm_received = False
+                            _received_interrupt["received"] = False
+
+                    # Get current job state
+                    state = self._get_job_state(job_id, ssh_pool)
+
+                    # Track state changes
+                    if state != last_state:
+                        if state:
                             self.logger.debug(
-                                f"Detailed sacct output:\n{detailed_output}"
+                                f"Job {job_id} state changed: {last_state} -> {state}"
                             )
+                        last_state = state
+                        state_check_count = 0
+                    else:
+                        state_check_count += 1
 
-                            for line in detailed_output.strip().split("\n"):
-                                if str(job_id) in line and "CANCELLED" in line.upper():
-                                    self.logger.warning(
-                                        f"Job {job_id} was cancelled externally"
-                                    )
-                                    self._cancellation_requested = True
-                                    time.sleep(2)
-                                    raise RuntimeError(
-                                        f"Job {job_id} was cancelled externally (detected via sacct). "
-                                        f"The job may have been cancelled by scancel or administrator action."
-                                    )
-                                if str(job_id) in line:
-                                    parts = line.split("|")
-                                    if len(parts) >= 2:
-                                        resolved_state = parts[1].strip().upper()
-                        except RuntimeError:
-                            raise
-                        except Exception as e:
-                            self.logger.debug(f"Could not get detailed job info: {e}")
+                    # Handle empty state
+                    if not state:
+                        state_check_count += 1
 
-                        if not resolved_state:
+                        if state_check_count >= 2:
+                            resolved_state = None
                             try:
-                                scontrol_output = ssh_pool.run(
-                                    f"scontrol show job {job_id} 2>/dev/null || true"
+                                detailed_output = ssh_pool.run(
+                                    f"sacct -j {job_id} -o JobID,State,ExitCode -P 2>/dev/null || true"
                                 )
-                                match = re.search(
-                                    r"JobState=([A-Z_]+)", scontrol_output or ""
+                                self.logger.debug(
+                                    f"Detailed sacct output:\n{detailed_output}"
                                 )
-                                if match:
-                                    resolved_state = match.group(1).upper()
+
+                                for line in detailed_output.strip().split("\n"):
+                                    if (
+                                        str(job_id) in line
+                                        and "CANCELLED" in line.upper()
+                                    ):
+                                        self.logger.warning(
+                                            f"Job {job_id} was cancelled externally"
+                                        )
+                                        self._cancellation_requested = True
+                                        self._interruptible_sleep(2, job_id)
+                                        raise RuntimeError(
+                                            f"Job {job_id} was cancelled externally (detected via sacct). "
+                                            f"The job may have been cancelled by scancel or administrator action."
+                                        )
+                                    if str(job_id) in line:
+                                        parts = line.split("|")
+                                        if len(parts) >= 2:
+                                            resolved_state = parts[1].strip().upper()
+                            except RuntimeError:
+                                raise
                             except Exception as e:
                                 self.logger.debug(
-                                    f"Could not get scontrol job info: {e}"
+                                    f"Could not get detailed job info: {e}"
                                 )
 
-                        if resolved_state:
-                            state = resolved_state
-                            last_state = None
-                            state_check_count = 0
+                            if not resolved_state:
+                                try:
+                                    scontrol_output = ssh_pool.run(
+                                        f"scontrol show job {job_id} 2>/dev/null || true"
+                                    )
+                                    match = re.search(
+                                        r"JobState=([A-Z_]+)", scontrol_output or ""
+                                    )
+                                    if match:
+                                        resolved_state = match.group(1).upper()
+                                except Exception as e:
+                                    self.logger.debug(
+                                        f"Could not get scontrol job info: {e}"
+                                    )
 
-                    if state:
-                        self.logger.debug(
-                            f"Resolved job {job_id} state via accounting: {state}"
+                            if resolved_state:
+                                state = resolved_state
+                                last_state = None
+                                state_check_count = 0
+
+                        if state:
+                            self.logger.debug(
+                                f"Resolved job {job_id} state via accounting: {state}"
+                            )
+                            continue
+
+                        if state_check_count < 5:
+                            self.logger.debug(
+                                f"Job {job_id} state unknown (attempt {state_check_count}/5)"
+                            )
+                            self._interruptible_sleep(1, job_id)
+                            continue
+
+                        self.logger.warning(
+                            f"Job {job_id} state unknown for {state_check_count}s. "
+                            f"Assuming completion."
                         )
+                        break
+
+                    # From here on state is non-empty
+                    if state == "COMPLETING":
+                        self.logger.debug(
+                            f"Job {job_id} is completing, waiting for terminal state..."
+                        )
+                        self._interruptible_sleep(1, job_id)
                         continue
 
-                    if state_check_count < 5:
-                        self.logger.debug(
-                            f"Job {job_id} state unknown (attempt {state_check_count}/5)"
+                    if state in TERMINAL_STATES:
+                        self.logger.info(
+                            f"Job {job_id} reached terminal state: {state}"
                         )
-                        time.sleep(1)
-                        continue
 
-                    self.logger.warning(
-                        f"Job {job_id} state unknown for {state_check_count}s. "
-                        f"Assuming completion."
-                    )
-                    break
+                        # Give streaming threads time to catch up
+                        self._interruptible_sleep(2, job_id)
 
-                # From here on state is non-empty
-                if state == "COMPLETING":
-                    self.logger.debug(
-                        f"Job {job_id} is completing, waiting for terminal state..."
-                    )
-                    time.sleep(1)
+                        # Stop streaming and wait for threads to finish
+                        stop_streaming.set()
+                        stdout_thread.join(timeout=10)
+                        stderr_thread.join(timeout=10)
+
+                        if state in {"CANCELLED", "PREEMPTED"}:
+                            self.logger.warning(f"Job {job_id} was {state}")
+                            self._cancellation_requested = True
+                            raise RuntimeError(
+                                f"Job {job_id} was {state}. "
+                                f"This may have been triggered by scancel, administrator action, or resource limits."
+                            )
+
+                        if state != "COMPLETED":
+                            # Dump full stderr content for debugging failed jobs
+                            self.logger.error(
+                                f"Job {job_id} failed with state: {state}"
+                            )
+                            sys.stderr.write("Dumping SLURM stderr log:\n")
+                            sys.stderr.flush()
+                            try:
+                                stderr_content = ssh_pool.run(
+                                    f"cat {stderr_path} 2>/dev/null || echo 'No stderr file found'"
+                                )
+                                if stderr_content.strip():
+                                    for line in stderr_content.splitlines():
+                                        sys.stderr.write(f"  {line}\n")
+                                    sys.stderr.flush()
+                                else:
+                                    sys.stderr.write("  (stderr is empty)\n")
+                                    sys.stderr.flush()
+                            except Exception as e:
+                                sys.stderr.write(f"  Failed to read stderr: {e}\n")
+                                sys.stderr.flush()
+
+                            raise RuntimeError(
+                                f"Job {job_id} did not complete successfully. Final state: {state}. "
+                                f"Check logs above for stderr output."
+                            )
+
+                        self.logger.info(f"Job {job_id} completed successfully")
+                        break
+
+                    self._interruptible_sleep(1, job_id)
                     continue
 
-                if state in TERMINAL_STATES:
-                    self.logger.info(f"Job {job_id} reached terminal state: {state}")
-
-                    # Give streaming threads time to catch up
-                    time.sleep(2)
-
-                    # Stop streaming and wait for threads to finish
-                    stop_streaming.set()
-                    stdout_thread.join(timeout=10)
-                    stderr_thread.join(timeout=10)
-
-                    if state in {"CANCELLED", "PREEMPTED"}:
-                        self.logger.warning(f"Job {job_id} was {state}")
-                        self._cancellation_requested = True
-                        raise RuntimeError(
-                            f"Job {job_id} was {state}. "
-                            f"This may have been triggered by scancel, administrator action, or resource limits."
+                except Exception as exc:
+                    # Catch async DagsterExecutionInterruptedError injected by
+                    # the multiprocess executor's termination thread.  The
+                    # injection can fire at ANY bytecode boundary (during SSH
+                    # calls, state processing, etc.), so wrapping only
+                    # time.sleep() is insufficient.
+                    name = type(exc).__name__
+                    if "Interrupt" in name or "DagsterExecution" in name:
+                        if self._is_run_canceling(op_context):
+                            raise  # User-initiated cancel — propagate
+                        _received_interrupt["received"] = False
+                        self._sigterm_received = False
+                        self.logger.info(
+                            f"Caught async {name} during monitoring – "
+                            f"Slurm job {job_id} continues, resuming polling."
                         )
-
-                    if state != "COMPLETED":
-                        # Dump full stderr content for debugging failed jobs
-                        self.logger.error(f"Job {job_id} failed with state: {state}")
-                        sys.stderr.write("Dumping SLURM stderr log:\n")
-                        sys.stderr.flush()
-                        try:
-                            stderr_content = ssh_pool.run(
-                                f"cat {stderr_path} 2>/dev/null || echo 'No stderr file found'"
-                            )
-                            if stderr_content.strip():
-                                for line in stderr_content.splitlines():
-                                    sys.stderr.write(f"  {line}\n")
-                                sys.stderr.flush()
-                            else:
-                                sys.stderr.write("  (stderr is empty)\n")
-                                sys.stderr.flush()
-                        except Exception as e:
-                            sys.stderr.write(f"  Failed to read stderr: {e}\n")
-                            sys.stderr.flush()
-
-                        raise RuntimeError(
-                            f"Job {job_id} did not complete successfully. Final state: {state}. "
-                            f"Check logs above for stderr output."
-                        )
-
-                    self.logger.info(f"Job {job_id} completed successfully")
-                    break
-
-                time.sleep(1)
-                continue
+                        continue
+                    raise
 
         finally:
             # Stop streaming and clean up
@@ -1383,7 +1789,6 @@ class SlurmPipesClient(PipesClient):
                 setattr(message_reader, "_streamed_lines", existing)
             except Exception as exc:  # pragma: no cover - best effort bookkeeping
                 self.logger.debug(f"Failed to record streamed bytes: {exc}")
-            self._current_job_id = None
 
     def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:
         """Build SSH tail command for streaming logs.

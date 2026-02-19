@@ -5,6 +5,12 @@ title: Choose an execution mode
 
 `ComputeResource` adapts Dagster assets to different deployment targets. Picking the right execution mode keeps developer feedback loops tight while fitting production constraints.
 
+:::info No persistent server required
+
+`dagster-slurm` works well as a **laptop-first tool**. Submit long-running HPC jobs, close your laptop, and check results later — Slurm jobs run to completion independently of the Dagster process. A retry reattaches to any job that was still running when Dagster stopped. See [Laptop and one-off researcher deployments](./troubleshooting.md#laptop-and-one-off-researcher-deployments) for recommended setup.
+
+:::
+
 ## Mode summary
 
 | Mode    | Description                                                | Typical use                                   | Requirements                                        |
@@ -43,6 +49,18 @@ compute = ComputeResource(
 - Each run file-packages the asset environment using `pixi-pack` (unless `pre_deployed_env_path` is set).
 - Jobs terminate as soon as the asset finishes—ideal for isolated workloads.
 - Override `launcher=` on individual assets to run Ray or Spark (WIP) workloads inside the allocation.
+
+## Executor choice and Dagster restarts
+
+:::tip Use the in-process executor for reliable Slurm runs
+
+When Dagster restarts (deploy, code reload, crash), it sends `SIGTERM` to running processes. With the **in-process executor**, `dagster-slurm` catches the signal and keeps monitoring the Slurm job — the run completes successfully.
+
+With the **multiprocess executor**, the parent process unconditionally fails the run on `SIGTERM` (this is Dagster core behaviour). The Slurm job is preserved, and on re-launch `dagster-slurm` automatically discovers the existing job on the cluster — it **never resubmits**. Configure `run_retries` in `dagster.yaml` so the daemon re-launches failed runs automatically.
+
+See [Troubleshooting: Dagster restarts and Slurm job survival](./troubleshooting.md#dagster-restarts-and-slurm-job-survival) for details.
+
+:::
 
 ## Work in progress
 
