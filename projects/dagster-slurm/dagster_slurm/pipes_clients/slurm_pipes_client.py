@@ -111,6 +111,7 @@ class SlurmPipesClient(PipesClient):
         remote_payload_path: Optional[str] = None,
         pack_cmd_override: Optional[list[str]] = None,
         pre_deployed_env_path_override: Optional[str] = None,
+        extra_files: Optional[list[str]] = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute payload on Slurm cluster with real-time log streaming.
@@ -357,6 +358,20 @@ class SlurmPipesClient(PipesClient):
                         ) from exc
                 else:
                     ssh_pool.upload_file(payload_path, remote_payload)
+
+                # Upload extra files alongside payload
+                if extra_files:
+                    self.logger.info(
+                        f"Uploading {len(extra_files)} extra file(s) to {run_dir}"
+                    )
+                    for local_file in extra_files:
+                        if not Path(local_file).is_file():
+                            raise FileNotFoundError(
+                                f"Extra file not found: {local_file}"
+                            )
+                        file_name = Path(local_file).name
+                        remote_file = f"{run_dir}/{file_name}"
+                        ssh_pool.upload_file(local_file, remote_file)
 
                 # Setup Pipes communication
                 context_injector = PipesEnvContextInjector()

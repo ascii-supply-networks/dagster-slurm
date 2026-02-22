@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Optional
+from typing import List, Optional
 
 import dagster as dg
 from pydantic import Field
@@ -61,5 +61,14 @@ class SlurmRunConfig(dg.Config):
         description=(
             "Optional remote path to an existing payload when skip_payload_upload=True. "
             "If not provided, the default remote path will be used."
+        ),
+    )
+
+    extra_files: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Additional local files to upload alongside the payload script. "
+            "Merged with global defaults and per-asset metadata. "
+            "Files are placed in the run working directory."
         ),
     )

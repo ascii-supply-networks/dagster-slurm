@@ -2,6 +2,9 @@
 
 import os
 import sys
+import tempfile
+import atexit
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -18,9 +21,6 @@ from dagster._core.pipes.client import PipesClientCompletedInvocation
 from ..helpers.message_readers import LocalMessageReader
 from ..launchers.base import ComputeLauncher
 from ..runners.local_runner import LocalRunner
-import tempfile
-import shutil
-import atexit
 
 
 class LocalPipesClient(PipesClient):
@@ -98,6 +98,7 @@ class LocalPipesClient(PipesClient):
         extra_env: Optional[Dict[str, str]] = None,
         extras: Optional[Dict[str, Any]] = None,
         extra_slurm_opts: Optional[Dict[str, Any]] = None,
+        extra_files: Optional[list[str]] = None,
     ) -> PipesClientCompletedInvocation:
         """Execute payload locally.
 
@@ -127,6 +128,28 @@ class LocalPipesClient(PipesClient):
 
         # Create working directory
         Path(working_dir).mkdir(parents=True, exist_ok=True)
+
+        # Copy extra files alongside payload
+        if extra_files:
+            self.logger.info(
+                f"Copying {len(extra_files)} extra file(s) to {working_dir}"
+            )
+            copied_files: dict[str, str] = {}
+            for local_file in extra_files:
+                if not Path(local_file).is_file():
+                    raise FileNotFoundError(f"Extra file not found: {local_file}")
+                file_name = Path(local_file).name
+                destination = Path(working_dir) / file_name
+                shutil.copy2(local_file, destination)
+                copied_files[file_name] = str(destination)
+
+            # Keep workload defaults intact while ensuring local-mode discoverability.
+            if "metaxy.toml" in copied_files:
+                resolved_extra_env = dict(extra_env) if extra_env else {}
+                resolved_extra_env.setdefault(
+                    "METAXY_CONFIG", copied_files["metaxy.toml"]
+                )
+                extra_env = resolved_extra_env
 
         # Setup Pipes communication
         context_injector = PipesEnvContextInjector()
