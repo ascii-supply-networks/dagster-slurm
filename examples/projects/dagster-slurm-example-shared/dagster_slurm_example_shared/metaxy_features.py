@@ -5,7 +5,7 @@ They are imported both by the Dagster asset layer (for store operations)
 and by HPC workloads (for MetaxyDatasource/MetaxyDatasink).
 
 Three feature pairs are defined:
-1. Simple example (DuckDB): raw_numbers -> processed_numbers
+1. Simple example (DuckDB): raw_numbers -> processed_numbers (+ partitioned variant)
 2. Ray example (DeltaLake): input_texts -> embeddings
 3. Docling example (DeltaLake): source_documents -> converted_documents
 """
@@ -35,12 +35,27 @@ class ProcessedNumbers(
     spec=mx.FeatureSpec(
         key="example/processed_numbers",
         id_columns=["sample_uid"],
-        fields=["result"],
+        fields=["result", "value_bucket"],
         deps=[RawNumbers],
     ),
 ):
     sample_uid: str
     result: float
+    value_bucket: str
+
+
+class PartitionedProcessedNumbers(
+    mx.BaseFeature,
+    spec=mx.FeatureSpec(
+        key="example/partitioned_processed_numbers",
+        id_columns=["sample_uid"],
+        fields=["result", "value_bucket"],
+        deps=[RawNumbers],
+    ),
+):
+    sample_uid: str
+    result: float
+    value_bucket: str
 
 
 # ---------------------------------------------------------------------------
