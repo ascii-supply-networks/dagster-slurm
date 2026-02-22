@@ -7,9 +7,14 @@ from dagster._utils import warnings as dagster_warnings
 warnings.filterwarnings("ignore", category=dagster_warnings.BetaWarning)
 warnings.filterwarnings("ignore", category=dagster_warnings.PreviewWarning)
 
+import os
 from pathlib import Path
 
+import metaxy as mx
+import metaxy.ext.dagster as mxd
+
 from . import defs as example_defs
+from .defs import metaxy as metaxy_defs
 from .defs import ray as ray_defs
 from .defs import shell as shell_defs
 from .resources import get_resources
@@ -17,7 +22,27 @@ from .resources import get_resources
 
 @dg.definitions
 def defs():
+    mx.init()
+
     resource_defs = get_resources()
+
+    # Per-example metaxy stores (see examples/metaxy.toml)
+    store_simple = mxd.MetaxyStoreFromConfigResource(name="simple")
+    store_ray = mxd.MetaxyStoreFromConfigResource(name="ray_embeddings")
+
+    # Example 3 demonstrates env switching: DuckDB in dev, DeltaLake in prod
+    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+    docling_store_name = (
+        "docling_prod"
+        if "supercomputer" in deployment or "production" in deployment
+        else "docling_dev"
+    )
+    store_docling = mxd.MetaxyStoreFromConfigResource(name=docling_store_name)
+
+    resource_defs["store_simple"] = store_simple
+    resource_defs["store_ray"] = store_ray
+    resource_defs["store_docling"] = store_docling
+    resource_defs["metaxy_io_manager"] = mxd.MetaxyIOManager(store=store_simple)
 
     all_assets = dg.with_source_code_references(
         [
@@ -29,6 +54,11 @@ def defs():
             ),
             *dg.load_assets_from_package_module(
                 ray_defs,
+                automation_condition=dg.AutomationCondition.eager()
+                | dg.AutomationCondition.on_missing(),
+            ),
+            *dg.load_assets_from_package_module(
+                metaxy_defs,
                 automation_condition=dg.AutomationCondition.eager()
                 | dg.AutomationCondition.on_missing(),
             ),

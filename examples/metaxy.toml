@@ -6,7 +6,7 @@ auto_create_tables = true
 [stores.simple]
 type = "metaxy.ext.metadata_stores.duckdb.DuckDBMetadataStore"
 [stores.simple.config]
-root_path = "/tmp/dagster_slurm_metaxy/simple"
+database = "/tmp/dagster_slurm_metaxy_simple.duckdb"
 
 # Example 2: metaxy + Ray embeddings (DeltaLake for distributed access)
 [stores.ray_embeddings]
@@ -18,7 +18,7 @@ root_path = "/tmp/dagster_slurm_metaxy/ray_embeddings"
 [stores.docling_dev]
 type = "metaxy.ext.metadata_stores.duckdb.DuckDBMetadataStore"
 [stores.docling_dev.config]
-root_path = "/tmp/dagster_slurm_metaxy/docling_dev"
+database = "/tmp/dagster_slurm_metaxy_docling_dev.duckdb"
 
 [stores.docling_prod]
 type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
