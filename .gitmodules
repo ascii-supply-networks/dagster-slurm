@@ -1,0 +1,3 @@
+[submodule ".agent-skills/dagster-skills"]
+	path = .agent-skills/dagster-skills
+	url = https://github.com/dagster-io/skills
