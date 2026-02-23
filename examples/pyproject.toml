@@ -224,7 +224,7 @@ description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./projects && dprint check && ty check ./projects"
+cmd = "ruff check ./projects && dprint check && ty check --python .pixi/envs/dev ./projects"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]
@@ -273,6 +273,7 @@ python-version = "3.12"
 root = [
   "projects/dagster-slurm-example",
   "projects/dagster-slurm-example-shared",
+  "projects/dagster-slurm-example-hpc-workload",
 ]
 
 [tool.ty.src]
