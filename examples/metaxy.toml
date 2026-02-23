@@ -19,7 +19,7 @@ root_path = "/tmp/dagster_slurm_metaxy/ray_embeddings"
 [stores.ray_embeddings_prod]
 type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
 [stores.ray_embeddings_prod.config]
-root_path = "/home/submitter/dagster_runs/metaxy/ray_embeddings"
+root_path = "/home/submitter/dagster_slurm_metaxy/metaxy/ray_embeddings"
 
 # Example 3: metaxy + docling — two stores to demonstrate env switching
 [stores.docling_dev]
@@ -30,4 +30,4 @@ database = "/tmp/dagster_slurm_metaxy_docling_dev.duckdb"
 [stores.docling_prod]
 type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
 [stores.docling_prod.config]
-root_path = "/tmp/dagster_slurm_metaxy/docling_prod"
+root_path = "/home/submitter/dagster_slurm_metaxy/docling_prod"

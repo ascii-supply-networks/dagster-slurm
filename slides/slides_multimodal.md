@@ -398,7 +398,7 @@ class: bg-white text-black
 ::right::
 
 <div class="grid place-items-center h-full gap-6">
-```python {1-3|5-15|17-22|all}
+`````python {1-3|5-15|17-22|all}
 class DoclingMapper:
     def __call__(self, batch: pa.Table) -> pa.Table:
         out = []

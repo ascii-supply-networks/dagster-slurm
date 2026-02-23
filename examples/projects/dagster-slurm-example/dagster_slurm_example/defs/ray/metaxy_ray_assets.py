@@ -18,9 +18,15 @@ from dagster_slurm import BashLauncher, ComputeResource, RayLauncher, SlurmRunCo
 
 
 def _ray_store_name_for_deployment(deployment: str) -> str:
+    deployment_lc = deployment.lower()
     return (
         "ray_embeddings_prod"
-        if "supercomputer" in deployment or "production" in deployment
+        if (
+            "supercomputer" in deployment_lc
+            or "staging" in deployment_lc
+            or "production" in deployment_lc
+            or "prod" in deployment_lc
+        )
         else "ray_embeddings_dev"
     )
 

@@ -53,6 +53,7 @@ pexpect = "~=4.9.0"
 dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
 dagster-ray = ">=0.4.0,<1"
 metaxy = { version = ">=0.1.0", extras = ["duckdb", "dagster"] }
+duckdb = ">=1.4.4,<2"
 
 [tool.pixi.feature.submission.dependencies]
 [tool.pixi.feature.submission.pypi-dependencies]
@@ -72,7 +73,9 @@ pylatexenc = ">=2.10,<3"
 
 [tool.pixi.feature.workload-document-processing.pypi-dependencies]
 docling = ">=2.68.0,<3"
+ibis-framework = ">=12.0.0,<13"
 duckdb = ">=1.4.4,<2"
+pyarrow-hotfix = ">=0.7,<1"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
