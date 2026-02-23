@@ -25,6 +25,7 @@ import ray
 import ray.data as rd
 from dagster_pipes import DagsterPipesError, PipesContext, open_dagster_pipes
 from metaxy.ext.ray import MetaxyDatasink
+from ray.data import ActorPoolStrategy
 
 EMBEDDING_DIM = 64
 METAXY_TIMESTAMP_COLUMNS = (
@@ -106,7 +107,7 @@ def run_embedding_pipeline(
     result_ds = ds.map_batches(
         EmbeddingMapper,
         batch_size=32,
-        concurrency=(1, 4),
+        compute=ActorPoolStrategy(min_size=1, max_size=4),
         num_cpus=0,
         batch_format="pyarrow",
     )

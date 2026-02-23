@@ -12,7 +12,9 @@ docling workload (process_documents_docling.py).
 
 import glob
 import hashlib
+import math
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,7 @@ import ray.data as rd
 from dagster_pipes import DagsterPipesError, PipesContext, open_dagster_pipes
 from dagster_slurm_example_shared import get_base_output_path
 from metaxy.ext.ray import MetaxyDatasink
+from ray.data import ActorPoolStrategy
 
 from dagster_slurm_example_hpc_workload.ray.process_documents_docling import (
     BasicDocumentConverter,
@@ -42,6 +45,8 @@ METAXY_TIMESTAMP_COLUMNS = (
     "metaxy_updated_at",
     "metaxy_deleted_at",
 )
+_PDF_PAGE_TOKEN_RE = re.compile(rb"/Type\s*/Page\b")
+_PDF_PAGES_TOKEN_RE = re.compile(rb"/Type\s*/Pages\b")
 
 
 def _coerce_metaxy_timestamps_to_utc(table: pa.Table) -> pa.Table:
@@ -69,6 +74,65 @@ def _upsert_column(table: pa.Table, name: str, array: pa.Array) -> pa.Table:
     return table.append_column(name, array)
 
 
+def _estimate_pdf_pages(path: str) -> int:
+    """Best-effort page estimate without external PDF dependencies."""
+    try:
+        data = Path(path).read_bytes()
+    except Exception:
+        return 0
+
+    page_tokens = len(_PDF_PAGE_TOKEN_RE.findall(data))
+    pages_tokens = len(_PDF_PAGES_TOKEN_RE.findall(data))
+    estimate = page_tokens - pages_tokens
+    return estimate if estimate > 0 else 0
+
+
+def _row_cost(row: dict[str, Any]) -> int:
+    page_estimate = _estimate_pdf_pages(str(row["source_path"]))
+    if page_estimate > 0:
+        return page_estimate
+
+    size_bytes = row.get("file_size_bytes")
+    if isinstance(size_bytes, (int, float)) and size_bytes > 0:
+        # Rough fallback: ~250KB ~= 1 page equivalent
+        return max(1, int(math.ceil(size_bytes / 250_000)))
+    return 1
+
+
+def _build_weighted_shards(
+    records: list[dict[str, Any]],
+    num_workers: int,
+) -> tuple[list[pa.Table], list[int]]:
+    target_shards = max(min(len(records), num_workers * 8), num_workers)
+    bins: list[dict[str, Any]] = [
+        {"cost": 0, "rows": []} for _ in range(max(target_shards, 1))
+    ]
+
+    weighted_records = [(record, _row_cost(record)) for record in records]
+    weighted_records.sort(key=lambda x: x[1], reverse=True)
+
+    for record, cost in weighted_records:
+        lightest = min(bins, key=lambda b: b["cost"])
+        lightest["rows"].append(record)
+        lightest["cost"] += cost
+
+    shard_tables: list[pa.Table] = []
+    shard_costs: list[int] = []
+    for bucket in bins:
+        rows = bucket["rows"]
+        if not rows:
+            continue
+        shard_tables.append(pl.DataFrame(rows).to_arrow())
+        shard_costs.append(int(bucket["cost"]))
+
+    return shard_tables, shard_costs
+
+
+def _sanitize_path_token(value: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]+", "_", value)
+    return token[:128] if token else "unknown"
+
+
 class MetaxyDoclingMapper:
     """Ray map_batches callable that converts documents and produces metaxy-compatible output."""
 
@@ -80,15 +144,34 @@ class MetaxyDoclingMapper:
         from docling.datamodel.document import ConversionStatus
         from docling_core.types.doc import ImageRefMode
 
+        doc_uids = batch.column(batch.schema.get_field_index("doc_uid")).to_pylist()
         source_paths = batch.column(
             batch.schema.get_field_index("source_path")
         ).to_pylist()
+        metaxy_data_versions = (
+            batch.column(
+                batch.schema.get_field_index("metaxy_data_version")
+            ).to_pylist()
+            if batch.schema.get_field_index("metaxy_data_version") >= 0
+            else [None] * len(source_paths)
+        )
+        metaxy_provenances = (
+            batch.column(batch.schema.get_field_index("metaxy_provenance")).to_pylist()
+            if batch.schema.get_field_index("metaxy_provenance") >= 0
+            else [None] * len(source_paths)
+        )
         markdown_paths: list[str] = []
         num_pages_list: list[int] = []
         status_list: list[str] = []
         elapsed_list: list[float] = []
 
-        for source_path in source_paths:
+        for idx, source_path in enumerate(source_paths):
+            doc_uid = str(doc_uids[idx])
+            version_raw = metaxy_data_versions[idx] or metaxy_provenances[idx]
+            if version_raw is None:
+                version_raw = hashlib.sha256(str(source_path).encode()).hexdigest()[:16]
+            version_key = _sanitize_path_token(str(version_raw))
+
             t0 = time.time()
             try:
                 result = self.converter.convert_one(source_path)
@@ -103,11 +186,10 @@ class MetaxyDoclingMapper:
 
                 document = result.document
                 pages = document.num_pages()
-                doc_name = Path(source_path).stem
-                out_dir = Path(self.output_dir) / doc_name
+                out_dir = Path(self.output_dir) / _sanitize_path_token(doc_uid)
                 out_dir.mkdir(parents=True, exist_ok=True)
 
-                md_path = out_dir / f"{doc_name}.md"
+                md_path = out_dir / f"{version_key}.md"
                 document.save_as_markdown(md_path, image_mode=ImageRefMode.REFERENCED)
 
                 elapsed = time.time() - t0
@@ -282,13 +364,20 @@ def run_processing(  # noqa: C901
 
     total_start_time = time.time()
 
-    # Step 4: Create Ray dataset from samples to process
-    arrow_input = _coerce_metaxy_timestamps_to_utc(to_process.to_arrow())
-    ds = rd.from_arrow(arrow_input)
-
-    target_blocks = max(min(len(to_process), num_workers * 8), num_workers)
-    if ds.num_blocks() < target_blocks:
-        ds = ds.repartition(target_blocks)
+    # Step 4: Build cost-balanced shards (page count proxy) and create Ray dataset
+    process_records = to_process.to_dicts()
+    shard_tables, shard_costs = _build_weighted_shards(
+        records=process_records,
+        num_workers=num_workers,
+    )
+    log_func(
+        "Weighted shard costs (page-proxy): "
+        + ", ".join(str(cost) for cost in shard_costs)
+    )
+    arrow_refs = [
+        ray.put(_coerce_metaxy_timestamps_to_utc(table)) for table in shard_tables
+    ]
+    ds = rd.from_arrow_refs(arrow_refs)
 
     # Step 5: Process with docling via map_batches
     log_func("Starting parallel document processing...")
@@ -296,7 +385,7 @@ def run_processing(  # noqa: C901
         MetaxyDoclingMapper,
         fn_constructor_kwargs={"output_dir": output_dir},
         batch_size=batch_size,
-        concurrency=(num_workers, num_workers),
+        compute=ActorPoolStrategy(min_size=num_workers, max_size=num_workers),
         num_cpus=0,
         num_gpus=0,
         batch_format="pyarrow",

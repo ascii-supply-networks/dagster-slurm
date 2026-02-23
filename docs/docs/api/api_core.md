@@ -20,7 +20,7 @@ Run Dagster assets on Slurm clusters with support for:
 
 ### *class* dagster_slurm.BashLauncher(\*\*data)
 
-Bases: [`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)
+Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
 Executes Python scripts via bash.
 
@@ -137,7 +137,9 @@ slurm=slurm,
 
 #### debug_mode *: `bool`*
 
-#### default_launcher *: `Annotated`[`Union`[[`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata), `PartialResource`]]*
+#### default_extra_files *: `Optional`[`List`[`str`]]*
+
+#### default_launcher *: `Annotated`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher) | `PartialResource`]*
 
 #### default_skip_payload_upload *: `bool`*
 
@@ -149,7 +151,7 @@ Get appropriate Pipes client for this mode.
 
 - **Parameters:**
   - **context** (`InitResourceContext`) – Dagster resource context
-  - **launcher** (`Optional`[[`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)]) – Override launcher (uses default if None)
+  - **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher (uses default if None)
 - **Returns:**
   LocalPipesClient or SlurmPipesClient
 
@@ -182,14 +184,14 @@ Register a newly created cluster for future reuse.
   - **gpus** (`int`) – Total GPUs in cluster
   - **memory_gb** (`int`) – Total memory in GB
 
-#### run(context, payload_path, launcher=None, extra_slurm_opts=None, resource_requirements=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, config=None, \*\*kwargs)
+#### run(context, payload_path, launcher=None, extra_slurm_opts=None, resource_requirements=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, config=None, extra_files=None, \*\*kwargs)
 
 Execute asset with optional resource overrides.
 
 - **Parameters:**
   - **context** – Dagster execution context
   - **payload_path** (`str`) – Path to Python script
-  - **launcher** (`Optional`[[`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)]) – Override launcher for this asset
+  - **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher for this asset
   - **extra_slurm_opts** (`Optional`[`Dict`[`str`, `Any`]]) – Override Slurm options (non-session mode)
     - nodes: int
     - cpus_per_task: int
@@ -208,8 +210,10 @@ Execute asset with optional resource overrides.
     or asset metadata key ‘skip_slurm_payload_upload’.
   - **remote_payload_path** (`Optional`[`str`]) – Remote path to an existing payload when skipping upload.
     Falls back to config.remote_payload_path or asset metadata.
-  - **config** (`Optional`[[`SlurmRunConfig`](#class-dagster_slurmslurmrunconfigconfig_dict)]) – Optional SlurmRunConfig for run-time configuration via launchpad.
+  - **config** (`Optional`[[`SlurmRunConfig`](#dagster_slurm.SlurmRunConfig)]) – Optional SlurmRunConfig for run-time configuration via launchpad.
     Values from config are used as defaults, but explicit parameters take precedence.
+  - **extra_files** (`Optional`[`List`[`str`]]) – List of local file paths to upload alongside the payload.
+    Merged with default_extra_files, asset metadata, and config.extra_files.
   - **\*\*kwargs** – Passed to client.run()
 - **Yields:**
   Dagster events
@@ -281,7 +285,7 @@ Only waits in queue ONCE, but each asset gets the resources it needs.
     > - mem: str (default: “4G”)
     > - gpus_per_node: int (default: 0)
     > - time_limit: str (default: “01:00:00”)
-  - **launchers** (`Optional`[`Dict`[`str`, [`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)]]) – Optional dict mapping asset_key to ComputeLauncher
+  - **launchers** (`Optional`[`Dict`[`str`, [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]]) – Optional dict mapping asset_key to ComputeLauncher
 - **Yields:**
   Dagster events
 
@@ -302,9 +306,9 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#class-dagster_slurmslurmsessionresourcedata)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id48)]*
 
-#### slurm *: `Optional`[[`SlurmResource`](#class-dagster_slurmslurmresourcedata)]*
+#### slurm *: `Optional`[[`SlurmResource`](#id22)]*
 
 #### teardown(context)
 
@@ -319,7 +323,7 @@ Ensures session resources and clusters are cleaned up.
 Validate configuration - runs during Pydantic validation.
 
 - **Return type:**
-  [`ComputeResource`](#class-dagster_slurmcomputeresourcedata)
+  [`ComputeResource`](#id0)
 
 ### *class* dagster_slurm.LocalPipesClient(launcher, base_dir=None, require_pixi=True)
 
@@ -329,7 +333,7 @@ Pipes client for local execution (dev mode).
 No SSH, no Slurm - just runs scripts locally via subprocess.
 
 - **Parameters:**
-  - **launcher** ([`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata))
+  - **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
   - **base_dir** (`Optional`[`str`])
   - **require_pixi** (`bool`)
 
@@ -337,7 +341,7 @@ No SSH, no Slurm - just runs scripts locally via subprocess.
 
 Explicitly clean up resources.
 
-#### run(context, , payload_path, python_executable=None, extra_env=None, extras=None, extra_slurm_opts=None)
+#### run(context, , payload_path, python_executable=None, extra_env=None, extras=None, extra_slurm_opts=None, extra_files=None)
 
 Execute payload locally.
 
@@ -348,6 +352,7 @@ Execute payload locally.
   - **extra_env** (`Optional`[`Dict`[`str`, `str`]]) – Additional environment variables
   - **extras** (`Optional`[`Dict`[`str`, `Any`]]) – Extra data to pass via Pipes
   - **extra_slurm_opts** (`Optional`[`Dict`[`str`, `Any`]])
+  - **extra_files** (`Optional`[`list`[`str`]])
 - **Yields:**
   Dagster events (materializations, logs, etc.)
 - **Return type:**
@@ -355,7 +360,7 @@ Execute payload locally.
 
 ### *class* dagster_slurm.RayLauncher(\*\*data)
 
-Bases: [`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)
+Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
 Ray distributed computing launcher.
 
@@ -505,7 +510,7 @@ For proxy jumps, use the `_JUMP` suffix for jump host variables (e.g.,
   - **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
   - **\_is_jump** (`bool`)
 - **Return type:**
-  [`SSHConnectionResource`](#class-dagster_slurmsshconnectionresourcedata)
+  [`SSHConnectionResource`](#id30)
 - **Returns:**
   SSHConnectionResource instance
 
@@ -573,7 +578,7 @@ Represents a running Slurm allocation.
   - **slurm_job_id** (`int`)
   - **nodes** (`List`[`str`])
   - **working_dir** (`str`)
-  - **config** ([`SlurmSessionResource`](#class-dagster_slurmslurmsessionresourcedata))
+  - **config** ([`SlurmSessionResource`](#id48))
 
 #### cancel(ssh_pool)
 
@@ -629,9 +634,9 @@ Works in two modes:
 2. Session: Multiple assets share a Slurm allocation (operator fusion)
 
 - **Parameters:**
-  - **slurm_resource** ([`SlurmResource`](#class-dagster_slurmslurmresourcedata))
-  - **launcher** ([`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata))
-  - **session_resource** (`Optional`[[`SlurmSessionResource`](#class-dagster_slurmslurmsessionresourcedata)])
+  - **slurm_resource** ([`SlurmResource`](#id22))
+  - **launcher** ([`ComputeLauncher`](#dagster_slurm.ComputeLauncher))
+  - **session_resource** (`Optional`[[`SlurmSessionResource`](#id48)])
   - **cleanup_on_failure** (`bool`)
   - **debug_mode** (`bool`)
   - **auto_detect_platform** (`bool`)
@@ -639,7 +644,7 @@ Works in two modes:
   - **pre_deployed_env_path** (`Optional`[`str`])
   - **cache_inject_globs** (`Optional`[`list`[`str`]])
 
-#### run(context, , payload_path, extra_env=None, extras=None, use_session=False, extra_slurm_opts=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, pack_cmd_override=None, pre_deployed_env_path_override=None, \*\*kwargs)
+#### run(context, , payload_path, extra_env=None, extras=None, use_session=False, extra_slurm_opts=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, pack_cmd_override=None, pre_deployed_env_path_override=None, extra_files=None, \*\*kwargs)
 
 Execute payload on Slurm cluster with real-time log streaming.
 
@@ -660,6 +665,7 @@ Execute payload on Slurm cluster with real-time log streaming.
   - **\*\*kwargs** – Additional arguments (ignored, for forward compatibility)
   - **pack_cmd_override** (`Optional`[`list`[`str`]])
   - **pre_deployed_env_path_override** (`Optional`[`str`])
+  - **extra_files** (`Optional`[`list`[`str`]])
 - **Yields:**
   Dagster events
 - **Return type:**
@@ -710,7 +716,7 @@ Combines SSH connection, queue defaults, and cluster-specific paths.
 Create from environment variables.
 
 - **Return type:**
-  [`SlurmResource`](#class-dagster_slurmslurmresourcedata)
+  [`SlurmResource`](#id22)
 
 #### *classmethod* from_env_slurm(ssh)
 
@@ -718,9 +724,9 @@ Create a SlurmResource by populating most fields from environment variables,
 but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
 - **Parameters:**
-  **ssh** ([`SSHConnectionResource`](#class-dagster_slurmsshconnectionresourcedata)) – A fully configured SSHConnectionResource instance.
+  **ssh** ([`SSHConnectionResource`](#id30)) – A fully configured SSHConnectionResource instance.
 - **Return type:**
-  [`SlurmResource`](#class-dagster_slurmslurmresourcedata)
+  [`SlurmResource`](#id22)
 
 #### model_post_init(context,)
 
@@ -734,7 +740,7 @@ It takes context as an argument since that’s what pydantic-core passes when ca
 - **Return type:**
   `None`
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#class-dagster_slurmslurmqueueconfigdata), `PartialResource`]]*
+#### queue *: `Annotated`[[`SlurmQueueConfig`](#id63) | `PartialResource`]*
 
 #### remote_base *: `Optional`[`str`]*
 
@@ -743,9 +749,9 @@ It takes context as an argument since that’s what pydantic-core passes when ca
 - **Parameters:**
   **provider** (`object`)
 - **Return type:**
-  [`SlurmResource`](#class-dagster_slurmslurmresourcedata)
+  [`SlurmResource`](#id22)
 
-#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#class-dagster_slurmsshconnectionresourcedata), `PartialResource`]]*
+#### ssh *: `Annotated`[[`SSHConnectionResource`](#id30) | `PartialResource`]*
 
 ### *class* dagster_slurm.SlurmRunConfig(\*\*config_dict)
 
@@ -777,6 +783,8 @@ Then in the Dagster launchpad, you can override:
 : - force_env_push: True to force re-upload the environment
 
 - skip_payload_upload: True to skip uploading the payload script
+
+#### extra_files *: `Optional`[`List`[`str`]]*
 
 #### force_env_push *: `bool`*
 
@@ -851,7 +859,7 @@ This is the proper Dagster resource lifecycle hook.
 - **Parameters:**
   **context** (`InitResourceContext`)
 - **Return type:**
-  [`SlurmSessionResource`](#class-dagster_slurmslurmsessionresourcedata)
+  [`SlurmSessionResource`](#id48)
 
 #### slurm *: SlurmResource*
 
@@ -869,7 +877,7 @@ This is the proper Dagster resource lifecycle hook.
 
 ### *class* dagster_slurm.SparkLauncher(\*\*data)
 
-Bases: [`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)
+Bases: [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)
 
 Apache Spark launcher.
 
@@ -973,7 +981,9 @@ slurm=slurm,
 
 #### debug_mode *: `bool`*
 
-#### default_launcher *: `Annotated`[`Union`[[`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata), `PartialResource`]]*
+#### default_extra_files *: `Optional`[`List`[`str`]]*
+
+#### default_launcher *: `Annotated`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher) | `PartialResource`]*
 
 #### default_skip_payload_upload *: `bool`*
 
@@ -985,7 +995,7 @@ Get appropriate Pipes client for this mode.
 
 - **Parameters:**
   - **context** (`InitResourceContext`) – Dagster resource context
-  - **launcher** (`Optional`[[`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)]) – Override launcher (uses default if None)
+  - **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher (uses default if None)
 - **Returns:**
   LocalPipesClient or SlurmPipesClient
 
@@ -1018,14 +1028,14 @@ Register a newly created cluster for future reuse.
   - **gpus** (`int`) – Total GPUs in cluster
   - **memory_gb** (`int`) – Total memory in GB
 
-#### run(context, payload_path, launcher=None, extra_slurm_opts=None, resource_requirements=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, config=None, \*\*kwargs)
+#### run(context, payload_path, launcher=None, extra_slurm_opts=None, resource_requirements=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, config=None, extra_files=None, \*\*kwargs)
 
 Execute asset with optional resource overrides.
 
 - **Parameters:**
   - **context** – Dagster execution context
   - **payload_path** (`str`) – Path to Python script
-  - **launcher** (`Optional`[[`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)]) – Override launcher for this asset
+  - **launcher** (`Optional`[[`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]) – Override launcher for this asset
   - **extra_slurm_opts** (`Optional`[`Dict`[`str`, `Any`]]) – Override Slurm options (non-session mode)
     - nodes: int
     - cpus_per_task: int
@@ -1044,8 +1054,10 @@ Execute asset with optional resource overrides.
     or asset metadata key ‘skip_slurm_payload_upload’.
   - **remote_payload_path** (`Optional`[`str`]) – Remote path to an existing payload when skipping upload.
     Falls back to config.remote_payload_path or asset metadata.
-  - **config** (`Optional`[[`SlurmRunConfig`](#class-dagster_slurmslurmrunconfigconfig_dict)]) – Optional SlurmRunConfig for run-time configuration via launchpad.
+  - **config** (`Optional`[[`SlurmRunConfig`](#dagster_slurm.SlurmRunConfig)]) – Optional SlurmRunConfig for run-time configuration via launchpad.
     Values from config are used as defaults, but explicit parameters take precedence.
+  - **extra_files** (`Optional`[`List`[`str`]]) – List of local file paths to upload alongside the payload.
+    Merged with default_extra_files, asset metadata, and config.extra_files.
   - **\*\*kwargs** – Passed to client.run()
 - **Yields:**
   Dagster events
@@ -1117,7 +1129,7 @@ Only waits in queue ONCE, but each asset gets the resources it needs.
     > - mem: str (default: “4G”)
     > - gpus_per_node: int (default: 0)
     > - time_limit: str (default: “01:00:00”)
-  - **launchers** (`Optional`[`Dict`[`str`, [`ComputeLauncher`](#class-dagster_slurmcomputelauncherdata)]]) – Optional dict mapping asset_key to ComputeLauncher
+  - **launchers** (`Optional`[`Dict`[`str`, [`ComputeLauncher`](#dagster_slurm.ComputeLauncher)]]) – Optional dict mapping asset_key to ComputeLauncher
 - **Yields:**
   Dagster events
 
@@ -1138,9 +1150,9 @@ compute.run_hetjob(
 )
 ```
 
-#### session *: `Optional`[[`SlurmSessionResource`](#class-dagster_slurmslurmsessionresourcedata)]*
+#### session *: `Optional`[[`SlurmSessionResource`](#id48)]*
 
-#### slurm *: `Optional`[[`SlurmResource`](#class-dagster_slurmslurmresourcedata)]*
+#### slurm *: `Optional`[[`SlurmResource`](#id22)]*
 
 #### teardown(context)
 
@@ -1155,7 +1167,7 @@ Ensures session resources and clusters are cleaned up.
 Validate configuration - runs during Pydantic validation.
 
 - **Return type:**
-  [`ComputeResource`](#class-dagster_slurmcomputeresourcedata)
+  [`ComputeResource`](#id0)
 
 ### *class* dagster_slurm.SlurmResource(\*\*data)
 
@@ -1172,7 +1184,7 @@ Combines SSH connection, queue defaults, and cluster-specific paths.
 Create from environment variables.
 
 - **Return type:**
-  [`SlurmResource`](#class-dagster_slurmslurmresourcedata)
+  [`SlurmResource`](#id22)
 
 #### *classmethod* from_env_slurm(ssh)
 
@@ -1180,9 +1192,9 @@ Create a SlurmResource by populating most fields from environment variables,
 but requires an explicit, pre-configured SSHConnectionResource to be provided.
 
 - **Parameters:**
-  **ssh** ([`SSHConnectionResource`](#class-dagster_slurmsshconnectionresourcedata)) – A fully configured SSHConnectionResource instance.
+  **ssh** ([`SSHConnectionResource`](#id30)) – A fully configured SSHConnectionResource instance.
 - **Return type:**
-  [`SlurmResource`](#class-dagster_slurmslurmresourcedata)
+  [`SlurmResource`](#id22)
 
 #### model_post_init(context,)
 
@@ -1196,7 +1208,7 @@ It takes context as an argument since that’s what pydantic-core passes when ca
 - **Return type:**
   `None`
 
-#### queue *: `Annotated`[`Union`[[`SlurmQueueConfig`](#class-dagster_slurmslurmqueueconfigdata), `PartialResource`]]*
+#### queue *: `Annotated`[[`SlurmQueueConfig`](#id63) | `PartialResource`]*
 
 #### remote_base *: `Optional`[`str`]*
 
@@ -1205,9 +1217,9 @@ It takes context as an argument since that’s what pydantic-core passes when ca
 - **Parameters:**
   **provider** (`object`)
 - **Return type:**
-  [`SlurmResource`](#class-dagster_slurmslurmresourcedata)
+  [`SlurmResource`](#id22)
 
-#### ssh *: `Annotated`[`Union`[[`SSHConnectionResource`](#class-dagster_slurmsshconnectionresourcedata), `PartialResource`]]*
+#### ssh *: `Annotated`[[`SSHConnectionResource`](#id30) | `PartialResource`]*
 
 ### *class* dagster_slurm.SSHConnectionResource(\*\*data)
 
@@ -1293,7 +1305,7 @@ For proxy jumps, use the `_JUMP` suffix for jump host variables (e.g.,
   - **prefix** (`str`) – Environment variable prefix (default: “SLURM_SSH”)
   - **\_is_jump** (`bool`)
 - **Return type:**
-  [`SSHConnectionResource`](#class-dagster_slurmsshconnectionresourcedata)
+  [`SSHConnectionResource`](#id30)
 - **Returns:**
   SSHConnectionResource instance
 
@@ -1418,7 +1430,7 @@ This is the proper Dagster resource lifecycle hook.
 - **Parameters:**
   **context** (`InitResourceContext`)
 - **Return type:**
-  [`SlurmSessionResource`](#class-dagster_slurmslurmsessionresourcedata)
+  [`SlurmSessionResource`](#id48)
 
 #### slurm *: SlurmResource*
 

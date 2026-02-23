@@ -73,7 +73,11 @@ const sidebars: SidebarsConfig = {
         },
       ],
     },
-    'slides',
+    {
+      type: 'category',
+      label: 'Slides',
+      items: ['slides', 'slides-hackathon', 'slides-multimodal'],
+    },
     {
       type: 'category',
       label: 'API Reference',
