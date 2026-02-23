@@ -72,6 +72,7 @@ pylatexenc = ">=2.10,<3"
 
 [tool.pixi.feature.workload-document-processing.pypi-dependencies]
 docling = ">=2.68.0,<3"
+duckdb = ">=1.4.4,<2"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
