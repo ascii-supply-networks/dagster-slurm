@@ -397,8 +397,7 @@ class: bg-white text-black
 
 ::right::
 
-<div class="grid place-items-center h-full gap-6">
-`````python {1-3|5-15|17-22|all}
+```python {1-3|5-15|17-22|all}
 class DoclingMapper:
     def __call__(self, batch: pa.Table) -> pa.Table:
         out = []
@@ -419,10 +418,7 @@ DoclingMapper, batch_size=8
 result_ds.write_datasink(
 MetaxyDatasink(feature="docling/converted_documents", store=store)
 )
-
-`````
-</div>
-
+```
 
 ---
 layout: default
@@ -457,7 +453,8 @@ ROUND 1: initial load
 │ avatar_003 ┆ 900.0  ┆ lt_50        │
 └────────────┴────────┴──────────────┘
 [processed increment] new=3 stale=0 orphaned=0 processed=3
-`````
+```
+````
 
 ```text
 ========================================================================

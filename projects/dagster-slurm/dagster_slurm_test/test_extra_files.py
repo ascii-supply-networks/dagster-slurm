@@ -160,8 +160,8 @@ class _CaptureLauncher(ComputeLauncher):
             allocation_context,
             activation_script,
         )
-        self.captured_working_dir = working_dir
-        self.captured_extra_env = extra_env
+        object.__setattr__(self, "captured_working_dir", working_dir)
+        object.__setattr__(self, "captured_extra_env", extra_env)
         return ExecutionPlan(
             kind=RuntimeVariant.SHELL,
             payload=["#!/bin/bash", "true"],

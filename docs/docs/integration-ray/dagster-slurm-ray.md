@@ -118,5 +118,5 @@ Keep Ray worker code close to the Dagster repository so `pixi-pack` bundles the 
 ## Next steps
 
 - Configure Spark (WIP) alongside Ray using the [Spark integration guide](../integration-spark/spark.md).
-- Explore the [API reference](../api/api_core.md#class-dagster_slurm-raylauncher) for every launcher parameter.
+- Explore the [API reference](../api/api_core.md#class-dagster_slurmraylauncherdata) for every launcher parameter.
 - Share success stories or issues on GitHub—feedback helps shape the launcher roadmap.
