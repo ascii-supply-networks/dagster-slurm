@@ -61,7 +61,6 @@
   ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
   [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
 
-
 ## v1.10.0-rc.2 (2026-02-18)
 
 ### Bug Fixes

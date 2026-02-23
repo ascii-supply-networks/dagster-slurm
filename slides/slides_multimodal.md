@@ -94,20 +94,20 @@ class: bg-white text-black
 ---
 transition: slide-left
 layout: two-cols-header
+class: px-6
 ---
 
-# <span class="text-orange-500">The gap today</span>
+# <span class="text-orange-500 !text-5xl">Challenges</span>
 
 ::left::
 
-### HPC challenges
+### HPC pain points
 
 <v-clicks>
 
-- HPC users juggle Slurm scripts, modules, queues, and limited observability.
-- Packaging and reproducing Python/ML environments can be brittle.
-- Data teams want orchestration, lineage, retries, and fast local iteration.
-- Moving one asset from laptop prototype -> supercomputer often means rewrites.
+- Inconsistent Slurm scripts and limited obsevability create high operational overhead
+- Python/ML environments break inconsistent between environments laptop and cluster/s.
+- Moving one script from prototype to HPC often means rewriting runtime glue.
 
 </v-clicks>
 
@@ -121,10 +121,9 @@ layout: two-cols-header
 
 <v-clicks>
 
-- AI pipelines are expensive: unnecessary GPU/LLM recomputes burn time, budget, and cluster capacity.
-- Multimodal assets (docs, text, embeddings, media) change at different rates and need granular tracking.
-- Metaxy provides a topological feature container with field-level provenance across dependencies.
-- Operating principle: no unnecessary work
+- Coarse invalidation causes expensive GPU/LLM recomputes.
+- Multimodal fields change at different rates and need field-level tracking.
+- Metaxy resolves `new` and `stale` rows only, so unchanged data is skipped.
 
 </v-clicks>
 
@@ -155,9 +154,13 @@ transition: fade-out
 
 # Why orchestration matters
 
-- A raw “engine” (script, notebook, or binary) is not enough once you depend on sensors, ETL, or ML training.
+<div class="text-[20px] leading-relaxed space-y-4">
+
+- A raw engine is not enough once pipelines depend on ETL, sensors, or model training.
 - Orchestrators provide dependency tracking, retries, metrics, and the control plane HPC teams lack.
-- Dagster supplies that missing layer; dagster-slurm connects it to the supercomputer’s scheduler.
+- `dagster-slurm` maps that control plane directly to Slurm scheduling primitives.
+
+</div>
 
 ---
 transition: fade-out
@@ -260,19 +263,34 @@ image: /img/process_data_asset_view.png
 backgroundSize: contain
 ---
 
----
-transition: fade
----
+## transition: fadeclass: bg-slate-950 text-white
 
-# Backend of dagster-slurm
+# <span class="!text-5xl">Architecture</span>
 
-- **Dagster remains the control plane**: assets, schedules, and policies stay centralized.
-- **Reproducible packaging**: pixi/pixi-pack builds once and runs across local, edge, and HPC.
-- **Native Slurm execution**: dagster-slurm maps runs to `sbatch`/`squeue` with cluster constraints.
-- **Single pane of glass**: Slurm state, metrics, and Pipes logs flow back into Dagster UI.
+<div class="mt-8 w-full flex items-center justify-between gap-2 text-sm">
+  <span class="rounded-lg border border-slate-500 px-3 py-2">Dagster asset</span>
+  <span>-></span>
+  <span class="rounded-lg border border-emerald-400 px-3 py-2">dagster-slurm</span>
+  <span>-></span>
+  <span class="rounded-lg border border-slate-500 px-3 py-2">Slurm job</span>
+  <span>-></span>
+  <span class="rounded-lg border border-emerald-400 px-3 py-2">Metaxy `resolve_update`</span>
+  <span>-></span>
+  <span class="rounded-lg border border-slate-500 px-3 py-2">Ray</span>
+  <span>-></span>
+  <span class="rounded-lg border border-slate-500 px-3 py-2">Docling</span>
+</div>
 
-<div class="abs-b mb-6 w-full flex justify-center">
-  <img src="/img/arch-detail-dark.svg" alt="dagster-slurm backend architecture" class="w-[62%] max-w-4xl object-contain" />
+<div class="mt-10 text-[18px] leading-relaxed space-y-3 pr-[68%]">
+
+- Dagster decides **what** to run and captures lineage/materialization.
+- dagster-slurm decides **where** to run by submitting the workload as a Slurm job.
+- Metaxy decides **what actually changed**, so Ray/Docling process only `new` + `stale`.
+
+</div>
+
+<div class="abs-br mr-6 mb-5 w-[60%] flex justify-end">
+  <img src="/img/arch-detail-dark.svg" alt="dagster-slurm backend architecture" class="w-full object-contain" />
 </div>
 
 ---
@@ -282,6 +300,10 @@ class: bg-gradient-to-br from-purple-900 to-indigo-900 text-white
 ---
 
 # Metaxy: No compute waste
+
+<div class="abs-tr mt-5 mr-6">
+  <img src="/img/metaxy.svg" alt="Metaxy" class="h-38 w-38 object-contain" />
+</div>
 
 - `dagster-slurm` solves runtime portability and observability.
 - Metaxy solves incremental correctness inside each multimodal feature.
@@ -416,7 +438,7 @@ result_ds = rd.from_arrow(to_process.to_arrow()).map_batches(
 DoclingMapper, batch_size=8
 )
 result_ds.write_datasink(
-MetaxyDatasink(feature="docling/converted_documents", store=store)
+MetaxyDatasink(feature="docling/converted_documents", store=store, config=cfg)
 )
 ```
 
@@ -425,7 +447,7 @@ layout: default
 class: bg-slate-900 text-white
 ---
 
-# Demo: incremental updates
+# <span class="!text-5xl">Demo: incremental updates</span>
 
 ````md magic-move {lines: true}
 ```text
@@ -454,7 +476,6 @@ ROUND 1: initial load
 └────────────┴────────┴──────────────┘
 [processed increment] new=3 stale=0 orphaned=0 processed=3
 ```
-````
 
 ```text
 ========================================================================
@@ -488,20 +509,26 @@ ROUND 3: no changes
 ========================================================================
 [processed increment] new=0 stale=0 orphaned=0 processed=0
 ```
+````
 
-```
 ---
 layout: center
 class: bg-emerald-950 text-white
 ---
 
-# Takeaway
+# <span class="!text-5xl">Takeaway</span>
 
-Dagster + dagster-slurm gives portable orchestration even for large-scale HPC workloads.
-Metaxy adds field-level incremental execution so multimodal costs stay bounded.
-Docling is a great tool for document processing.
+Dagster + `dagster-slurm` gives portable orchestration from local dev to HPC.
+Metaxy keeps recompute bounded by processing only `new` and `stale`.
 
-<div class="abs-b mb-8 w-full flex justify-center">
+<div class="mt-8 text-[20px] leading-relaxed">
+
+- dagster-slurm: <a href="https://github.com/ascii-supply-networks/dagster-slurm/" target="_blank">github.com/ascii-supply-networks/dagster-slurm</a>
+- Metaxy docs & Quickstart: <a href="https://docs.metaxy.io/latest/guide/quickstart/quickstart/" target="_blank">docs.metaxy.io/latest/guide/quickstart/quickstart/</a>
+
+</div>
+
+<div class="abs-b mb-6 w-full flex justify-center">
   <div class="flex items-center gap-8">
     <img src="/img/dagster.svg" alt="Dagster" class="h-32 w-32 object-contain" />
     <img src="/img/featured.png" alt="dagster-slurm" class="h-32 w-32 object-contain" />
@@ -509,4 +536,3 @@ Docling is a great tool for document processing.
     <img src="/img/docling-logo.svg" alt="Docling" class="h-32 w-32 object-contain" />
   </div>
 </div>
-```
