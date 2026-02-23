@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore", category=dagster_warnings.PreviewWarning)
 
 import os
 from pathlib import Path
+from typing import Any
 
 import metaxy as mx
 import metaxy.ext.dagster as mxd
@@ -24,7 +25,8 @@ from .resources import get_resources
 def defs():
     mx.init()
 
-    resource_defs = get_resources()
+    compute_resource_defs = get_resources()
+    resource_defs: dict[str, Any] = dict(compute_resource_defs)
 
     deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
     deployment_lc = deployment.lower()

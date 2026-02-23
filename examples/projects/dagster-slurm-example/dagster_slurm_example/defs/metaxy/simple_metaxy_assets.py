@@ -133,7 +133,7 @@ def raw_numbers(store_simple: dg.ResourceParam[mx.MetadataStore]) -> pl.DataFram
 @mxd.metaxify
 @dg.asset(
     metadata={"metaxy/feature": "example/processed_numbers"},
-    deps=[raw_numbers],
+    deps=[dg.AssetKey(["example", "raw_numbers"])],
     group_name="metaxy_simple",
 )
 def processed_numbers(  # noqa: C901
@@ -219,7 +219,7 @@ def processed_numbers(  # noqa: C901
 @mxd.metaxify
 @dg.asset(
     metadata={"metaxy/feature": "example/partitioned_processed_numbers"},
-    deps=[raw_numbers],
+    deps=[dg.AssetKey(["example", "raw_numbers"])],
     group_name="metaxy_simple",
     partitions_def=NUMBER_PARTITIONS,
 )

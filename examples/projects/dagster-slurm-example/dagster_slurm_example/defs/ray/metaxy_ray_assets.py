@@ -82,7 +82,7 @@ def input_texts(
 @mxd.metaxify
 @dg.asset(
     metadata={"metaxy/feature": "ray_example/embeddings"},
-    deps=[input_texts],
+    deps=[dg.AssetKey(["ray_example", "input_texts"])],
     group_name="metaxy_ray",
 )
 def compute_embeddings(
