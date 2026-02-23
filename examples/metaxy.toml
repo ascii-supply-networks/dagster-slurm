@@ -8,11 +8,18 @@ type = "metaxy.ext.metadata_stores.duckdb.DuckDBMetadataStore"
 [stores.simple.config]
 database = "/tmp/dagster_slurm_metaxy_simple.duckdb"
 
-# Example 2: metaxy + Ray embeddings (DeltaLake for distributed access)
-[stores.ray_embeddings]
+# Example 2: metaxy + Ray embeddings
+# - dev: local tmp path (single machine)
+# - prod: shared cluster path (login + compute nodes)
+[stores.ray_embeddings_dev]
 type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
-[stores.ray_embeddings.config]
+[stores.ray_embeddings_dev.config]
 root_path = "/tmp/dagster_slurm_metaxy/ray_embeddings"
+
+[stores.ray_embeddings_prod]
+type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
+[stores.ray_embeddings_prod.config]
+root_path = "/home/submitter/dagster_runs/metaxy/ray_embeddings"
 
 # Example 3: metaxy + docling — two stores to demonstrate env switching
 [stores.docling_dev]

@@ -11,6 +11,7 @@ Three feature pairs are defined:
 """
 
 import metaxy as mx
+import polars as pl
 
 # ---------------------------------------------------------------------------
 # Example 1: Simple metaxy + dagster (DuckDB store)
@@ -86,6 +87,28 @@ class Embeddings(
 ):
     sample_uid: str
     embedding: list[float]
+
+
+def build_ray_input_text_samples() -> pl.DataFrame:
+    """Canonical root samples for the ray_example/input_texts feature."""
+    texts = [
+        "The quick brown fox jumps over the lazy dog",
+        "Machine learning enables pattern recognition",
+        "High performance computing accelerates science",
+        "Distributed systems process data in parallel",
+        "Natural language processing understands text",
+        "Data pipelines transform raw inputs to features",
+        "Incremental processing saves compute resources",
+        "Metadata tracking ensures reproducibility",
+    ]
+    base = pl.DataFrame(
+        [{"sample_uid": f"text_{i:03d}", "text": text} for i, text in enumerate(texts)]
+    )
+    return base.with_columns(
+        pl.struct(
+            pl.col("text").cast(pl.String).alias("text"),
+        ).alias("metaxy_provenance_by_field")
+    )
 
 
 # ---------------------------------------------------------------------------

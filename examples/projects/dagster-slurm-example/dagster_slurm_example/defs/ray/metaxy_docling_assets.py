@@ -59,7 +59,21 @@ class MetaxyDoclingRunConfig(SlurmRunConfig):
 
 @mxd.metaxify
 @dg.asset(
-    metadata={"metaxy/feature": "docling/converted_documents"},
+    metadata={
+        "metaxy/feature": "docling/converted_documents",
+        "slurm_pack_cmd": [
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+            "--build-missing",
+        ],
+    },
     description="Process PDF documents with docling + metaxy incremental tracking",
     group_name="metaxy_document_processing",
 )

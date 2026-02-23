@@ -323,8 +323,6 @@ class: bg-white text-black
 
 ---
 
----
-
 # Metaxy core loop (`resolve_update`)
 
 ````md magic-move {lines: true}
@@ -386,7 +384,7 @@ class: bg-white text-black
 <ul class="space-y-2 text-[15px] leading-relaxed list-disc pl-5">
     <li><strong>Simply scale with Ray + Ray Data:</strong> table batches (`from_arrow -> map_batches`) parallelize work across cores/nodes.</li>
     <li><strong>Docling for parsing:</strong> robust PDF/document conversion with configurable model choices and output formats.</li>
-    <li><strong>Compute bounded with Metaxy:</strong> only `new` + `stale` documents are sent to Ray; unchanged rows are skipped.</li>
+    <li><strong>Keep compute bounded with Metaxy:</strong> only `new` + `stale` documents are sent to Ray; unchanged rows are skipped.</li>
   </ul>
 
 <div class="flex items-center gap-2 pt-1 mb-3 text-xs text-slate-700">

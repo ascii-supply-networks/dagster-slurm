@@ -6,17 +6,23 @@ Demonstrates metaxy incremental processing with Ray Data on HPC:
   using MetaxyDatasource/MetaxyDatasink for incremental reads/writes.
 
 In development mode, Ray runs locally. In production, it spawns a
-multi-node Ray cluster on Slurm. The HPC workload uses metaxy's
-DeltaLake store (METAXY_STORE=ray_embeddings) for distributed access.
+multi-node Ray cluster on Slurm. The HPC workload uses a deployment-
+specific metaxy store (dev vs prod) for distributed access.
 """
 
 import os
 
 import dagster as dg
-import metaxy as mx
 import metaxy.ext.dagster as mxd
-import polars as pl
-from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
+from dagster_slurm import BashLauncher, ComputeResource, RayLauncher, SlurmRunConfig
+
+
+def _ray_store_name_for_deployment(deployment: str) -> str:
+    return (
+        "ray_embeddings_prod"
+        if "supercomputer" in deployment or "production" in deployment
+        else "ray_embeddings_dev"
+    )
 
 
 @mxd.metaxify
@@ -24,44 +30,47 @@ from dagster_slurm import ComputeResource, RayLauncher, SlurmRunConfig
     metadata={"metaxy/feature": "ray_example/input_texts"},
     group_name="metaxy_ray",
 )
-def input_texts(store_ray: dg.ResourceParam[mx.MetadataStore]) -> pl.DataFrame:
-    """Register text samples in metaxy as a root feature.
+def input_texts(
+    context: dg.AssetExecutionContext,
+    compute_ray: ComputeResource,
+    config: SlurmRunConfig,
+):
+    """Register input_texts in the same runtime/store context as HPC workloads.
 
-    This lightweight asset runs on the dagster host (not HPC) and
-    registers the input data. The heavy embedding computation is
-    delegated to the downstream `compute_embeddings` asset.
+    Avoids host-local metaxy writes that may not be visible to remote Slurm jobs.
     """
-    samples = [
-        {"sample_uid": f"text_{i:03d}", "text": text}
-        for i, text in enumerate(
-            [
-                "The quick brown fox jumps over the lazy dog",
-                "Machine learning enables pattern recognition",
-                "High performance computing accelerates science",
-                "Distributed systems process data in parallel",
-                "Natural language processing understands text",
-                "Data pipelines transform raw inputs to features",
-                "Incremental processing saves compute resources",
-                "Metadata tracking ensures reproducibility",
-            ]
-        )
-    ]
-    df = pl.DataFrame(samples)
+    script_path = dg.file_relative_path(
+        __file__,
+        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/register_input_texts_metaxy.py",
+    )
+    metaxy_config = dg.file_relative_path(__file__, "../../../../../metaxy.toml")
+    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+    ray_store_name = _ray_store_name_for_deployment(deployment)
 
-    samples = df.with_columns(
-        pl.struct(
-            pl.col("text").cast(pl.String).alias("text"),
-        ).alias("metaxy_provenance_by_field")
+    context.log.info(
+        f"Registering ray_example/input_texts via launched workload.\n"
+        f"  Deployment: {deployment}\n"
+        f"  Store: {ray_store_name}"
     )
 
-    with store_ray:
-        increment = store_ray.resolve_update("ray_example/input_texts", samples=samples)
-        if len(increment.new) > 0:
-            store_ray.write("ray_example/input_texts", increment.new)
-        if len(increment.stale) > 0:
-            store_ray.write("ray_example/input_texts", increment.stale)
-
-    return samples
+    completed_run = compute_ray.run(
+        context=context,
+        payload_path=script_path,
+        config=config,
+        launcher=BashLauncher(),
+        extra_files=[metaxy_config],
+        extra_env={
+            "METAXY_STORE": ray_store_name,
+            "DAGSTER_DEPLOYMENT": deployment,
+            "SLURM_SUPERCOMPUTER_SITE": os.getenv("SLURM_SUPERCOMPUTER_SITE", ""),
+        },
+        extra_slurm_opts={
+            "nodes": 1,
+            "cpus_per_task": 1,
+            "mem": "2G",
+        },
+    )
+    yield from completed_run.get_results()
 
 
 @mxd.metaxify
@@ -74,7 +83,6 @@ def compute_embeddings(
     context: dg.AssetExecutionContext,
     compute_ray: ComputeResource,
     config: SlurmRunConfig,
-    store_ray: dg.ResourceParam[mx.MetadataStore],
 ):
     """Compute text embeddings using Ray Data with metaxy incremental processing.
 
@@ -83,7 +91,7 @@ def compute_embeddings(
     2. Computes embeddings with Ray map_batches()
     3. Writes results via MetaxyDatasink
 
-    The HPC workload uses the ray_embeddings store (DeltaLake) for
+    The HPC workload uses the deployment-selected ray_embeddings store for
     distributed access across Ray workers.
     """
     script_path = dg.file_relative_path(
@@ -97,33 +105,14 @@ def compute_embeddings(
     )
 
     deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+    ray_store_name = _ray_store_name_for_deployment(deployment)
 
     context.log.info(
         f"Starting metaxy-enabled embedding computation...\n"
         f"  Deployment: {deployment}\n"
-        f"  Feature: ray_example/embeddings"
+        f"  Feature: ray_example/embeddings\n"
+        f"  Store: {ray_store_name}"
     )
-
-    with store_ray:
-        increment = store_ray.resolve_update("ray_example/embeddings")
-        new_count = len(increment.new)
-        stale_count = len(increment.stale)
-    total_count = new_count + stale_count
-
-    if total_count == 0:
-        context.log.info(
-            "No new/stale records for ray_example/embeddings; skipping Ray launcher."
-        )
-        yield dg.MaterializeResult(
-            metadata={
-                "status": "up_to_date",
-                "new_samples": new_count,
-                "stale_samples": stale_count,
-                "total_samples": total_count,
-                "execution_mode": "skipped_external",
-            }
-        )
-        return
 
     completed_run = compute_ray.run(
         context=context,
@@ -132,7 +121,7 @@ def compute_embeddings(
         launcher=ray_launcher,
         extra_files=[metaxy_config],
         extra_env={
-            "METAXY_STORE": "ray_embeddings",
+            "METAXY_STORE": ray_store_name,
             "DAGSTER_DEPLOYMENT": deployment,
             "SLURM_SUPERCOMPUTER_SITE": os.getenv("SLURM_SUPERCOMPUTER_SITE", ""),
         },

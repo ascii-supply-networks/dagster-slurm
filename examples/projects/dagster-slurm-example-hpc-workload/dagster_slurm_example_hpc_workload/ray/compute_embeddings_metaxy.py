@@ -13,12 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import metaxy as mx
-
-# metaxy.toml is uploaded as sibling of this script via extra_files
-os.environ.setdefault("METAXY_CONFIG", str(Path(__file__).parent / "metaxy.toml"))
-# Import shared feature definitions to register them with metaxy
 import dagster_slurm_example_shared.metaxy_features  # noqa: F401
+import metaxy as mx
 import polars as pl
 import pyarrow as pa
 import ray
@@ -26,6 +22,15 @@ import ray.data as rd
 from dagster_pipes import DagsterPipesError, PipesContext, open_dagster_pipes
 from metaxy.ext.ray import MetaxyDatasink
 from ray.data import ActorPoolStrategy
+
+# metaxy.toml is uploaded via extra_files. Prefer sibling path, fallback to CWD.
+_script_cfg = Path(__file__).parent / "metaxy.toml"
+_cwd_cfg = Path.cwd() / "metaxy.toml"
+if "METAXY_CONFIG" not in os.environ:
+    if _script_cfg.exists():
+        os.environ["METAXY_CONFIG"] = str(_script_cfg)
+    elif _cwd_cfg.exists():
+        os.environ["METAXY_CONFIG"] = str(_cwd_cfg)
 
 EMBEDDING_DIM = 64
 METAXY_TIMESTAMP_COLUMNS = (
@@ -153,7 +158,7 @@ def main():
 
     # Allow overriding the metaxy store via env or extras
     store_name = _get_extra("METAXY_STORE") or os.getenv(
-        "METAXY_STORE", "ray_embeddings"
+        "METAXY_STORE", "ray_embeddings_dev"
     )
     os.environ["METAXY_STORE"] = store_name
 

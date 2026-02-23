@@ -26,12 +26,18 @@ def defs():
 
     resource_defs = get_resources()
 
+    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
+
     # Per-example metaxy stores (see examples/metaxy.toml)
     store_simple = mxd.MetaxyStoreFromConfigResource(name="simple")
-    store_ray = mxd.MetaxyStoreFromConfigResource(name="ray_embeddings")
+    ray_store_name = (
+        "ray_embeddings_prod"
+        if "supercomputer" in deployment or "production" in deployment
+        else "ray_embeddings_dev"
+    )
+    store_ray = mxd.MetaxyStoreFromConfigResource(name=ray_store_name)
 
     # Example 3 demonstrates env switching: DuckDB in dev, DeltaLake in prod
-    deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
     docling_store_name = (
         "docling_prod"
         if "supercomputer" in deployment or "production" in deployment

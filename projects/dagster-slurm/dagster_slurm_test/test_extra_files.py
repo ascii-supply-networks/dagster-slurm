@@ -7,7 +7,7 @@ import pytest
 
 from dagster_slurm.launchers import BashLauncher
 from dagster_slurm.config.runtime import RuntimeVariant
-from dagster_slurm.launchers.base import ExecutionPlan
+from dagster_slurm.launchers.base import ComputeLauncher, ExecutionPlan
 from dagster_slurm.resources.compute import ComputeResource
 
 
@@ -137,15 +137,29 @@ def test_resolve_extra_files_none_when_empty():
 # ── Integration tests: local mode ──
 
 
-class _CaptureLauncher:
+class _CaptureLauncher(ComputeLauncher):
     """Test launcher to capture resolved env and working dir."""
 
     captured_extra_env: dict[str, str] | None = None
     captured_working_dir: str | None = None
 
-    def prepare_execution(self, **kwargs) -> ExecutionPlan:
-        working_dir = kwargs["working_dir"]
-        extra_env = kwargs.get("extra_env")
+    def prepare_execution(
+        self,
+        payload_path: str,
+        python_executable: str,
+        working_dir: str,
+        pipes_context: dict[str, str],
+        extra_env: dict[str, str] | None = None,
+        allocation_context: dict[str, object] | None = None,
+        activation_script: str | None = None,
+    ) -> ExecutionPlan:
+        del (
+            payload_path,
+            python_executable,
+            pipes_context,
+            allocation_context,
+            activation_script,
+        )
         self.captured_working_dir = working_dir
         self.captured_extra_env = extra_env
         return ExecutionPlan(
