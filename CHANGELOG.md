@@ -2,6 +2,65 @@
 
 <!-- version list -->
 
+## v1.10.0-rc.3 (2026-02-23)
+
+### Bug Fixes
+
+- Add missing dependency ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Generate data also on slurm
+  ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Make it work somehow ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Refine cancellation vs automatic continuation for long running jobs where dagster is restarted
+  ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Refine cancellation vs automatic continuation for long running jobs where dagster is restarted
+  ([#98](https://github.com/ascii-supply-networks/dagster-slurm/pull/98),
+  [`93e6a2f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/93e6a2f3e3ac63361f2ee63225b397a068e97b44))
+
+- Update deps for demo ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+### Features
+
+- Add agster skills ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Cancellation AND continued remote execution when dagster is restarted
+  ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Cancellation AND continued remote execution when dagster is restarted
+  ([#98](https://github.com/ascii-supply-networks/dagster-slurm/pull/98),
+  [`93e6a2f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/93e6a2f3e3ac63361f2ee63225b397a068e97b44))
+
+- Docling example complete (for local execution)
+  ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- First step towards skills here
+  ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Metaxy basic version ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Mini ray example ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Slides first version ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
+- Webinar demonstration multimodal document processing
+  ([#101](https://github.com/ascii-supply-networks/dagster-slurm/pull/101),
+  [`c561bbe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c561bbe5cdcb2fd10b7d74121a065030a7aa5e1b))
+
 ## v1.10.0-rc.2 (2026-02-18)
 
 ### Bug Fixes
