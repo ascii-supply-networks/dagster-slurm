@@ -281,6 +281,10 @@ layout: intro
 class: bg-gradient-to-br from-purple-900 to-indigo-900 text-white
 ---
 
+<div class="abs-tr mt-2 mr-4">
+  <img src="/img/metaxy.svg" alt="Metaxy" class="h-32 w-32 object-contain" />
+</div>
+
 # Metaxy: No compute waste
 
 - `dagster-slurm` solves runtime portability and observability.
@@ -370,7 +374,7 @@ layout: two-cols-header
 class: bg-white text-black
 ---
 
-# Minimal ray data Docling mapper
+# Docling mapper (ray-data)
 
 <div class="abs-tr mt-4 mr-6">
   <img src="/img/docling-logo.svg" alt="Docling" class="h-16 object-contain" />
@@ -427,7 +431,7 @@ class: bg-slate-900 text-white
 
 # Demo: incremental updates
 
-````md magic-move {lines: true}
+````md magic-move {lines: false}
 ```text
 ========================================================================
 ROUND 1: initial load
@@ -454,7 +458,6 @@ ROUND 1: initial load
 └────────────┴────────┴──────────────┘
 [processed increment] new=3 stale=0 orphaned=0 processed=3
 ```
-````
 
 ```text
 ========================================================================
@@ -488,8 +491,8 @@ ROUND 3: no changes
 ========================================================================
 [processed increment] new=0 stale=0 orphaned=0 processed=0
 ```
+````
 
-```
 ---
 layout: center
 class: bg-emerald-950 text-white
@@ -509,4 +512,3 @@ Docling is a great tool for document processing.
     <img src="/img/docling-logo.svg" alt="Docling" class="h-32 w-32 object-contain" />
   </div>
 </div>
-```
