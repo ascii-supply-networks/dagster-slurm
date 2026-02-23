@@ -488,6 +488,27 @@ class RayLauncher(ComputeLauncher):
         wait "$pid"
       fi
     }}
+    # Determine Ray temp directory FIRST (short path to avoid 107-byte socket limit)
+    # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
+    # Unix sockets don't work across NFS.
+    # This MUST be defined before the cleanup function, trap, and background
+    # log sync that all reference $RAY_CLUSTER_TMP.
+    if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
+        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
+    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
+    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
+    else
+        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
+    fi
+    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
+    mkdir -p "$RAY_CLUSTER_TMP"
+
     cleanup_node() {{
         echo "[$({date_fmt})] Worker on $(hostname) shutting down..."
 
@@ -517,7 +538,7 @@ class RayLauncher(ComputeLauncher):
         run_with_timeout 30 ray stop --force 2>/dev/null || true
 
         # Cleanup temp dir
-        rm -rf $RAY_CLUSTER_TMP 2>/dev/null || true
+        rm -rf "$RAY_CLUSTER_TMP" 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Worker cleanup complete"
         exit 0
     }}
@@ -543,25 +564,6 @@ class RayLauncher(ComputeLauncher):
     }} &
     WORKER_LOG_SYNC_PID=$!
     echo "[$({date_fmt})] Started background worker log sync (PID: $WORKER_LOG_SYNC_PID)"
-
-    # Determine Ray temp directory (short path to avoid 107-byte socket limit)
-    # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
-    # Unix sockets don't work across NFS.
-    if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
-        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
-    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
-    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
-    else
-        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
-    fi
-    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
-    mkdir -p "$RAY_CLUSTER_TMP"
 
     echo "Worker on $(hostname) starting and connecting to $ip_head..."
     ray start {worker_cmd_str} --block
@@ -629,6 +631,27 @@ class RayLauncher(ComputeLauncher):
     WORKER_PIDS=()
     worker_nodes=()
 
+    # Determine Ray temp directory FIRST (short path to avoid 107-byte socket limit)
+    # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
+    # Unix sockets don't work across NFS.
+    # This MUST be defined before the cleanup function, trap, and background
+    # log sync that all reference $RAY_CLUSTER_TMP.
+    if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
+        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
+    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
+    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
+    else
+        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
+        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
+    fi
+    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
+    mkdir -p "$RAY_CLUSTER_TMP"
+
     cleanup() {{
         exit_code=$?
         echo "======================================="
@@ -681,7 +704,7 @@ class RayLauncher(ComputeLauncher):
         done
 
         echo "[$({date_fmt})] Cleaning up temporary files..."
-        rm -rf $RAY_CLUSTER_TMP 2>/dev/null || true
+        rm -rf "$RAY_CLUSTER_TMP" 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Shutdown complete"
     }}
     trap cleanup EXIT SIGINT SIGTERM
@@ -706,25 +729,6 @@ class RayLauncher(ComputeLauncher):
     }} &
     LOG_SYNC_PID=$!
     echo "[$({date_fmt})] Started background log sync (PID: $LOG_SYNC_PID)"
-
-    # Determine Ray temp directory (short path to avoid 107-byte socket limit)
-    # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
-    # Unix sockets don't work across NFS.
-    if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
-        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
-    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
-    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
-    else
-        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
-    fi
-    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
-    mkdir -p "$RAY_CLUSTER_TMP"
 
     # ===== 1. Start Head Node =====
     echo "[$({date_fmt})] Starting Ray head on this node ($(hostname)) at $ip_head..."

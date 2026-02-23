@@ -427,6 +427,30 @@ def test_find_reattachable_job_returns_completed_job():
     assert result["job_id"] == "42"
 
 
+def test_find_reattachable_job_skips_completed_failed_run_candidate():
+    """Fresh re-materialization should not adopt COMPLETED jobs from old failed runs."""
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = None
+
+    failed_run = MagicMock()
+    failed_run.tags = {
+        _TAG_JOB_ID: "99",
+        _TAG_RUN_DIR: "/tmp/failed_run_dir",
+        _TAG_ASSET_KEY: "my_asset",
+    }
+    mock_op_context.instance.get_runs.return_value = [failed_run]
+
+    mock_ssh_pool = MagicMock()
+
+    with patch.object(client, "_get_job_state", return_value="COMPLETED"):
+        result = client._find_reattachable_job(
+            mock_op_context, mock_ssh_pool, "my_asset"
+        )
+
+    assert result is None
+
+
 def test_find_reattachable_job_returns_none_when_job_unknown():
     """_find_reattachable_job returns None when Slurm has no record of
     the job (empty state from squeue + sacct)."""

@@ -607,7 +607,7 @@ class SlurmPipesClient(PipesClient):
         if op_context is None:
             return None
 
-        candidates: list[Dict[str, str]] = []
+        candidates: list[Dict[str, Any]] = []
 
         # Strategy 1: Retry path – check parent run's tags
         try:
@@ -619,6 +619,7 @@ class SlurmPipesClient(PipesClient):
                         {
                             "job_id": parent_run.tags[_TAG_JOB_ID],
                             "run_dir": parent_run.tags.get(_TAG_RUN_DIR, ""),
+                            "allow_completed": True,
                         }
                     )
         except Exception as exc:
@@ -642,6 +643,7 @@ class SlurmPipesClient(PipesClient):
                     rdir = run.tags.get(_TAG_RUN_DIR)
                     if jid and rdir:
                         candidates.append({"job_id": jid, "run_dir": rdir})
+                        candidates[-1]["allow_completed"] = False
             except Exception as exc:
                 self.logger.debug(f"Could not query failed runs: {exc}")
 
@@ -649,9 +651,17 @@ class SlurmPipesClient(PipesClient):
         # An empty state means the job_id is completely unknown — skip it.
         for cand in candidates:
             try:
-                state = self._get_job_state(int(cand["job_id"]), ssh_pool)
-                if state:
-                    return cand
+                state = self._get_job_state(int(cand["job_id"]), ssh_pool).upper()
+                if not state:
+                    continue
+                if state == "COMPLETED" and not bool(cand.get("allow_completed")):
+                    # Fresh re-materializations must not adopt completed jobs from
+                    # old failed runs. Only retry parent-run candidates may do that.
+                    continue
+                return {
+                    "job_id": str(cand["job_id"]),
+                    "run_dir": str(cand.get("run_dir", "")),
+                }
             except (ValueError, TypeError):
                 continue
 

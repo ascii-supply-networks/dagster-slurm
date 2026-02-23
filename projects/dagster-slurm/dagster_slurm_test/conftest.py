@@ -191,6 +191,53 @@ def slurm_cluster_ready():
     pytest.fail("SLURM cluster is not ready")
 
 
+def _cleanup_ray_on_slurm_nodes():
+    """Kill any lingering Ray processes on all Docker Slurm compute nodes.
+
+    This prevents port conflicts and stale state when subsequent tests
+    start new Ray clusters on the same nodes.
+    """
+    for container in ("c1", "c2"):
+        try:
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    "ray stop --force 2>/dev/null; "
+                    "pkill -9 -f 'ray::' 2>/dev/null; "
+                    "pkill -9 -f 'raylet' 2>/dev/null; "
+                    "pkill -9 -f 'gcs_server' 2>/dev/null; "
+                    "rm -rf /tmp/ray /tmp/r[0-9]* 2>/dev/null; "
+                    "true",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            pass
+
+
+@pytest.fixture(autouse=True)
+def cleanup_ray_between_tests(request):
+    """Clean up Ray processes on Slurm nodes before each test that uses Ray.
+
+    This fixture runs for every test in a module marked with
+    ``needs_slurm_docker``.  It checks if the test name contains "ray"
+    and, if so, kills any lingering Ray processes before the test starts.
+    This avoids port conflicts and stale cluster state between tests.
+    """
+    if "ray" in request.node.name.lower():
+        _cleanup_ray_on_slurm_nodes()
+    yield
+    # Post-test cleanup for Ray tests to ensure clean state for the next test
+    if "ray" in request.node.name.lower():
+        _cleanup_ray_on_slurm_nodes()
+
+
 @pytest.fixture(scope="session")
 def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
     """Provision a temporary SSH key for the Docker SLURM cluster."""

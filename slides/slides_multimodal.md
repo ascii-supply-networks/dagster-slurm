@@ -263,7 +263,9 @@ image: /img/process_data_asset_view.png
 backgroundSize: contain
 ---
 
-## transition: fadeclass: bg-slate-950 text-white
+---
+transition: fadeclass: bg-slate-950 text-white
+---
 
 # <span class="!text-5xl">Architecture</span>
 
