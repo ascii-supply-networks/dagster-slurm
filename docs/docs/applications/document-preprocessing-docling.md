@@ -222,7 +222,7 @@ Automatic model warmup requires **outbound internet connectivity** from compute 
 
 - ✅ Local development environments
 - ✅ HPC clusters with unrestricted compute node internet access
-- ❌ Air-gapped or restricted clusters (use [Manual Pre-download](#manual-pre-download-optional) instead)
+- ❌ Air-gapped or restricted clusters (use [Manual Pre-download](#pre-downloading-models-for-restricted-clusters) instead)
 
 Consult your HPC administrator about compute node network policies.
 :::
@@ -618,7 +618,7 @@ View these metrics in the Dagster UI under the materialization event for each as
 ## Next Steps
 
 - **Ray Integration**: Combine with [other Ray workloads](../integration-ray/dagster-slurm-ray.md) in pipelines
-- **API Reference**: Explore [RayLauncher parameters](../api/api_core.md#class-dagster_slurm-raylauncher)
+- **API Reference**: Explore [RayLauncher parameters](../api/api_core.md#class-dagster_slurmraylauncherdata)
 - **Original Example**: Review [duckpond's docling implementation](https://github.com/l-mds/duckpond/tree/main/projects/100_combined/ai_example/ai_example/defs/document_ai)
 
 ## Source Code

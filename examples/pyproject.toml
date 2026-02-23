@@ -52,6 +52,8 @@ pexpect = "~=4.9.0"
 [tool.pixi.feature.my-infrastructure.pypi-dependencies]
 dagster-slurm-example = { path = "./projects/dagster-slurm-example", editable = true }
 dagster-ray = ">=0.4.0,<1"
+metaxy = { version = ">=0.1.0", extras = ["duckdb", "dagster"] }
+duckdb = ">=1.4.4,<2"
 
 [tool.pixi.feature.submission.dependencies]
 [tool.pixi.feature.submission.pypi-dependencies]
@@ -64,12 +66,16 @@ ray = { version = "~=2.53.0", extras = ["data", "default"] }
 dagster-ray = ">=0.4.0,<0.25"
 dagster-pipes = "~=1.12.0"
 dagster = "~=1.12.0"
+metaxy = { version = ">=0.1.0", extras = ["delta", "ray"] }
 
 [tool.pixi.feature.workload-document-processing.dependencies]
 pylatexenc = ">=2.10,<3"
 
 [tool.pixi.feature.workload-document-processing.pypi-dependencies]
 docling = ">=2.68.0,<3"
+ibis-framework = ">=12.0.0,<13"
+duckdb = ">=1.4.4,<2"
+pyarrow-hotfix = ">=0.7,<1"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
@@ -218,7 +224,7 @@ description = "Format python files"
 env = { RUST_LOG = "warn" }
 
 [tool.pixi.tasks.lint]
-cmd = "ruff check ./projects && dprint check && ty check ./projects"
+cmd = "ruff check ./projects && dprint check && ty check --python .pixi/envs/dev ./projects"
 description = "Validate formatting and type check python files"
 
 [tool.pixi.tasks.test]
@@ -267,6 +273,7 @@ python-version = "3.12"
 root = [
   "projects/dagster-slurm-example",
   "projects/dagster-slurm-example-shared",
+  "projects/dagster-slurm-example-hpc-workload",
 ]
 
 [tool.ty.src]

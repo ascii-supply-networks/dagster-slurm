@@ -19,7 +19,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3.4,<9",
+  "pytest>=8.3.4,<10",
   "pytest-mock>=3.14.0,<4",
   "pytest-cov~=7.0.0",
   "ruff>=0.12.8,<1",
@@ -43,7 +43,7 @@ dprint = ">=0.50.0,<1"
 uv = ">=0.8.6"
 build = ">=1.3.0"
 dagster-slurm = { path = "./projects/dagster-slurm", editable = true }
-pytest = ">=8.3.4,<9"
+pytest = ">=8.3.4,<10"
 pytest-cov = "~=7.0.0"
 pexpect = "~=4.9.0"
 ty = ">=0.0.4,<1"
@@ -165,9 +165,15 @@ cwd = "slides"
 depends-on = ["slides-install"]
 description = "build static slides with base"
 
+[tool.pixi.feature.docs.tasks.slides-build-multimodal-base]
+cmd = "bun run build-multimodal-base"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "build static multimodal slides with base"
+
 [tool.pixi.feature.docs.tasks.docs-collect-slides]
-cmd = "bash -lc 'set -euo pipefail; rm -rf docs/static/slides; cp -R slides/dist/. docs/static/slides'"
-depends-on = ["slides-build-base"]
+cmd = "bash -lc 'set -euo pipefail; rm -rf docs/static/slides docs/static/slides-multimodal; cp -R slides/dist/. docs/static/slides; cp -R slides/dist-multimodal/. docs/static/slides-multimodal'"
+depends-on = ["slides-build-base", "slides-build-multimodal-base"]
 description = "Copy Slidev dist into Docusaurus static/"
 
 [tool.commitizen]

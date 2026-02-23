@@ -1,0 +1,33 @@
+project = "dagster_slurm_example"
+entrypoints = ["dagster_slurm_example_shared.metaxy_features"]
+auto_create_tables = true
+
+# Example 1: Simple metaxy + dagster (DuckDB, lightweight local store)
+[stores.simple]
+type = "metaxy.ext.metadata_stores.duckdb.DuckDBMetadataStore"
+[stores.simple.config]
+database = "/tmp/dagster_slurm_metaxy_simple.duckdb"
+
+# Example 2: metaxy + Ray embeddings
+# - dev: local tmp path (single machine)
+# - prod: shared cluster path (login + compute nodes)
+[stores.ray_embeddings_dev]
+type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
+[stores.ray_embeddings_dev.config]
+root_path = "/tmp/dagster_slurm_metaxy/ray_embeddings"
+
+[stores.ray_embeddings_prod]
+type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
+[stores.ray_embeddings_prod.config]
+root_path = "/home/submitter/dagster_slurm_metaxy/metaxy/ray_embeddings"
+
+# Example 3: metaxy + docling — two stores to demonstrate env switching
+[stores.docling_dev]
+type = "metaxy.ext.metadata_stores.duckdb.DuckDBMetadataStore"
+[stores.docling_dev.config]
+database = "/tmp/dagster_slurm_metaxy_docling_dev.duckdb"
+
+[stores.docling_prod]
+type = "metaxy.ext.metadata_stores.delta.DeltaMetadataStore"
+[stores.docling_prod.config]
+root_path = "/home/submitter/dagster_slurm_metaxy/docling_prod"

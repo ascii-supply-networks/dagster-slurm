@@ -95,3 +95,7 @@ def my_asset(context: dg.AssetExecutionContext, compute: ComputeResource):
 - Python 3.12, 4-space indentation
 - Type hints on public APIs
 - Conventional Commits (`feat:`, `fix:`, `chore:`)
+
+## Skills
+
+See `SKILLS.md` for the repository-local skills index and paths.

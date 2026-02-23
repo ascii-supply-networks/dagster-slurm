@@ -112,6 +112,16 @@ class ComputeResource(ConfigurableResource):
         ),
     )
 
+    default_extra_files: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "List of local file paths to upload alongside the payload for every run. "
+            "Files are placed in the run directory as siblings of the payload. "
+            "Can be extended per-asset via metadata key 'slurm_extra_files' or "
+            "per-run via extra_files parameter on run()."
+        ),
+    )
+
     # Production mode settings (pre-deployed payloads)
     default_skip_payload_upload: bool = Field(
         default=False,
@@ -427,6 +437,73 @@ class ComputeResource(ConfigurableResource):
 
         return skip_upload, remote_path
 
+    def _resolve_extra_files(
+        self,
+        context,
+        explicit_files: Optional[List[str]],
+        config_files: Optional[List[str]],
+    ) -> Optional[List[str]]:
+        """Resolve and merge extra_files from all sources.
+
+        Merge order (additive):
+        1. self.default_extra_files (global)
+        2. Asset metadata 'slurm_extra_files' (declarative per-asset)
+        3. config_files from SlurmRunConfig (per-run via launchpad)
+        4. explicit_files parameter (per-call)
+
+        Returns deduplicated list of absolute paths, or None if empty.
+        Raises ValueError on basename collisions (different files with same name).
+        """
+        collected: list[str] = []
+
+        if self.default_extra_files:
+            collected.extend(self.default_extra_files)
+
+        # Check asset metadata
+        metadata_by_key = self._get_metadata_by_key(context)
+        if metadata_by_key:
+            asset_keys = self._extract_asset_keys(context)
+            for key in asset_keys:
+                metadata = metadata_by_key.get(key, {}) if metadata_by_key else {}
+                if isinstance(metadata, dict):
+                    meta_files = metadata.get("slurm_extra_files")
+                    if isinstance(meta_files, list):
+                        collected.extend(str(f) for f in meta_files)
+
+        if config_files:
+            collected.extend(config_files)
+
+        if explicit_files:
+            collected.extend(explicit_files)
+
+        if not collected:
+            return None
+
+        # Resolve to absolute paths and deduplicate
+        seen: set[str] = set()
+        resolved: list[str] = []
+        for f in collected:
+            abs_path = str(Path(f).resolve())
+            if abs_path not in seen:
+                seen.add(abs_path)
+                resolved.append(abs_path)
+
+        if not resolved:
+            return None
+
+        # Validate no basename collisions
+        basename_to_path: dict[str, str] = {}
+        for abs_path in resolved:
+            name = Path(abs_path).name
+            if name in basename_to_path and basename_to_path[name] != abs_path:
+                raise ValueError(
+                    f"extra_files basename collision: '{name}' maps to both "
+                    f"'{basename_to_path[name]}' and '{abs_path}'"
+                )
+            basename_to_path[name] = abs_path
+
+        return resolved
+
     def _resolve_env_overrides(
         self, context
     ) -> tuple[Optional[list[str]], Optional[str]]:
@@ -513,6 +590,7 @@ class ComputeResource(ConfigurableResource):
         skip_payload_upload: Optional[bool] = None,
         remote_payload_path: Optional[str] = None,
         config: Optional[SlurmRunConfig] = None,
+        extra_files: Optional[List[str]] = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute asset with optional resource overrides.
@@ -541,6 +619,8 @@ class ComputeResource(ConfigurableResource):
                 Falls back to config.remote_payload_path or asset metadata.
             config: Optional SlurmRunConfig for run-time configuration via launchpad.
                 Values from config are used as defaults, but explicit parameters take precedence.
+            extra_files: List of local file paths to upload alongside the payload.
+                Merged with default_extra_files, asset metadata, and config.extra_files.
             **kwargs: Passed to client.run()
 
         Yields:
@@ -651,6 +731,16 @@ class ComputeResource(ConfigurableResource):
                 effective_env_path=effective_env_path,
             )
         )
+
+        # Resolve extra_files from all sources
+        config_extra_files = config.extra_files if config is not None else None
+        resolved_extra_files = self._resolve_extra_files(
+            context=context,
+            explicit_files=extra_files,
+            config_files=config_extra_files,
+        )
+        if resolved_extra_files:
+            kwargs["extra_files"] = resolved_extra_files
 
         # Create client with effective launcher (default or override)
         client = self.get_pipes_client(context, launcher=effective_launcher)

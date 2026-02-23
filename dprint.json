@@ -16,7 +16,8 @@
     "**/package-lock.json",
     "**/bun.lockb",
     "**/.ruff_cache/**",
-    "**/.venv/**"
+    "**/.venv/**",
+    "**/.agent-skills/dagster-skills/**"
   ],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.17.8.wasm",

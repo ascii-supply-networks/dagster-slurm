@@ -4,12 +4,14 @@
   "private": true,
   "scripts": {
     "build": "slidev build",
+    "build-multimodal": "slidev build slides_multimodal.md --out dist-multimodal",
     "build-base": "slidev build --base ./",
+    "build-multimodal-base": "slidev build slides_multimodal.md --base ./ --out dist-multimodal",
     "dev": "slidev --open --port 5555",
     "export": "slidev export --with-clicks --timeout 120000"
   },
   "dependencies": {
-    "@slidev/cli": "^52.11.3",
+    "@slidev/cli": "^52.12.0",
     "@slidev/theme-default": "latest",
     "@slidev/theme-seriph": "latest",
     "vue": "^3.5.25"

@@ -1,6 +1,7 @@
 default_stages: [pre-commit]
 default_install_hook_types: [pre-commit, commit-msg]
 minimum_pre_commit_version: "3.0.0"
+exclude: ^\.agent-skills/dagster-skills/
 
 repos:
   # examples
@@ -32,7 +33,7 @@ repos:
         entry: sh -c 'pixi run -e build --frozen dprint fmt'
         language: system
         files: \.(md|json|toml|yaml|yml)$
-        exclude: ^(pixi\.lock|uv\.lock|package-lock\.json|bun\.lockb)$
+        exclude: ^(pixi\.lock|uv\.lock|package-lock\.json|bun\.lockb|\.agent-skills/dagster-skills/.*)$
         pass_filenames: false
         require_serial: false
 
@@ -41,12 +42,12 @@ repos:
     hooks:
       - id: check-merge-conflict
         name: check for merge conflicts
-        entry: sh -c 'if grep -r "^<<<<<<< \|^=======$\|^>>>>>>> " --include="*.rs" --include="*.py" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.json" --include="*.sql" --exclude-dir=".pixi" --exclude-dir="node_modules" --exclude-dir=".git" --exclude-dir="target" .; then echo "Found merge conflict markers!"; exit 1; else echo "No merge conflicts found"; fi'
+        entry: sh -c 'if grep -r "^<<<<<<< \|^=======$\|^>>>>>>> " --include="*.rs" --include="*.py" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.json" --include="*.sql" --exclude-dir=".pixi" --exclude-dir="node_modules" --exclude-dir=".git" --exclude-dir="target" --exclude-dir="dagster-skills" .; then echo "Found merge conflict markers!"; exit 1; else echo "No merge conflicts found"; fi'
         language: system
         pass_filenames: false
       - id: check-large-files
         name: check for large files
-        entry: sh -c 'find . -type f -size +1M -not -path "./.git/*" -not -path "./.pixi/*" -not -path "./node_modules/*" -not -path "./.sqlx/*" | head -5'
+        entry: sh -c 'find . -type f -size +1M -not -path "./.git/*" -not -path "./.pixi/*" -not -path "./node_modules/*" -not -path "./.sqlx/*" -not -path "./.agent-skills/dagster-skills/*" | head -5'
         language: system
         pass_filenames: false
 
