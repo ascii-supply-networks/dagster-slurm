@@ -9,7 +9,7 @@ repos:
     hooks:
       - id: python-fmt-lint
         name: python format and lint
-        entry: sh -c 'cd examples && pixi run -e ci-basics --frozen fmt'
+        entry: sh -c 'cd examples && pixi run -e ci-basics --frozen fmt && pixi run -e dev --frozen lint'
         language: system
         files: ^examples/.*\.(py|ipynb)$
         pass_filenames: false
