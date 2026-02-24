@@ -1,6 +1,6 @@
 [project]
 name = "dagster-slurm"
-version = "1.10.0-rc.3"
+version = "1.10.0-rc.4"
 description = "dagster integration with slurm"
 readme = "README.md"
 authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
