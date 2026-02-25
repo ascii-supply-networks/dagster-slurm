@@ -17,7 +17,8 @@
     "**/bun.lockb",
     "**/.ruff_cache/**",
     "**/.venv/**",
-    "**/.agent-skills/dagster-skills/**"
+    "**/.agent-skills/dagster-skills/**",
+    "**/CHANGELOG.md"
   ],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.17.8.wasm",
