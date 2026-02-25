@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-02-25)
+
+### Bug Fixes
+
+- Exclude changelog from dprint
+  ([#106](https://github.com/ascii-supply-networks/dagster-slurm/pull/106),
+  [`9431b5f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/9431b5f8ed7f164a606d548b32255ac59a2c1297))
+
+
 ## v1.10.0-rc.4 (2026-02-24)
 
 ### Bug Fixes

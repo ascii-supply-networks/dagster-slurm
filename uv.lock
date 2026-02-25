@@ -251,7 +251,7 @@ wheels = [
 
 [[package]]
 name = "dagster-slurm"
-version = "1.10.0rc4"
+version = "1.11.0"
 source = { editable = "projects/dagster-slurm" }
 dependencies = [
     { name = "dagster" },
@@ -277,7 +277,7 @@ provides-extras = ["ray"]
 
 [[package]]
 name = "dagster-slurm-workspace"
-version = "1.10.0rc4"
+version = "1.11.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
