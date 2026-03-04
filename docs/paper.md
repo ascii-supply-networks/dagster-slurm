@@ -85,7 +85,7 @@ This lowers the entry barrier to sovereign AI infrastructure: data engineering a
 - Orchestrate across compute tiers. A typical scientific pipeline does not run entirely on HPC GPUs—cheap preprocessing can happen on a cloud VM while only the training step targets the supercomputer. dagster-slurm keeps the full dataflow graph visible and schedulable in one place.
 - Provide batteries-included environment packaging. Pixi and pixi-pack produce reproducible, self-contained bundles deployable in air-gapped HPC centres.
 - Surface structured observability. Slurm job IDs, CPU efficiency, memory usage, and live log streams appear directly in the Dagster UI, benefiting beginners navigating HPC for the first time and experts managing production workloads alike.
-- Encourage research software engineering best practices as outlined by Eisty et al. @eisty2025, covering planning, testing, documentation, and maintenance across the development lifecycle.
+- Encourage research software engineering best practices as outlined by @eisty2025, covering planning, testing, documentation, and maintenance across the development lifecycle.
 
 # System Overview
 
