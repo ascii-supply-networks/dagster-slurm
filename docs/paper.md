@@ -56,9 +56,9 @@ Experimental support for Spark, session-based allocation reuse, and heterogeneou
 # Statement of Need
 
 Research software engineers (RSE) and data scientists increasingly face cross-environment workflows.
-The 22nd edition of the Research Software Engineering (RSE) International Survey reports that every participating country now marks HPC as an important RSE skill [@hettrick_2022_7015772].
-Reproducibility challenges in HPC environments are well documented, and Antunes et al. [@ANTUNES2024100655] provide comprehensive coverage of issues unique to HPC in their survey.
-Courtes et al. [@Courtes9882991] further examine the tension between reproducibility and performance, demonstrating that these goals need not be mutually exclusive.
+The 2022 edition of the Research Software Engineering (RSE) International Survey reports that every participating country now marks HPC as an important RSE skill [@hettrick_2022_7015772].
+Reproducibility challenges in HPC environments are well documented, and @ANTUNES2024100655 provide comprehensive coverage of issues unique to HPC in their survey.
+@Courtes9882991 further examine the tension between reproducibility and performance, demonstrating that these goals need not be mutually exclusive.
 
 The 2024 Community Workshop on Practical Reproducibility in HPC produced a comprehensive report highlighting cost-effective reproducibility challenges and the need for tools that bridge development and production environments [@keahey_2025_15306610].
 A rich ecosystem of Python-based HPC workflow tools already exists.
