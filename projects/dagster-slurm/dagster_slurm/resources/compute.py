@@ -591,6 +591,7 @@ class ComputeResource(ConfigurableResource):
         remote_payload_path: Optional[str] = None,
         config: Optional[SlurmRunConfig] = None,
         extra_files: Optional[List[str]] = None,
+        poll_timeout: int = 3600,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute asset with optional resource overrides.
@@ -621,6 +622,8 @@ class ComputeResource(ConfigurableResource):
                 Values from config are used as defaults, but explicit parameters take precedence.
             extra_files: List of local file paths to upload alongside the payload.
                 Merged with default_extra_files, asset metadata, and config.extra_files.
+            poll_timeout: Maximum time in seconds to wait for the Slurm job to
+                complete. Defaults to 3600 (1 hour).
             **kwargs: Passed to client.run()
 
         Yields:
@@ -753,6 +756,7 @@ class ComputeResource(ConfigurableResource):
         if isinstance(client, SlurmPipesClient):
             kwargs["force_env_push"] = resolved_force_env_push
             kwargs["skip_payload_upload"] = skip_payload_upload_resolved
+            kwargs["poll_timeout"] = poll_timeout
             if resolved_remote_payload_path:
                 kwargs["remote_payload_path"] = resolved_remote_payload_path
             if pack_cmd_override:

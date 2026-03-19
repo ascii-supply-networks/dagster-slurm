@@ -2,6 +2,16 @@
 
 <!-- version list -->
 
+## v1.11.2 (2026-03-19)
+
+### Features
+
+- Expose `poll_timeout` parameter through public API (`ComputeResource.run()`,
+  `SlurmPipesClient.run()`, `_execute_standalone()`) so callers can override the
+  default 1-hour timeout for long-running Slurm jobs. The reattach code path also
+  forwards the parameter.
+
+
 ## v1.11.1 (2026-03-19)
 
 
