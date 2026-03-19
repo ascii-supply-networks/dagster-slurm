@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.11.0-rc.1 (2026-03-19)
+
+### Bug Fixes
+
+- Linting after upgrade ([#112](https://github.com/ascii-supply-networks/dagster-slurm/pull/112),
+  [`c9b6e9a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9b6e9a19ecd14cd16f0b5f3ba3c257f48c04a6d))
+
+
 ## v1.11.0 (2026-02-25)
 
 ### Bug Fixes
