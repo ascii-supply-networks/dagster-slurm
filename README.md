@@ -1,5 +1,6 @@
 # dagster-slurm
 
+[![DOI](https://camo.githubusercontent.com/6088cff6a8f948c7c271f5658fbb66f95c571bc67bf39df51043848cd3547f7e/68747470733a2f2f6a6f73732e7468656f6a2e6f72672f7061706572732f31302e32313130352f6a6f73732e30393739352f7374617475732e737667)](https://doi.org/10.21105/joss.09795)
 [![image](https://img.shields.io/pypi/v/dagster-slurm.svg)](https://pypi.python.org/pypi/dagster-slurm)
 [![image](https://img.shields.io/pypi/l/dagster-slurm.svg)](https://pypi.python.org/pypi/dagster-slurm)
 [![image](https://img.shields.io/pypi/pyversions/dagster-slurm.svg)](https://pypi.python.org/pypi/dagster-slurm)

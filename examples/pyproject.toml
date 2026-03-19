@@ -231,13 +231,13 @@ description = "Validate formatting and type check python files"
 cmd = "pixi run -e dev --frozen pytest -m 'not data' ."
 description = "Run only unit tests (excluding data tests)"
 
-[tool.pixi.tasks.pre-commit-install]
-cmd = "pre-commit install"
-description = "install pre-commit hooks"
+[tool.pixi.tasks.prek-install]
+cmd = "prek install"
+description = "install prek hooks"
 
-[tool.pixi.tasks.pre-commit-run]
-cmd = "pre-commit run --all-files"
-description = "run pre-commit on all files"
+[tool.pixi.tasks.prek-run]
+cmd = "prek run --all-files"
+description = "run prek on all files"
 
 [tool.dagster]
 module_name = "dagster_slurm_example"
