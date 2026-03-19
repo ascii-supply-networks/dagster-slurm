@@ -1860,6 +1860,7 @@ class SlurmPipesClient(PipesClient):
                 ]
             )
         elif self.slurm.ssh.uses_key_auth:
+            assert self.slurm.ssh.key_path is not None
             cmd.extend(
                 [
                     "-i",
