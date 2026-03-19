@@ -6,16 +6,20 @@ ComputeResource.run() -> SlurmPipesClient.run() -> _execute_standalone()
 """
 
 import inspect
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from dagster import AssetKey
 
 from dagster_slurm import (
     BashLauncher,
+    ComputeResource,
     SlurmResource,
     SSHConnectionResource,
     SlurmQueueConfig,
 )
+from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
 
 
@@ -224,3 +228,59 @@ def test_wait_for_job_respects_custom_poll_timeout():
             message_reader=MagicMock(),
             poll_timeout=1,
         )
+
+
+# ---------------------------------------------------------------------------
+# ComputeResource.run() -> client.run() propagation test
+# ---------------------------------------------------------------------------
+
+
+class _RecordingClient(SlurmPipesClient):
+    """Dummy client that records kwargs passed to run()."""
+
+    def __init__(self):
+        self.kwargs = None
+
+    def run(self, context, *, payload_path, **kwargs):
+        self.kwargs = kwargs
+        return SimpleNamespace()
+
+
+def test_compute_resource_forwards_poll_timeout(monkeypatch):
+    """ComputeResource.run() forwards poll_timeout to client.run() via kwargs."""
+    slurm = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm,
+        default_launcher=BashLauncher(),
+    )
+
+    fake_client = _RecordingClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    class _DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.assets_def = SimpleNamespace(metadata_by_key={})
+
+        def has_assets_def(self):
+            return True
+
+    resource.run(
+        context=_DummyContext(),
+        payload_path="script.py",
+        poll_timeout=7200,
+    )
+
+    assert fake_client.kwargs is not None
+    assert fake_client.kwargs["poll_timeout"] == 7200
