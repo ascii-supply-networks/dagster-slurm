@@ -10,12 +10,13 @@ preparation:
 - `pixi global install git`
 - `pixi global install make`
 - `pixi global install uv`
+- `pixi global install prek`
 
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-pixi run pre-commit-install
-pixi run pre-commit-run
+pixi run prek-install
+pixi run prek-run
 
 # to build the library
 pixi run -e build --frozen build-lib

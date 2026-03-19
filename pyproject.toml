@@ -105,13 +105,13 @@ cmd = "uv publish --token $PYPI_TOKEN"
 depends-on = ["build-lib"]
 description = "Publish the library"
 
-[tool.pixi.tasks.pre-commit-install]
+[tool.pixi.tasks.prek-install]
 cmd = "prek install"
-description = "install pre-commit hooks"
+description = "install prek hooks"
 
-[tool.pixi.tasks.pre-commit-run]
+[tool.pixi.tasks.prek-run]
 cmd = "prek run --all-files"
-description = "run pre-commit on all files"
+description = "run prek on all files"
 
 [tool.pixi.tasks.start]
 cwd = "examples"

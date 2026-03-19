@@ -53,7 +53,7 @@ You have to have uv installed for the library development - but pixi for executi
   ```
 - install global tools
   ```bash
-  pixi global install git make uv pre-commit
+  pixi global install git make uv prek
   ```
 
 ### Development setup
@@ -61,8 +61,8 @@ You have to have uv installed for the library development - but pixi for executi
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-pixi run pre-commit-install
-pixi run pre-commit-run
+pixi run prek-install
+pixi run prek-run
 ```
 
 ### Useful commands during development

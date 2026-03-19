@@ -2,6 +2,14 @@
 default:
     @just --list
 
+# Install prek git hooks
+prek-install:
+    prek install
+
+# Run prek on all files
+prek-run:
+    prek run --all-files
+
 # Format all code in root project
 fmt:
     pixi run -e build --frozen fmt

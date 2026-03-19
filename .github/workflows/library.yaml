@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -67,7 +67,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.66.0
           cache: true
           frozen: true
 
@@ -259,7 +259,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.66.0
           cache: true
           frozen: true
 
@@ -364,7 +364,7 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.66.0
           cache: true
           frozen: true
 
