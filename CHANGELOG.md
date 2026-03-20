@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.11.1-rc.1 (2026-03-20)
+
+### Bug Fixes
+
+- Refine ray slurm ci ([#114](https://github.com/ascii-supply-networks/dagster-slurm/pull/114),
+  [`1528fda`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1528fda1682c642cda95bb87c1c5eeb716fd735f))
+
+- Robustify ray CI ([#114](https://github.com/ascii-supply-networks/dagster-slurm/pull/114),
+  [`1528fda`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1528fda1682c642cda95bb87c1c5eeb716fd735f))
+
+### Features
+
+- Justfile commands ([#114](https://github.com/ascii-supply-networks/dagster-slurm/pull/114),
+  [`1528fda`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1528fda1682c642cda95bb87c1c5eeb716fd735f))
+
+
 ## v1.11.1 (2026-03-19)
 
 
