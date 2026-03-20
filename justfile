@@ -2,6 +2,15 @@
 default:
     @just --list
 
+# Bootstrap all environments and install hooks
+setup:
+    pixi run -e build --frozen sync
+    pixi run -e docs --frozen docs-install
+    pixi run -e docs --frozen slides-install
+    cd examples && pixi install -e dev --frozen
+    cd examples && pixi install -e workload-document-processing --frozen
+    prek install
+
 # Install prek git hooks
 prek-install:
     prek install
@@ -44,6 +53,10 @@ check-examples: fmt-examples lint-examples
 
 # Run all checks on both root and examples
 check-all: fmt-all lint-all
+
+# Run integration tests against SLURM cluster (requires docker slurm)
+test-integration:
+    pixi run -e build --frozen testpixi-integration
 
 # Format documentation markdown
 fmt-docs:
