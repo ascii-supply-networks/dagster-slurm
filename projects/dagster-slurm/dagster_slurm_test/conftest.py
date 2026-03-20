@@ -191,6 +191,36 @@ def slurm_cluster_ready():
     pytest.fail("SLURM cluster is not ready")
 
 
+def _cleanup_ray_on_host():
+    """Kill any lingering Ray processes on the test host itself.
+
+    Local-mode (development) tests start Ray on the host, not inside Docker
+    containers.  Without host-level cleanup a crashed or slow-to-exit Ray
+    process can hold a port and cause the next test (or CI re-run) to fail.
+    """
+    for cmd in (
+        ["ray", "stop", "--force"],
+        ["pkill", "-9", "-f", "ray::"],
+        ["pkill", "-9", "-f", "raylet"],
+        ["pkill", "-9", "-f", "gcs_server"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+        ):
+            pass
+    # Clean up temp dirs that Ray leaves behind
+    import glob
+    import shutil
+
+    for pattern in ("/tmp/ray", "/tmp/r[0-9]*"):
+        for p in glob.glob(pattern):
+            shutil.rmtree(p, ignore_errors=True)
+
+
 def _cleanup_ray_on_slurm_nodes():
     """Kill any lingering Ray processes on all Docker Slurm compute nodes.
 
@@ -223,18 +253,17 @@ def _cleanup_ray_on_slurm_nodes():
 
 @pytest.fixture(autouse=True)
 def cleanup_ray_between_tests(request):
-    """Clean up Ray processes on Slurm nodes before each test that uses Ray.
+    """Clean up Ray processes before and after each test that uses Ray.
 
-    This fixture runs for every test in a module marked with
-    ``needs_slurm_docker``.  It checks if the test name contains "ray"
-    and, if so, kills any lingering Ray processes before the test starts.
-    This avoids port conflicts and stale cluster state between tests.
+    Cleans both the host (for local-mode tests) and Docker Slurm nodes
+    (for integration tests) to prevent port conflicts and stale state.
     """
     if "ray" in request.node.name.lower():
+        _cleanup_ray_on_host()
         _cleanup_ray_on_slurm_nodes()
     yield
-    # Post-test cleanup for Ray tests to ensure clean state for the next test
     if "ray" in request.node.name.lower():
+        _cleanup_ray_on_host()
         _cleanup_ray_on_slurm_nodes()
 
 
