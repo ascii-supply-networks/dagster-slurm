@@ -238,11 +238,14 @@ class RayLauncher(ComputeLauncher):
       fi
     }}
 
-    # Compute ports (optionally hash by SLURM_JOB_ID)
+    # Compute ports (optionally hash by SLURM_JOB_ID or RAY_PORT_SEED)
+    # RAY_PORT_SEED allows CI to randomize ports without faking SLURM_JOB_ID
+    # (which has side effects: IP resolution, temp dirs, multi-node detection).
     port="{self.ray_port}"
     dash_port="{self.dashboard_port}"
-    if [[ "{self.port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
-        off=$(( SLURM_JOB_ID % 1000 ))
+    _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-}}}}"
+    if [[ "{self.port_strategy}" == "hash_jobid" && -n "$_port_seed" ]]; then
+        off=$(( _port_seed % 1000 ))
         port=$(( {self.ray_port} + off ))
         dash_port=$(( {self.dashboard_port} + off ))
     fi
@@ -594,12 +597,13 @@ class RayLauncher(ComputeLauncher):
     }}
 
     # Define all variables first
-    # Figure out ports 
+    # Figure out ports (RAY_PORT_SEED takes precedence over SLURM_JOB_ID)
     port="{self.ray_port}"
     dash_port="{self.dashboard_port}"
-    if [[ "{self.port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
-        # keep in user space; avoid reserved/system ports 
-        off=$(( SLURM_JOB_ID % 1000 ))
+    _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-}}}}"
+    if [[ "{self.port_strategy}" == "hash_jobid" && -n "$_port_seed" ]]; then
+        # keep in user space; avoid reserved/system ports
+        off=$(( _port_seed % 1000 ))
         port=$(( {self.ray_port} + off ))
         dash_port=$(( {self.dashboard_port} + off ))
     fi
