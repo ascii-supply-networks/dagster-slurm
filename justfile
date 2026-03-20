@@ -54,6 +54,10 @@ check-examples: fmt-examples lint-examples
 # Run all checks on both root and examples
 check-all: fmt-all lint-all
 
+# Run integration tests against SLURM cluster (requires docker slurm)
+test-integration:
+    pixi run -e build --frozen testpixi-integration
+
 # Format documentation markdown
 fmt-docs:
     pixi run -e build --frozen fmt-docs
