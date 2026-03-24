@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v1.11.1-rc.2 (2026-03-24)
+
+### Chores
+
+- Add additional test for ComputeResource.run -> client.run hop
+  ([#113](https://github.com/ascii-supply-networks/dagster-slurm/pull/113),
+  [`fa9a312`](https://github.com/ascii-supply-networks/dagster-slurm/commit/fa9a3120c25294d0b36721cd05baed1cce72cbbc))
+
+### Features
+
+- Expose poll_timeout parameter
+  ([#113](https://github.com/ascii-supply-networks/dagster-slurm/pull/113),
+  [`fa9a312`](https://github.com/ascii-supply-networks/dagster-slurm/commit/fa9a3120c25294d0b36721cd05baed1cce72cbbc))
+
+
 ## v1.11.2 (2026-03-19)
 
 ### Features
