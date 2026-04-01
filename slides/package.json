@@ -8,7 +8,8 @@
     "build-base": "slidev build --base ./",
     "build-multimodal-base": "slidev build slides_multimodal.md --base ./ --out dist-multimodal",
     "dev": "slidev --open --port 5555",
-    "export": "slidev export --with-clicks --timeout 120000"
+    "export": "slidev export --with-clicks --timeout 120000",
+    "export-multimodal": "slidev export slides_multimodal.md --with-clicks --timeout 120000 --output slides_multimodal-export.pdf"
   },
   "dependencies": {
     "@slidev/cli": "^52.12.0",

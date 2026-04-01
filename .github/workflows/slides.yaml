@@ -36,9 +36,18 @@ jobs:
           frozen: true
       # - run: pixi run -e docs --frozen slides-build
       - run: pixi run -e docs --frozen slides-export-pdf
+      - run: pixi run -e docs --frozen slides-export-pdf-multimodal
 
-      - name: Upload artifact
+      - name: Upload hackathon PDF
         uses: actions/upload-artifact@v4
         with:
+          name: slides-hackathon
           path: slides/slides-export.pdf
+          retention-days: 5
+
+      - name: Upload multimodal PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: slides-multimodal
+          path: slides/slides_multimodal-export.pdf
           retention-days: 5
