@@ -151,7 +151,13 @@ description = "start slides server"
 cmd = "bun run export"
 cwd = "slides"
 depends-on = ["slides-install"]
-description = "expoert pdf"
+description = "export hackathon slides pdf"
+
+[tool.pixi.feature.docs.tasks.slides-export-pdf-multimodal]
+cmd = "bun run export-multimodal"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "export multimodal slides pdf"
 
 [tool.pixi.feature.docs.tasks.slides-build]
 cmd = "bun run build"
