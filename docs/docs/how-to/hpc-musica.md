@@ -43,7 +43,7 @@ The refresh hook automatically fetches new certificates before SSH connections.
 pixi run -e dev python scripts/refresh_step_auth.py
 ```
 
-**Rotate app password** (requires API token with `goauthentik.io/api` scope):
+**Rotate app password** (requires an authentik API token):
 
 ```bash
 pixi run -e dev python scripts/refresh_step_auth.py --rotate-app-password
@@ -56,6 +56,17 @@ ASC_AUTHENTIK_API_BASE=https://auth.asc.ac.at
 ASC_AUTHENTIK_API_TOKEN=...
 ASC_AUTHENTIK_TOKEN_IDENTIFIER=dagster-slurm
 ```
+
+:::warning Token vs App Password
+`ASC_AUTHENTIK_API_TOKEN` must be an authentik **Token**, not an App Password.
+In the [authentik user settings](https://auth.asc.ac.at/if/user/#/settings;%7B%22page%22%3A%22page-tokens%22%7D),
+use **"New Token"** — not "New App Password".
+
+- A **Token** grants API access and can create new tokens or app passwords.
+- An **App Password** is only usable with applications (like the step client) and cannot call the authentik API.
+
+Both expire after roughly one month. With a valid Token you can always create a fresh one before it expires.
+:::
 
 ## Configuration
 
