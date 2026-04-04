@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.12.0-rc.1 (2026-04-04)
+
+### Bug Fixes
+
+- Slides ([#115](https://github.com/ascii-supply-networks/dagster-slurm/pull/115),
+  [`71e4b30`](https://github.com/ascii-supply-networks/dagster-slurm/commit/71e4b30d3f17aab886d5271425fdb21d8d3763e1))
+
+### Features
+
+- Updates ([#116](https://github.com/ascii-supply-networks/dagster-slurm/pull/116),
+  [`0d04a96`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0d04a96e6ef851a20879caba0920a073632d6b89))
+
+
 ## v1.12.0 (2026-03-24)
 
 
