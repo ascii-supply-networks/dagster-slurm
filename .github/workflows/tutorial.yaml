@@ -8,7 +8,6 @@ on:
       - "projects/**"
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [main]
     paths:
       - "examples/**"
       - "projects/**"

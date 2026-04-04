@@ -57,14 +57,12 @@ class SlurmSessionResource(ConfigurableResource):
     _execution_semaphore: Optional[threading.Semaphore] = PrivateAttr(default=None)
     _initialized: bool = PrivateAttr(default=False)
 
-    def setup_for_execution(  # type: ignore[override]
-        self, context: InitResourceContext
-    ) -> "SlurmSessionResource":
+    def setup_for_execution(self, context: InitResourceContext) -> None:
         """Called by Dagster when resource is initialized for a run.
         This is the proper Dagster resource lifecycle hook.
         """
         if self._initialized:
-            return self
+            return
 
         self.logger = get_dagster_logger()
         self.context = context
@@ -85,8 +83,6 @@ class SlurmSessionResource(ConfigurableResource):
             self.logger.info("Session mode disabled")
 
         self._initialized = True
-
-        return self
 
     def teardown_after_execution(self, context: InitResourceContext) -> None:
         """Called by Dagster when resource is torn down after run completion.

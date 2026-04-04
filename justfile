@@ -85,3 +85,6 @@ slides-build:
 # Export slides to PDF
 slides-export-pdf:
     pixi run -e docs --frozen slides-export-pdf
+
+slides-export-pdf-multimodal:
+    pixi run -e docs --frozen slides-export-pdf-multimodal

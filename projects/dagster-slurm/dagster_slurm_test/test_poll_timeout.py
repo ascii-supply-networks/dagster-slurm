@@ -83,16 +83,12 @@ def test_execute_standalone_forwards_poll_timeout():
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.return_value = "Submitted batch job 12345"
 
-    with patch.object(
-        client, "_wait_for_job_with_streaming"
-    ) as mock_wait, patch.object(
-        client, "_store_job_tags"
-    ), patch.object(
-        client, "_log_estimated_start_time"
-    ), patch.object(
-        client, "_get_asset_key_string", return_value="test_asset"
-    ), patch.object(
-        client, "_build_sbatch_command", return_value="sbatch job.sh"
+    with (
+        patch.object(client, "_wait_for_job_with_streaming") as mock_wait,
+        patch.object(client, "_store_job_tags"),
+        patch.object(client, "_log_estimated_start_time"),
+        patch.object(client, "_get_asset_key_string", return_value="test_asset"),
+        patch.object(client, "_build_sbatch_command", return_value="sbatch job.sh"),
     ):
         # Mock the script writing/upload portion
         mock_execution_plan = MagicMock()
@@ -120,16 +116,12 @@ def test_execute_standalone_uses_default_poll_timeout():
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.return_value = "Submitted batch job 12345"
 
-    with patch.object(
-        client, "_wait_for_job_with_streaming"
-    ) as mock_wait, patch.object(
-        client, "_store_job_tags"
-    ), patch.object(
-        client, "_log_estimated_start_time"
-    ), patch.object(
-        client, "_get_asset_key_string", return_value="test_asset"
-    ), patch.object(
-        client, "_build_sbatch_command", return_value="sbatch job.sh"
+    with (
+        patch.object(client, "_wait_for_job_with_streaming") as mock_wait,
+        patch.object(client, "_store_job_tags"),
+        patch.object(client, "_log_estimated_start_time"),
+        patch.object(client, "_get_asset_key_string", return_value="test_asset"),
+        patch.object(client, "_build_sbatch_command", return_value="sbatch job.sh"),
     ):
         mock_execution_plan = MagicMock()
         mock_execution_plan.payload = ["#!/bin/bash", "echo hello"]
@@ -161,33 +153,25 @@ def test_reattach_path_forwards_poll_timeout():
     # Make _find_reattachable_job return a "running" job to trigger reattach
     reattach_info = {"job_id": "42", "run_dir": "/tmp/old_run"}
 
-    with patch.object(
-        client, "_wait_for_job_with_streaming"
-    ) as mock_wait, patch.object(
-        client, "_execute_standalone"
-    ) as mock_standalone, patch.object(
-        client, "_find_reattachable_job", return_value=reattach_info
-    ), patch.object(
-        client, "_is_job_still_running", return_value=True
-    ), patch.object(
-        client, "_get_job_state", return_value="RUNNING"
-    ), patch.object(
-        client, "_get_asset_key_string", return_value="test_asset"
-    ), patch.object(
-        client, "_store_job_tags"
-    ), patch.object(
-        client, "_maybe_emit_final_logs"
-    ), patch.object(
-        client, "_collect_and_emit_metrics"
-    ), patch.object(
-        client, "_get_remote_base", return_value="/tmp/dagster_test"
-    ), patch(
-        "dagster_slurm.pipes_clients.slurm_pipes_client.SSHConnectionPool"
-    ) as MockSSHPool, patch(
-        "dagster_slurm.pipes_clients.slurm_pipes_client.SSHMessageReader"
-    ), patch(
-        "dagster_slurm.pipes_clients.slurm_pipes_client.open_pipes_session"
-    ) as mock_open_pipes:
+    with (
+        patch.object(client, "_wait_for_job_with_streaming") as mock_wait,
+        patch.object(client, "_execute_standalone") as mock_standalone,
+        patch.object(client, "_find_reattachable_job", return_value=reattach_info),
+        patch.object(client, "_is_job_still_running", return_value=True),
+        patch.object(client, "_get_job_state", return_value="RUNNING"),
+        patch.object(client, "_get_asset_key_string", return_value="test_asset"),
+        patch.object(client, "_store_job_tags"),
+        patch.object(client, "_maybe_emit_final_logs"),
+        patch.object(client, "_collect_and_emit_metrics"),
+        patch.object(client, "_get_remote_base", return_value="/tmp/dagster_test"),
+        patch(
+            "dagster_slurm.pipes_clients.slurm_pipes_client.SSHConnectionPool"
+        ) as MockSSHPool,
+        patch("dagster_slurm.pipes_clients.slurm_pipes_client.SSHMessageReader"),
+        patch(
+            "dagster_slurm.pipes_clients.slurm_pipes_client.open_pipes_session"
+        ) as mock_open_pipes,
+    ):
         mock_pool_instance = MagicMock()
         MockSSHPool.return_value = mock_pool_instance
         mock_pool_instance.__enter__ = MagicMock(return_value=mock_pool_instance)

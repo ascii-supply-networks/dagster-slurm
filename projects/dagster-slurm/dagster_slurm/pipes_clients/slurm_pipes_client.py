@@ -97,10 +97,10 @@ class SlurmPipesClient(PipesClient):
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
 
-    def run(  # type: ignore[override]
+    def run(  # ty: ignore[invalid-method-override]  # Dagster PipesClient is designed for extension
         self,
-        context: AssetExecutionContext,
         *,
+        context: AssetExecutionContext,
         payload_path: str,
         extra_env: Optional[Dict[str, str]] = None,
         extras: Optional[Dict[str, Any]] = None,
@@ -1836,9 +1836,9 @@ class SlurmPipesClient(PipesClient):
         """
         if not self._control_path:
             requires_password = self.slurm.ssh.uses_password_auth
-            jump_requires_password = bool(
-                getattr(self.slurm.ssh, "jump_host", None)
-                and self.slurm.ssh.jump_host.uses_password_auth  # type: ignore[union-attr]
+            jump_host = self.slurm.ssh.jump_host
+            jump_requires_password = (
+                jump_host is not None and jump_host.uses_password_auth
             )
             if requires_password or jump_requires_password:
                 return None

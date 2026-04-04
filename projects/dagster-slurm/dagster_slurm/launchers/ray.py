@@ -249,9 +249,12 @@ class RayLauncher(ComputeLauncher):
         port=$(( {self.ray_port} + off ))
         dash_port=$(( {self.dashboard_port} + off ))
     fi
-    # Resolve head address for local mode (prefer Slurm node IP when available)
+    # Resolve head address for local mode.
+    # Always attempt IP resolution when use_head_ip=true, not just under Slurm.
+    # In Docker/CI, Ray detects the container IP internally but if we bind to
+    # 127.0.0.1 the GCS client cannot connect (it tries the container IP).
     head_bind_addr="127.0.0.1"
-    if [[ -n "${{SLURM_JOB_ID:-}}" && "{str(self.use_head_ip).lower()}" == "true" ]]; then
+    if [[ "{str(self.use_head_ip).lower()}" == "true" ]]; then
       head_node_name="$(hostname)"
       if command -v getent >/dev/null 2>&1; then
         ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}')
@@ -385,6 +388,17 @@ class RayLauncher(ComputeLauncher):
     ray_start_exit=$?
     if [[ $ray_start_exit -ne 0 ]]; then
         echo "[$({date_fmt})] ERROR: ray start failed with exit code $ray_start_exit" >&2
+        # Dump GCS and Ray logs for debugging (especially useful in CI)
+        for log_dir in /tmp/ray/session_latest/logs "${{RAY_TMP_DIR:-}}"/session_*/logs; do
+          if [[ -d "$log_dir" ]]; then
+            for f in "$log_dir"/gcs_server.{{out,err}} "$log_dir"/raylet.{{out,err}}; do
+              if [[ -f "$f" ]]; then
+                echo "--- $f ---" >&2
+                tail -50 "$f" >&2
+              fi
+            done
+          fi
+        done
         exit 1
     fi
     export RAY_ADDRESS="$head_adv:$port"
