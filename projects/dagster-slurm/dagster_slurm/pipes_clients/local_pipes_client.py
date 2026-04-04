@@ -89,10 +89,10 @@ class LocalPipesClient(PipesClient):
             "PIXI_ENVIRONMENT_NAME" in os.environ or "PIXI_PROJECT_ROOT" in os.environ
         )
 
-    def run(  # type: ignore[override]
+    def run(  # ty: ignore[invalid-method-override]  # Dagster PipesClient is designed for extension
         self,
-        context: AssetExecutionContext,
         *,
+        context: AssetExecutionContext,
         payload_path: str,
         python_executable: Optional[str] = None,
         extra_env: Optional[Dict[str, str]] = None,

@@ -7,7 +7,6 @@ on:
       - "slides/**"
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [main]
     paths:
       - "slides/**"
   workflow_dispatch:
