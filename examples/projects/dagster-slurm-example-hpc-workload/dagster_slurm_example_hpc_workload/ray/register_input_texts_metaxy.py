@@ -46,7 +46,7 @@ def _register_input_texts(context: PipesContext | None) -> dict[str, int | str]:
     store = cfg.get_store()
     samples = _build_input_text_samples()
 
-    with store:
+    with store.open(mode="w"):
         increment = store.resolve_update("ray_example/input_texts", samples=samples)
         if len(increment.new) > 0:
             store.write("ray_example/input_texts", increment.new)

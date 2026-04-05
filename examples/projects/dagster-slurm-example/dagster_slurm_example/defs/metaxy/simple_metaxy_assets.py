@@ -105,7 +105,7 @@ def _ensure_current_feature_schema(
     logger.info(
         f"Detected legacy schema for {feature_key}; applying one-time metadata reset."
     )
-    with store:
+    with store.open(mode="w"):
         store.drop_feature_metadata(feature_key)
 
 
@@ -206,7 +206,7 @@ def _process_incremental_partition_result(
         f"[{partition_key}] Processing {len(new_df)} new + {len(stale_df)} stale = "
         f"{len(to_process)} samples"
     )
-    with store_simple:
+    with store_simple.open(mode="w"):
         store_simple.write("example/partitioned_processed_numbers", to_process)
     return to_process.select(
         pl.col("sample_uid"), pl.col("result"), pl.col("value_bucket")
@@ -235,7 +235,7 @@ def _process_single_key_partition_result(
 
     # Force recomputation by deleting current target row (if present) and letting
     # resolve_update produce the correct target-schema increment.
-    with store_simple:
+    with store_simple.open(mode="w"):
         store_simple.delete(
             "example/partitioned_processed_numbers",
             filters=_sample_uid_nw_filter(sample_uid),
@@ -341,7 +341,7 @@ def raw_numbers(store_simple: dg.ResourceParam[mx.MetadataStore]) -> pl.DataFram
         ).alias("metaxy_provenance_by_field")
     )
 
-    with store_simple:
+    with store_simple.open(mode="w"):
         increment = store_simple.resolve_update("example/raw_numbers", samples=samples)
         if len(increment.new) > 0:
             store_simple.write("example/raw_numbers", increment.new)
@@ -409,7 +409,7 @@ def processed_numbers(  # noqa: C901
     )
 
     try:
-        with store_simple:
+        with store_simple.open(mode="w"):
             if len(new_with_results) > 0:
                 store_simple.write("example/processed_numbers", new_with_results)
             if len(stale_with_results) > 0:
@@ -423,7 +423,7 @@ def processed_numbers(  # noqa: C901
             "Detected legacy schema mismatch in example/processed_numbers. "
             "Dropping feature metadata and retrying with current schema."
         )
-        with store_simple:
+        with store_simple.open(mode="w"):
             store_simple.drop_feature_metadata("example/processed_numbers")
             retry_increment = store_simple.resolve_update("example/processed_numbers")
             retry_new = _compute_results(retry_increment.new.to_polars())

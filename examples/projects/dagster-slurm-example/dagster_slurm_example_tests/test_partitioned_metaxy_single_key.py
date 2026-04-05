@@ -45,6 +45,9 @@ class _FakeStore:
     def __exit__(self, _exc_type, _exc_val, _exc_tb):
         return False
 
+    def open(self, mode: str = "r"):
+        return self
+
     def resolve_update(
         self, feature_key: str, target_filters: list[Any] | None = None
     ) -> _Increment:

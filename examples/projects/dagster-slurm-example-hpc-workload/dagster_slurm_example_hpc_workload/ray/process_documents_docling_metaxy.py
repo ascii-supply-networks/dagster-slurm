@@ -283,7 +283,7 @@ def run_processing(  # noqa: C901
         ).alias("metaxy_provenance_by_field")
     )
 
-    with store:
+    with store.open(mode="w"):
         source_increment = store.resolve_update(
             "docling/source_documents",
             samples=sources_samples,
@@ -294,7 +294,7 @@ def run_processing(  # noqa: C901
             store.write("docling/source_documents", source_increment.stale)
 
     # Step 2: Resolve which documents need (re)processing
-    with store:
+    with store.open(mode="w"):
         try:
             increment = store.resolve_update(
                 "docling/converted_documents",
