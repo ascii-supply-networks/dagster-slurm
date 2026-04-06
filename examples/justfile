@@ -1,0 +1,83 @@
+# Default recipe to display available commands
+default:
+    @just --list
+
+# Start dagster webserver in dev mode
+start:
+    pixi run -e dev --frozen start
+
+# Start dagster webserver in staging mode
+start-staging:
+    pixi run -e dev --frozen start-staging
+
+# Start dagster webserver in production docker mode (must pre-deploy!)
+start-prod-docker:
+    pixi run -e dev --frozen start-prod-docker
+
+# Start dagster webserver in staging mode with real HPC
+start-staging-supercomputer:
+    pixi run -e dev --frozen start-staging-supercomputer
+
+# Start dagster webserver in production mode with real HPC (must pre-deploy!)
+start-production-supercomputer:
+    pixi run -e dev --frozen start-production-supercomputer
+
+# Package and deploy environment for HPC (x86_64)
+deploy-prod-docker:
+    pixi run -e dev --frozen deploy-prod-docker
+
+# Package and deploy ARM64 environment for HPC
+deploy-prod-docker-aarch:
+    pixi run -e dev --frozen deploy-prod-docker-aarch
+
+# Format code
+fmt:
+    pixi run -e ci-basics --frozen fmt
+
+# Lint and type check code
+lint:
+    pixi run -e dev --frozen lint
+
+# Run unit tests
+test:
+    pixi run -e dev --frozen test
+
+# Encrypt secrets with SOPS and AGE
+secrets-encrypt:
+    pixi run -e secops --frozen secrets-encrypt
+
+# Decrypt secrets with SOPS and AGE
+secrets-decrypt:
+    pixi run -e secops --frozen secrets-decrypt
+
+# Cleanup local non-used branches
+clean-local-branches:
+    pixi run -e opstooling --frozen clean-local-branches
+
+# Build and pack environment (x86_64)
+pack:
+    pixi run -e opstooling --frozen pack
+
+# Pack environment without rebuilding (cache-friendly)
+pack-only:
+    pixi run -e opstooling --frozen pack-only
+
+# Build and pack environment (ARM64)
+pack-aarch:
+    pixi run -e opstooling --frozen pack-aarch
+
+# Pack ARM64 environment without rebuilding (cache-friendly)
+pack-only-aarch:
+    pixi run -e opstooling --frozen pack-only-aarch
+
+# Cleanup build artifacts
+clean:
+    pixi run -e opstooling --frozen clean
+
+# Install prek hooks
+prek-install:
+    pixi run -e dev --frozen prek-install
+
+# Run prek on all files
+prek-run:
+    pixi run -e dev --frozen prek-run
