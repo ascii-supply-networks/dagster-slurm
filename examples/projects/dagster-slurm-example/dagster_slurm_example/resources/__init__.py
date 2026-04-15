@@ -166,18 +166,21 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "slurm_queue_config": {
             # For the ASC CPU reservation windows, swap the active GPU lines below to:
             "partition": "zen4_0768",
-            "qos": None,
+            "qos": None,  # Use the partition default QoS, or "dev_zen4_0768" for 10 min tests
             "gpus_per_node": 0,
-            "reservation": "dagster_test",  # April 16, 2026 test window
+            # "reservation": "dagster_test",  # April 16, 2026 test window
             # "reservation": "dagster",  # April 17, 2026 webinar window
             # "partition": "zen4_0768_h100x4",
             # "qos": "zen4_0768_h100x4",
+            # "qos": "dev_zen4_0768_h100x4",  # 10 min GPU devel QoS
+            "time_limit": "00:05:00",
             # "gpus_per_node": 1,
             "num_nodes": 1,
         },
         "slurm_session_config": {
             "partition": "zen4_0768_h100x4",
-            "qos": "zen4_0768_h100x4",
+            "qos": "zen4_0768_h100x4",  # Or "dev_zen4_0768_h100x4" for 10 min tests
+            # "time_limit": "00:05:00",
             "gpus_per_node": 1,
             "num_nodes": 1,
         },
@@ -387,7 +390,20 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
             musica_client_id = os.environ.get("ASC_OIDC_CLIENT_ID")
             musica_username = os.environ.get("ASC_OIDC_USERNAME")
             musica_app_password = os.environ.get("ASC_OIDC_APP_PASSWORD")
-            if musica_client_id and musica_username and musica_app_password:
+            musica_authentik_api_base = os.environ.get("ASC_AUTHENTIK_API_BASE")
+            musica_authentik_api_token = os.environ.get("ASC_AUTHENTIK_API_TOKEN")
+            musica_authentik_credentials_file = os.environ.get(
+                "ASC_AUTHENTIK_CREDENTIALS_FILE"
+            )
+            if (
+                musica_client_id
+                and musica_username
+                and (
+                    musica_app_password
+                    or (musica_authentik_api_base and musica_authentik_api_token)
+                    or musica_authentik_credentials_file
+                )
+            ):
                 auth_provider = StepOIDCAuthProvider(
                     token_url=os.environ.get(
                         "ASC_OIDC_TOKEN_URL",
@@ -403,8 +419,21 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
                         os.environ.get("ASC_STEP_REFRESH_SKEW", "30")
                     ),
                     cert_path=os.environ.get("ASC_STEP_CERT_PATH"),
+                    ssh_key_path=os.environ.get("SLURM_EDGE_NODE_KEY_PATH"),
                     bootstrap_ca_url=os.environ.get("ASC_STEP_CA_URL"),
                     bootstrap_fingerprint=os.environ.get("ASC_STEP_FINGERPRINT"),
+                    authentik_api_base=musica_authentik_api_base,
+                    authentik_api_token=musica_authentik_api_token,
+                    authentik_token_identifier=os.environ.get(
+                        "ASC_AUTHENTIK_TOKEN_IDENTIFIER", "dagster-slurm"
+                    ),
+                    authentik_token_expires_days=int(
+                        os.environ.get("ASC_AUTHENTIK_TOKEN_EXPIRES_DAYS", "30")
+                    ),
+                    authentik_credentials_file=musica_authentik_credentials_file,
+                    authentik_refresh_skew_days=int(
+                        os.environ.get("ASC_AUTHENTIK_REFRESH_SKEW_DAYS", "7")
+                    ),
                 )
                 config.setdefault("slurm_config", {})
                 config["slurm_config"]["auth_provider"] = auth_provider
