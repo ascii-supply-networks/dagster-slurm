@@ -30,19 +30,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          pixi-version: v0.66.0
+          pixi-version: v0.67.0
           cache: true
           frozen: true
       - run: pixi run -e docs --frozen docs-build
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: "docs/build"
 
@@ -57,4 +57,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

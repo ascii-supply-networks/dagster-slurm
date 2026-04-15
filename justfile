@@ -15,6 +15,12 @@ setup:
 prek-install:
     prek install
 
+# Update lockfiles in root/examples and refresh uv dependencies in the root project
+update:
+    pixi update
+    cd examples && pixi update
+    uv sync --all-packages --upgrade
+
 # Run prek on all files
 prek-run:
     prek run --all-files

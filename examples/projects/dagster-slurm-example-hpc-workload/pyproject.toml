@@ -3,7 +3,7 @@ name = "dagster_slurm_example_hpc_workload"
 version = "1.0.0"
 description = "Dagster slurm example HPC Workload meant to be executed on the slurm cluster"
 authors = [{ name = "geoheil", email = "georg.kf.heiler@gmail.com" }]
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 dependencies = []
 
 [build-system]
@@ -22,4 +22,4 @@ backend = { name = "pixi-build-python", version = ">=0.4.0" }
 
 [tool.pixi.package.host-dependencies]
 hatchling = ">=1.27,<2.0"
-python = ">=3.12,<3.13"
+python = ">=3.12,<3.14"
