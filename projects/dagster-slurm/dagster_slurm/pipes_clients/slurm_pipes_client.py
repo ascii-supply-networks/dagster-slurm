@@ -1302,7 +1302,14 @@ class SlurmPipesClient(PipesClient):
         ssh_pool.run(f"chmod +x {pack_file_path}")
 
         run_dir = str(Path(extract_dir).parent)
-        extract_cmd = f"cd {run_dir} && {pack_file_path}"
+        # Serialize concurrent extractions against the shared env-cache dir to avoid
+        # ETXTBSY ("Text file busy") when one asset is still writing the pack file
+        # while another tries to exec it. This was recomended by Gemini
+        lock_file = f"{run_dir}/.extract.lock"
+        extract_cmd = (
+            f"mkdir -p {run_dir} && "
+            f"flock {lock_file} bash -c 'cd {run_dir} && {pack_file_path}'"
+        )
 
         self.logger.debug(f"Running extraction command: {extract_cmd}")
 

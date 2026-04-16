@@ -3,8 +3,6 @@ environments:
   ci-basics:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -174,8 +172,6 @@ environments:
   default:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -244,8 +240,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -1101,8 +1095,6 @@ environments:
   opstooling:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -1185,8 +1177,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -1635,8 +1625,6 @@ environments:
   secops:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/age-1.2.1-ha770c72_0.conda
@@ -1652,8 +1640,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -3196,21 +3182,25 @@ packages:
   - pexpect~=4.9.0
   - ray>=2.48.0 ; extra == 'ray'
   requires_python: '>=3.12,<3.13'
+  editable: true
 - pypi: ./projects/dagster-slurm-example
   name: dagster-slurm-example
   version: 1.0.0
   sha256: 3b6f0176da7083e45d6a67753e60172684013b33af8ae36e8f1486e9b844bd24
   requires_python: '>=3.12'
+  editable: true
 - pypi: ./projects/dagster-slurm-example-hpc-workload
   name: dagster-slurm-example-hpc-workload
   version: 1.0.0
   sha256: d98aa2a3b7f9b02f83b8da5ebb3c6d38efc5d89a223654105a81e80f748e6318
   requires_python: '>=3.12,<3.14'
+  editable: true
 - pypi: ./projects/dagster-slurm-example-shared
   name: dagster-slurm-example-shared
   version: 1.0.0
   sha256: 3e3226e3713acf589e7cde4d8a4f5244e1d680c661edf35e0686c94f9c338288
   requires_python: '>=3.12'
+  editable: true
 - pypi: https://files.pythonhosted.org/packages/f8/f5/2aa0d0bc7449b3307a939ac01e49b4f7ced752317ae977bc1c871b40cd3b/dagster_webserver-1.13.0-py3-none-any.whl
   name: dagster-webserver
   version: 1.13.0

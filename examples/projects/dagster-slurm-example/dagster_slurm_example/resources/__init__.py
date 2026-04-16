@@ -231,13 +231,13 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "key_path": os.path.expanduser("~/.ssh/id_datalab"),
         },
         "slurm_queue_config": {
-            "partition": "GPU-l40s",
+            "partition": "GPU-a100s",
             "time_limit": "00:10:00",
             "num_nodes": 1,
             "gpus_per_node": 1,
         },
         "slurm_session_config": {
-            "partition": "GPU-l40s",
+            "partition": "GPU-a100s",
             "time_limit": "00:10:00",
             "num_nodes": 1,
             "gpus_per_node": 1,

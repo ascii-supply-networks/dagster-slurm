@@ -1,7 +1,13 @@
 """Simple assets using Bash launcher."""
 
+from importlib.resources import files
+
 import dagster as dg
 from dagster_slurm import ComputeResource, SlurmRunConfig
+
+
+def _workload_script(name: str) -> str:
+    return str(files("dagster_slurm_example_hpc_workload.shell") / name)
 
 
 @dg.asset
@@ -24,11 +30,7 @@ def process_data(
     """Process data using bash script.
     Works in all modes (dev/staging/prod) without code changes.
     """
-    # Path to your processing script
-    script_path = dg.file_relative_path(
-        __file__,
-        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/process.py",
-    )
+    script_path = _workload_script("process.py")
     # Run via compute resource
     completed_run = compute.run(
         context=context,
@@ -60,10 +62,7 @@ def aggregate_results(
     config: SlurmRunConfig,
 ):
     """Aggregate results from processing."""
-    script_path = dg.file_relative_path(
-        __file__,
-        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/aggregate.py",
-    )
+    script_path = _workload_script("aggregate.py")
 
     return compute.run(
         context=context,
@@ -90,10 +89,7 @@ def subprocess_asset(
 
     Uses SlurmRunConfig for launchpad-configurable options instead of hardcoded metadata.
     """
-    script_path = dg.file_relative_path(
-        __file__,
-        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/multi_asset_example.py",
-    )
+    script_path = _workload_script("multi_asset_example.py")
     return compute.run(
         context=context,
         payload_path=script_path,
@@ -114,10 +110,7 @@ def no_empty_order_check(
     compute: ComputeResource,
 ) -> dg.AssetCheckResult:
     """asset check example"""
-    script_path = dg.file_relative_path(
-        __file__,
-        "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/shell/multi_asset_example_checking.py",
-    )
+    script_path = _workload_script("multi_asset_example_checking.py")
     return compute.run(
         context=context,
         payload_path=script_path,
