@@ -69,6 +69,8 @@ def test_ray_launcher_local_mode():
     assert "ray start --head" in script
     assert 'dash_port="8265"' in script
     assert "--dashboard-port=$dash_port" in script
+    assert "trap - EXIT SIGINT SIGTERM" in script
+    assert 'exit "$exit_code"' in script
 
 
 def test_ray_launcher_cluster_standalone_mode():
@@ -113,10 +115,14 @@ def test_ray_launcher_cluster_standalone_mode():
     assert "--node-ip-address=$head_bind_addr" in driver_script
     assert 'srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
     assert "python3 /path/to/script.py" in driver_script
+    assert "trap - EXIT SIGINT SIGTERM" in driver_script
+    assert 'exit "$exit_code"' in driver_script
 
     assert "--address=$ip_head" in worker_script
     assert "--num-gpus=2" in worker_script
     assert "--node-ip-address" not in worker_script
+    assert "trap - EXIT INT TERM" in worker_script
+    assert 'exit "$exit_code"' in worker_script
 
 
 # TODO: Implement session mode, HET job

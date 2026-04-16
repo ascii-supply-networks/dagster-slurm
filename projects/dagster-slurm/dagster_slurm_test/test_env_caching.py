@@ -38,6 +38,10 @@ class FakePool:
 
     def run(self, cmd, timeout=None):
         self.commands.append(cmd)
+        if cmd == "uname -s":
+            return "Linux\n"
+        if cmd == "uname -m":
+            return "x86_64\n"
         if cmd.startswith("test -f") and not self.payload_exists:
             raise RuntimeError("missing payload")
         return ""
@@ -135,6 +139,28 @@ def test_compute_env_cache_key_hashes_inject_files(tmp_path: Path):
     assert key1 != key2, "Cache key should change when inject file contents change"
 
 
+def test_compute_env_cache_key_changes_with_env_overrides(tmp_path: Path):
+    """Platform overrides must affect the environment cache key."""
+    lockfile = tmp_path / "pixi.lock"
+    lockfile.write_text("lockfile content")
+
+    pack_cmd = ["python", "scripts/pack_environment.py"]
+    key_x86 = compute_env_cache_key(
+        pack_cmd,
+        lockfile=lockfile,
+        env_overrides={"SLURM_PACK_PLATFORM": "linux-64"},
+    )
+    key_arm = compute_env_cache_key(
+        pack_cmd,
+        lockfile=lockfile,
+        env_overrides={"SLURM_PACK_PLATFORM": "linux-aarch64"},
+    )
+
+    assert key_x86 is not None
+    assert key_arm is not None
+    assert key_x86 != key_arm
+
+
 def test_compute_env_cache_key_with_cache_inject_globs(tmp_path: Path):
     """cache_inject_globs should filter which inject files affect the cache key."""
     lockfile = tmp_path / "pixi.lock"
@@ -219,7 +245,9 @@ def test_prepare_environment_reuses_cached_env(monkeypatch):
     pool = FakePool()
 
     monkeypatch.setattr(
-        client, "_compute_environment_cache_key", lambda pack_cmd: "abc123"
+        client,
+        "_compute_environment_cache_key",
+        lambda pack_cmd, env_overrides=None: "abc123",
     )
     monkeypatch.setattr(client, "_cached_env_ready", lambda **_: True)
     monkeypatch.setattr(
@@ -237,7 +265,7 @@ def test_prepare_environment_reuses_cached_env(monkeypatch):
     assert activation == "/remote/base/env-cache/abc123/activate.sh"
     assert python_exec == "/remote/base/env-cache/abc123/env/bin/python"
     assert not pool.uploads
-    assert pool.commands == []
+    assert pool.commands == ["uname -s", "uname -m"]
 
 
 def test_prepare_environment_force_pushes(monkeypatch, tmp_path: Path):
@@ -251,7 +279,9 @@ def test_prepare_environment_force_pushes(monkeypatch, tmp_path: Path):
     pack_path.write_text("#!/bin/bash\necho hi\n")
 
     monkeypatch.setattr(
-        client, "_compute_environment_cache_key", lambda pack_cmd: "force123"
+        client,
+        "_compute_environment_cache_key",
+        lambda pack_cmd, env_overrides=None: "force123",
     )
     monkeypatch.setattr(
         client, "_extract_environment", lambda **kwargs: kwargs["pack_file_path"]
@@ -273,7 +303,184 @@ def test_prepare_environment_force_pushes(monkeypatch, tmp_path: Path):
     assert pool.uploads == [
         (str(pack_path), "/remote/base/env-cache/force123/environment.sh")
     ]
-    assert pool.commands == ["mkdir -p /remote/base/env-cache/force123/env"]
+    assert pool.commands == [
+        "uname -s",
+        "uname -m",
+        "mkdir -p /remote/base/env-cache/force123/env",
+    ]
+
+
+def test_resolve_pack_platform_detects_apple_silicon_under_rosetta(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = SlurmPipesClient(
+        slurm_resource=cast(Any, SimpleNamespace(ssh=None, queue=None)),
+        launcher=BashLauncher(),
+        auto_detect_platform=True,
+    )
+
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.platform.system",
+        lambda: "Darwin",
+    )
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.platform.machine",
+        lambda: "x86_64",
+    )
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="1\n"),
+    )
+
+    assert client._resolve_pack_platform() == "linux-aarch64"
+
+
+def test_prepare_environment_prefers_remote_submitter_architecture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    client = SlurmPipesClient(
+        slurm_resource=cast(Any, SimpleNamespace(ssh=None, queue=None)),
+        launcher=BashLauncher(),
+        auto_detect_platform=True,
+    )
+
+    class RemoteArmPool(FakePool):
+        def run(self, cmd, timeout=None):
+            self.commands.append(cmd)
+            if cmd == "uname -s":
+                return "Linux\n"
+            if cmd == "uname -m":
+                return "aarch64\n"
+            return super().run(cmd, timeout=timeout)
+
+    pool = RemoteArmPool()
+    pack_path = tmp_path / "environment-linux-aarch64.sh"
+    pack_path.write_text("#!/bin/bash\necho hi\n")
+    captured: dict[str, Any] = {}
+
+    def fake_cache_key(pack_cmd: list[str], env_overrides=None) -> str:
+        captured["cache_pack_cmd"] = pack_cmd
+        captured["cache_env_overrides"] = env_overrides
+        return "remotearm123"
+
+    def fake_pack_environment_with_pixi(**kwargs):
+        captured["pack_cmd"] = kwargs["pack_cmd"]
+        captured["pack_env_overrides"] = kwargs["env_overrides"]
+        return pack_path
+
+    monkeypatch.setattr(client, "_compute_environment_cache_key", fake_cache_key)
+    monkeypatch.setattr(client, "_cached_env_ready", lambda **_: False)
+    monkeypatch.setattr(
+        client, "_extract_environment", lambda **kwargs: kwargs["pack_file_path"]
+    )
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.pack_environment_with_pixi",
+        fake_pack_environment_with_pixi,
+    )
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.platform.system",
+        lambda: "Darwin",
+    )
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.platform.machine",
+        lambda: "x86_64",
+    )
+
+    activation, python_exec = client._prepare_environment(
+        ssh_pool=cast(Any, pool),
+        remote_base="/remote/base",
+        run_dir="/remote/base/runs/run1",
+        force_env_push=True,
+        pack_cmd_override=[
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+            "--build-missing",
+        ],
+    )
+
+    assert activation.endswith("/environment-linux-aarch64.sh")
+    assert python_exec == "/remote/base/env-cache/remotearm123/env/bin/python"
+    assert captured["cache_env_overrides"] == {"SLURM_PACK_PLATFORM": "linux-aarch64"}
+    assert captured["pack_env_overrides"] == {"SLURM_PACK_PLATFORM": "linux-aarch64"}
+    assert captured["pack_cmd"][-2:] == ["--platform", "linux-aarch64"]
+    assert pool.commands[:2] == ["uname -s", "uname -m"]
+
+
+def test_custom_pack_environment_override_gets_explicit_platform():
+    client = SlurmPipesClient(
+        slurm_resource=cast(Any, SimpleNamespace(ssh=None, queue=None)),
+        launcher=BashLauncher(),
+        pack_platform="linux-aarch64",
+        auto_detect_platform=False,
+    )
+
+    command = client._get_pack_command(
+        override=[
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+            "--build-missing",
+        ],
+        full_build=True,
+    )
+
+    assert command[-2:] == ["--platform", "linux-aarch64"]
+
+
+def test_custom_pack_environment_override_preserves_existing_platform():
+    client = SlurmPipesClient(
+        slurm_resource=cast(Any, SimpleNamespace(ssh=None, queue=None)),
+        launcher=BashLauncher(),
+        pack_platform="linux-aarch64",
+        auto_detect_platform=False,
+    )
+
+    command = client._get_pack_command(
+        override=[
+            "pixi",
+            "run",
+            "-e",
+            "opstooling",
+            "--frozen",
+            "python",
+            "scripts/pack_environment.py",
+            "--env",
+            "workload-document-processing",
+            "--platform",
+            "linux-64",
+            "--build-missing",
+        ],
+        full_build=True,
+    )
+
+    assert command.count("--platform") == 1
+    assert command[command.index("--platform") + 1] == "linux-64"
+
+
+def test_pack_platform_env_override_wins(monkeypatch: pytest.MonkeyPatch):
+    client = SlurmPipesClient(
+        slurm_resource=cast(Any, SimpleNamespace(ssh=None, queue=None)),
+        launcher=BashLauncher(),
+        pack_platform="linux-64",
+        auto_detect_platform=False,
+    )
+
+    monkeypatch.setenv("SLURM_PACK_PLATFORM", "linux-aarch64")
+
+    assert client._resolve_pack_platform() == "linux-aarch64"
 
 
 def test_run_uploads_payload_when_reusing_env(monkeypatch, tmp_path: Path):

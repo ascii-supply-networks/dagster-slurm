@@ -1,5 +1,6 @@
 """Slurm Pipes client for remote execution."""
 
+import os
 import platform
 import shlex
 import re
@@ -21,6 +22,7 @@ from dagster import (
     get_dagster_logger,
     open_pipes_session,
 )
+from dagster._core.errors import DagsterPipesExecutionError
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 from dagster._utils.interrupts import _received_interrupt
 
@@ -252,16 +254,29 @@ class SlurmPipesClient(PipesClient):
                                 job_id=old_job_id,
                             )
 
+                            final_metrics = self._validate_final_slurm_outcome(
+                                old_job_id,
+                                ssh_pool,
+                            )
                             self.logger.info(
                                 f"Reattached job {old_job_id} completed successfully"
                             )
 
                             self._collect_and_emit_metrics(
-                                old_job_id, ssh_pool, context
+                                old_job_id,
+                                ssh_pool,
+                                context,
+                                metrics=final_metrics,
                             )
 
                             # Clear tags to prevent stale reattach
                             self._store_job_tags(op_ctx, old_job_id, "", "")
+
+                        self._current_job_id = None
+                        self._raise_if_pipes_process_failed(
+                            message_reader,
+                            job_id=old_job_id,
+                        )
 
                         # Cleanup
                         if not self.debug_mode:
@@ -303,12 +318,25 @@ class SlurmPipesClient(PipesClient):
                                 job_id=old_job_id,
                             )
 
+                            final_metrics = self._validate_final_slurm_outcome(
+                                old_job_id,
+                                ssh_pool,
+                            )
                             self._collect_and_emit_metrics(
-                                old_job_id, ssh_pool, context
+                                old_job_id,
+                                ssh_pool,
+                                context,
+                                metrics=final_metrics,
                             )
 
                             # Clear tags to prevent stale reattach
                             self._store_job_tags(op_ctx, old_job_id, "", "")
+
+                        self._current_job_id = None
+                        self._raise_if_pipes_process_failed(
+                            message_reader,
+                            job_id=old_job_id,
+                        )
 
                         # Cleanup
                         if not self.debug_mode:
@@ -454,13 +482,28 @@ class SlurmPipesClient(PipesClient):
                         job_id=job_id,
                     )
 
+                    final_metrics = self._validate_final_slurm_outcome(
+                        job_id,
+                        ssh_pool,
+                    )
                     self.logger.info(f"Job {job_id} completed successfully")
 
-                    self._collect_and_emit_metrics(job_id, ssh_pool, context)
+                    self._collect_and_emit_metrics(
+                        job_id,
+                        ssh_pool,
+                        context,
+                        metrics=final_metrics,
+                    )
 
                     # Clear reattach tags so stale tags don't trigger
                     # false reattach on a future run.
                     self._store_job_tags(context.op_execution_context, job_id, "", "")
+
+                self._current_job_id = None
+                self._raise_if_pipes_process_failed(
+                    message_reader,
+                    job_id=job_id,
+                )
 
                 # Cleanup (unless debug mode)
                 if not self.debug_mode:
@@ -550,6 +593,24 @@ class SlurmPipesClient(PipesClient):
         except Exception as exc:
             self.logger.debug(f"Could not check run cancel status: {exc}")
             return False
+
+    def _raise_if_pipes_process_failed(
+        self,
+        message_reader: Any,
+        *,
+        job_id: int,
+    ) -> None:
+        closed_exception = getattr(message_reader, "closed_exception", None)
+        if not isinstance(closed_exception, dict):
+            return
+
+        exc_name = str(closed_exception.get("name") or "Exception")
+        exc_message = str(closed_exception.get("message") or "Unknown error")
+        raise DagsterPipesExecutionError(
+            "Slurm job "
+            f"{job_id} reached a successful terminal state, but the external Pipes "
+            f"process reported an exception: {exc_name}: {exc_message}"
+        )
 
     def _get_asset_key_string(
         self, op_context: Optional[OpExecutionContext]
@@ -702,10 +763,13 @@ class SlurmPipesClient(PipesClient):
         job_id: int,
         ssh_pool: SSHConnectionPool,
         context: Any,
+        metrics: Any | None = None,
     ) -> None:
         """Collect Slurm job metrics via sacct and attach as output metadata."""
         try:
-            metrics = self.metrics_collector.collect_job_metrics(job_id, ssh_pool)
+            metrics = metrics or self.metrics_collector.collect_job_metrics(
+                job_id, ssh_pool
+            )
             metadata = {
                 "slurm_job_id": job_id,
                 "node_hours": metrics.node_hours,
@@ -757,6 +821,96 @@ class SlurmPipesClient(PipesClient):
         except Exception as e:
             self.logger.warning(f"Failed to collect metrics: {e}")
 
+    @staticmethod
+    def _parse_slurm_exit_code(exit_code: str) -> tuple[int, int]:
+        """Parse Slurm's ExitCode field into (status, signal)."""
+        if not exit_code:
+            return (0, 0)
+
+        try:
+            status_str, signal_str = exit_code.strip().split(":", maxsplit=1)
+            return (int(status_str), int(signal_str))
+        except (AttributeError, TypeError, ValueError):
+            return (-1, -1)
+
+    def _get_final_accounting_rows(
+        self,
+        job_id: int,
+        ssh_pool: SSHConnectionPool,
+    ) -> dict[str, dict[str, Any]]:
+        """Return normalized parent/batch accounting rows for a finished job."""
+        output = ssh_pool.run(
+            f"sacct -j {job_id} -n -P --format=JobID,State,ExitCode 2>/dev/null || true"
+        ).strip()
+        rows: dict[str, dict[str, Any]] = {}
+        for line in output.splitlines():
+            fields = [field.strip() for field in line.split("|")]
+            if len(fields) < 3 or not fields[0]:
+                continue
+            rows[fields[0]] = {
+                "state": normalize_slurm_state(fields[1]),
+                "exit_code": fields[2],
+            }
+        return rows
+
+    def _validate_final_slurm_outcome(
+        self,
+        job_id: int,
+        ssh_pool: SSHConnectionPool,
+    ) -> Any:
+        """Require final sacct rows to agree that the job really succeeded."""
+        metrics = self.metrics_collector.collect_job_metrics(job_id, ssh_pool)
+        rows = self._get_final_accounting_rows(job_id, ssh_pool)
+
+        parent_row = rows.get(str(job_id))
+        batch_row = rows.get(f"{job_id}.batch")
+
+        if parent_row:
+            parent_state = parent_row["state"]
+            parent_status, parent_signal = self._parse_slurm_exit_code(
+                str(parent_row["exit_code"])
+            )
+            if (
+                parent_state
+                and parent_state != "COMPLETED"
+                or parent_status not in {0, -1}
+                or parent_signal not in {0, -1}
+            ):
+                raise RuntimeError(
+                    f"Job {job_id} did not complete successfully. Final parent state: "
+                    f"{parent_state or 'UNKNOWN'} (exit {parent_row['exit_code']})."
+                )
+
+        if batch_row:
+            batch_state = batch_row["state"]
+            batch_status, batch_signal = self._parse_slurm_exit_code(
+                str(batch_row["exit_code"])
+            )
+            if (
+                batch_state
+                and batch_state != "COMPLETED"
+                or batch_status not in {0, -1}
+                or batch_signal not in {0, -1}
+            ):
+                raise RuntimeError(
+                    f"Job {job_id}.batch did not complete successfully. Final batch state: "
+                    f"{batch_state or 'UNKNOWN'} (exit {batch_row['exit_code']})."
+                )
+        else:
+            batch_state = normalize_slurm_state(str(getattr(metrics, "state", "")))
+            batch_exit = int(getattr(metrics, "exit_code", -1))
+            if batch_state and batch_state not in {"UNKNOWN", "COMPLETED"}:
+                raise RuntimeError(
+                    f"Job {job_id}.batch did not complete successfully. Final batch state: "
+                    f"{batch_state}."
+                )
+            if batch_exit not in {0, -1}:
+                raise RuntimeError(
+                    f"Job {job_id}.batch reported a non-zero exit code: {batch_exit}."
+                )
+
+        return metrics
+
     def _cancel_slurm_job(self, job_id: int):
         """Cancel a Slurm job.
 
@@ -806,7 +960,10 @@ class SlurmPipesClient(PipesClient):
             self.logger.error(f"❌ Failed to cancel Slurm job {job_id}: {e}")
 
     def _get_pack_command(
-        self, override: Optional[list[str]] = None, full_build: bool = False
+        self,
+        override: Optional[list[str]] = None,
+        full_build: bool = False,
+        target_platform: Optional[str] = None,
     ) -> list[str]:
         """Determine the appropriate pack command based on platform or override.
 
@@ -821,20 +978,11 @@ class SlurmPipesClient(PipesClient):
         - Cache miss or force: use 'pack' (with builds) to ensure artifacts exist
         """
         if override:
-            return override
-
-        # Determine if this is ARM architecture
-        is_aarch = False
-        if self.pack_platform:
-            is_aarch = self.pack_platform in ("linux-aarch64", "osx-arm64")
-        elif self.auto_detect_platform:
-            system = platform.system().lower()
-            machine = platform.machine().lower()
-            is_aarch = (system == "darwin" and "arm" in machine) or (
-                system == "linux" and ("aarch64" in machine or "arm" in machine)
+            return self._normalize_pack_command(
+                list(override), target_platform=target_platform
             )
-            if is_aarch:
-                self.logger.debug(f"Auto-detected ARM platform: {system}/{machine}")
+
+        is_aarch = (target_platform or self._resolve_pack_platform()) == "linux-aarch64"
 
         if full_build:
             # Cache miss or force push: use full pack with builds
@@ -847,6 +995,127 @@ class SlurmPipesClient(PipesClient):
             if is_aarch:
                 return ["pixi", "run", "--frozen", "pack-only-aarch"]
             return ["pixi", "run", "--frozen", "pack-only"]
+
+    def _normalize_pack_command(
+        self, pack_cmd: list[str], target_platform: Optional[str] = None
+    ) -> list[str]:
+        """Apply platform-specific fixes to custom pack commands."""
+        if not self._is_pack_environment_script(pack_cmd):
+            return pack_cmd
+
+        if any(
+            arg == "--platform" or arg.startswith("--platform=") for arg in pack_cmd
+        ):
+            return pack_cmd
+
+        return [
+            *pack_cmd,
+            "--platform",
+            target_platform or self._resolve_pack_platform(),
+        ]
+
+    def _is_pack_environment_script(self, pack_cmd: list[str]) -> bool:
+        """Return True when the command invokes the workspace pack helper."""
+        return any(arg.endswith("scripts/pack_environment.py") for arg in pack_cmd)
+
+    def _resolve_pack_platform(
+        self, ssh_pool: Optional[SSHConnectionPool] = None
+    ) -> str:
+        """Resolve the target Linux platform for packed Slurm environments."""
+        env_override = os.environ.get("SLURM_PACK_PLATFORM", "").strip()
+        if env_override:
+            if env_override in ("linux-aarch64", "osx-arm64"):
+                return "linux-aarch64"
+            return "linux-64"
+
+        if self.pack_platform:
+            if self.pack_platform in ("linux-aarch64", "osx-arm64"):
+                return "linux-aarch64"
+            return "linux-64"
+
+        if ssh_pool is not None:
+            if remote_platform := self._detect_remote_pack_platform(ssh_pool):
+                return remote_platform
+
+        if not self.auto_detect_platform:
+            return "linux-64"
+
+        system = platform.system().lower()
+        machine = platform.machine().lower()
+
+        if system == "darwin":
+            if "arm" in machine or "aarch64" in machine:
+                self.logger.debug(
+                    "Auto-detected Apple Silicon host for linux-aarch64 packing"
+                )
+                return "linux-aarch64"
+            if self._darwin_host_supports_arm64():
+                self.logger.debug(
+                    "Detected Apple Silicon host via sysctl for linux-aarch64 packing"
+                )
+                return "linux-aarch64"
+            return "linux-64"
+
+        if system == "linux" and ("aarch64" in machine or machine.startswith("arm")):
+            self.logger.debug(f"Auto-detected ARM Linux host: {system}/{machine}")
+            return "linux-aarch64"
+
+        return "linux-64"
+
+    def _detect_remote_pack_platform(
+        self, ssh_pool: SSHConnectionPool
+    ) -> Optional[str]:
+        """Detect the target platform from the remote submitter host."""
+        try:
+            remote_system = ssh_pool.run("uname -s").strip().lower()
+            remote_machine = ssh_pool.run("uname -m").strip().lower()
+        except Exception as exc:  # pragma: no cover - best effort
+            self.logger.debug(f"Could not detect remote submitter architecture: {exc}")
+            return None
+
+        if remote_system != "linux":
+            self.logger.debug(
+                "Remote submitter system %s/%s is not a Linux pack target",
+                remote_system,
+                remote_machine,
+            )
+            return None
+
+        if "aarch64" in remote_machine or remote_machine.startswith("arm"):
+            self.logger.info(
+                "Detected remote submitter architecture: %s/%s -> linux-aarch64",
+                remote_system,
+                remote_machine,
+            )
+            return "linux-aarch64"
+
+        self.logger.info(
+            "Detected remote submitter architecture: %s/%s -> linux-64",
+            remote_system,
+            remote_machine,
+        )
+        return "linux-64"
+
+    def _darwin_host_supports_arm64(self) -> bool:
+        """Detect Apple Silicon even when Python runs under Rosetta."""
+        try:
+            result = subprocess.run(
+                ["sysctl", "-in", "hw.optional.arm64"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        return result.returncode == 0 and result.stdout.strip() == "1"
+
+    def _build_pack_env_overrides(
+        self, ssh_pool: Optional[SSHConnectionPool] = None
+    ) -> dict[str, str]:
+        """Build environment overrides that influence pixi-pack output."""
+        return {"SLURM_PACK_PLATFORM": self._resolve_pack_platform(ssh_pool=ssh_pool)}
 
     def _get_remote_base(self, run_id: str, ssh_pool: SSHConnectionPool) -> str:
         """Get remote base directory with proper expansion of $HOME."""
@@ -875,12 +1144,17 @@ class SlurmPipesClient(PipesClient):
 
         return remote_base
 
-    def _compute_environment_cache_key(self, pack_cmd: list[str]) -> Optional[str]:
+    def _compute_environment_cache_key(
+        self,
+        pack_cmd: list[str],
+        env_overrides: Optional[dict[str, str]] = None,
+    ) -> Optional[str]:
         """Return a cache key derived from the lockfile, pack command, and inject files."""
         try:
             return compute_env_cache_key(
                 pack_cmd=pack_cmd,
                 cache_inject_globs=self.cache_inject_globs,
+                env_overrides=env_overrides,
             )
         except Exception as exc:  # pragma: no cover - best effort
             self.logger.debug(f"Could not compute environment cache key: {exc}")
@@ -922,11 +1196,23 @@ class SlurmPipesClient(PipesClient):
             python_executable = f"{env_dir}/bin/python"
             return activation_script, python_executable
 
+        pack_env_overrides = self._build_pack_env_overrides(ssh_pool=ssh_pool)
+        self.logger.info(
+            "Resolved pack platform for remote environment: %s",
+            pack_env_overrides["SLURM_PACK_PLATFORM"],
+        )
+        resolved_pack_platform = pack_env_overrides["SLURM_PACK_PLATFORM"]
+
         # Use pack-only command for cache key computation (stable keys)
         pack_cmd_for_cache = self._get_pack_command(
-            override=pack_cmd_override, full_build=False
+            override=pack_cmd_override,
+            full_build=False,
+            target_platform=resolved_pack_platform,
         )
-        cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd_for_cache)
+        cache_key = self._compute_environment_cache_key(
+            pack_cmd=pack_cmd_for_cache,
+            env_overrides=pack_env_overrides,
+        )
         if cache_key:
             env_base_dir = f"{remote_base}/env-cache/{cache_key}"
         else:
@@ -956,7 +1242,11 @@ class SlurmPipesClient(PipesClient):
                 return activation_script, python_executable
 
         # Cache miss or force push: use full pack (with builds) to ensure artifacts exist
-        pack_cmd = self._get_pack_command(override=pack_cmd_override, full_build=True)
+        pack_cmd = self._get_pack_command(
+            override=pack_cmd_override,
+            full_build=True,
+            target_platform=resolved_pack_platform,
+        )
 
         if force_env_push:
             self.logger.info("Force pushing environment for this asset run")
@@ -965,16 +1255,17 @@ class SlurmPipesClient(PipesClient):
         else:
             self.logger.info(f"Cache miss for {cache_key}, packing environment...")
         self.logger.info("Packing environment with pixi...")
-        env_overrides = {}
-        if self.pack_platform:
-            env_overrides["SLURM_PACK_PLATFORM"] = self.pack_platform
         pack_file = pack_environment_with_pixi(
-            pack_cmd=pack_cmd, env_overrides=env_overrides or None
+            pack_cmd=pack_cmd,
+            env_overrides=pack_env_overrides,
         )
 
         # Re-compute cache key AFTER building, since pack may have rebuilt artifacts
         # This ensures the upload path matches what future runs will compute
-        new_cache_key = self._compute_environment_cache_key(pack_cmd=pack_cmd_for_cache)
+        new_cache_key = self._compute_environment_cache_key(
+            pack_cmd=pack_cmd_for_cache,
+            env_overrides=pack_env_overrides,
+        )
         if new_cache_key and new_cache_key != cache_key:
             self.logger.debug(
                 f"Cache key changed after build: {cache_key} -> {new_cache_key}"
@@ -1880,16 +2171,10 @@ class SlurmPipesClient(PipesClient):
                     "ControlMaster=no",
                 ]
             )
+            if self.slurm.ssh.uses_key_auth:
+                cmd.extend(self.slurm.ssh.get_key_auth_opts(batch_mode=True))
         elif self.slurm.ssh.uses_key_auth:
-            assert self.slurm.ssh.key_path is not None
-            cmd.extend(
-                [
-                    "-i",
-                    self.slurm.ssh.key_path,
-                    "-o",
-                    "IdentitiesOnly=yes",
-                ]
-            )
+            cmd.extend(self.slurm.ssh.get_key_auth_opts(batch_mode=True))
 
         if self.slurm.ssh.extra_opts:
             cmd.extend([opt for opt in self.slurm.ssh.extra_opts if opt is not None])

@@ -344,6 +344,8 @@ class RayLauncher(ComputeLauncher):
       fi
 
       echo "[$({date_fmt})] ✓ Cleanup complete"
+      trap - EXIT SIGINT SIGTERM
+      exit "$exit_code"
     }}
 
     # Set trap for exit scenarios (not ERR - it causes double cleanup with set -e)
@@ -527,6 +529,7 @@ class RayLauncher(ComputeLauncher):
     mkdir -p "$RAY_CLUSTER_TMP"
 
     cleanup_node() {{
+        local exit_code=$?
         echo "[$({date_fmt})] Worker on $(hostname) shutting down..."
 
         # Stop background log sync
@@ -557,7 +560,8 @@ class RayLauncher(ComputeLauncher):
         # Cleanup temp dir
         rm -rf "$RAY_CLUSTER_TMP" 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Worker cleanup complete"
-        exit 0
+        trap - EXIT INT TERM
+        exit "$exit_code"
     }}
     trap cleanup_node TERM INT EXIT
 
@@ -724,6 +728,8 @@ class RayLauncher(ComputeLauncher):
         echo "[$({date_fmt})] Cleaning up temporary files..."
         rm -rf "$RAY_CLUSTER_TMP" 2>/dev/null || true
         echo "[$({date_fmt})] ✓ Shutdown complete"
+        trap - EXIT SIGINT SIGTERM
+        exit "$exit_code"
     }}
     trap cleanup EXIT SIGINT SIGTERM
 

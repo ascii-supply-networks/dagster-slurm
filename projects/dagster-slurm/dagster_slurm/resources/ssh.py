@@ -213,6 +213,25 @@ class SSHConnectionResource(ConfigurableResource):
             target = f"{target}:{self.jump_host.port}"
         return ["-J", target]
 
+    def get_key_auth_opts(self, *, batch_mode: bool = True) -> List[str]:
+        """Build key-based SSH authentication options."""
+        if not self.uses_key_auth:
+            return []
+
+        key_path = self.key_path
+        if not key_path:
+            raise RuntimeError("SSH key authentication requires key_path to be set")
+
+        auth_opts = [
+            "-i",
+            key_path,
+            "-o",
+            "IdentitiesOnly=yes",
+        ]
+        if batch_mode:
+            auth_opts.extend(["-o", "BatchMode=yes"])
+        return auth_opts
+
     def get_ssh_base_command(self) -> List[str]:
         """Build base SSH command, including proxy and auth options."""
         proxy_opts = self.get_proxy_command_opts()
@@ -230,20 +249,15 @@ class SSHConnectionResource(ConfigurableResource):
         ]
 
         if self.uses_key_auth:
-            # Assert for type checker, guaranteed by uses_key_auth property
-            assert self.key_path is not None
-            auth_opts = [
-                "-i",
-                self.key_path,
-                "-o",
-                "IdentitiesOnly=yes",
-                "-o",
-                "PreferredAuthentications=publickey",
-                "-o",
-                "PasswordAuthentication=no",
-                "-o",
-                "BatchMode=yes",
-            ]
+            auth_opts = self.get_key_auth_opts(batch_mode=True)
+            auth_opts.extend(
+                [
+                    "-o",
+                    "PreferredAuthentications=publickey",
+                    "-o",
+                    "PasswordAuthentication=no",
+                ]
+            )
         else:  # Password-based authentication
             auth_opts = [
                 "-o",
