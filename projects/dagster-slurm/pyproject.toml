@@ -20,8 +20,8 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "dagster>=1.11.7",
-  "dagster-pipes>=1.11.7",
+  "dagster>=1.13.0,<1.14",
+  "dagster-pipes>=1.13.0,<1.14",
   "loguru>=0.7",
   "pexpect~=4.9.0",
 ]

@@ -33,6 +33,8 @@ def docker_slurm_env(docker_ssh_key: Path) -> Dict[str, str]:
 
 pytestmark = pytest.mark.needs_slurm_docker
 
+LIST_DEFS_TIMEOUT = 120
+
 
 # ============================================================================
 # Development Mode Tests (Local)
@@ -60,7 +62,7 @@ class TestDevelopmentMode:
             env={**os.environ, "DAGSTER_DEPLOYMENT": "development"},
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=LIST_DEFS_TIMEOUT,
         )
 
         assert result.returncode == 0
@@ -149,7 +151,7 @@ class TestStagingDockerMode:
             },
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=LIST_DEFS_TIMEOUT,
         )
 
         assert result.returncode == 0
