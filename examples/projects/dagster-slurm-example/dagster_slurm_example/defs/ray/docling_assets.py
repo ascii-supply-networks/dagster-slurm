@@ -138,25 +138,28 @@ def process_documents_with_docling(
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/process_documents_docling.py",
     )
 
-    # Configure Ray launcher for document processing
-    # Adjust num_nodes and resources based on your workload
-    ray_launcher = RayLauncher(
-        num_gpus_per_node=0,  # Set to >0 if using GPU-accelerated OCR
-    )
-
     # Adjust resources based on deployment target
     # Docker/local: 2 CPUs, 4GB (safe for Docker environments)
-    # Datalab/Musica: 8 CPUs, 24GB (docling + Ray + models need more)
+    # MUSICA CPU nodes: reserve more memory and cap Ray's object store explicitly.
     deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
     is_supercomputer = "supercomputer" in deployment
+    site = os.getenv("SLURM_SUPERCOMPUTER_SITE", "").strip().lower()
+    is_musica = site == "musica"
     cpus_per_task = 8 if is_supercomputer else 2
-    memory_per_node = "24G" if is_supercomputer else "4G"
+    memory_per_node = "12G" if is_musica else ("24G" if is_supercomputer else "4G")
+    time_limit = "00:10:00" if is_musica else None
+    ray_launcher = RayLauncher(
+        num_gpus_per_node=0,  # Set to >0 if using GPU-accelerated OCR
+        object_store_memory_gb=4 if is_musica else None,
+    )
 
     context.log.info(
         f"Starting distributed document processing with docling...\n"
         f"  Deployment: {deployment}\n"
+        f"  Site: {site or 'default'}\n"
         f"  CPUs per task: {cpus_per_task}\n"
         f"  Memory per node: {memory_per_node}\n"
+        f"  Time limit: {time_limit or 'queue default'}\n"
         f"  Input: {config.input_glob}\n"
         f"  Output: {config.output_dir}\n"
         f"  Workers: {config.num_workers}\n"
@@ -175,11 +178,9 @@ def process_documents_with_docling(
             "OUTPUT_DIR": config.output_dir,
             "NUM_WORKERS": str(config.num_workers),
             "BATCH_SIZE": str(config.batch_size),
-            # Ray object store memory: use 50% of available memory (recommended for Ray Data)
-            "RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION": "0.5",
             # Pass deployment config for environment-aware path resolution
             "DAGSTER_DEPLOYMENT": deployment,
-            "SLURM_SUPERCOMPUTER_SITE": os.getenv("SLURM_SUPERCOMPUTER_SITE", ""),
+            "SLURM_SUPERCOMPUTER_SITE": site,
         },
         extra_slurm_opts={
             # Resource allocation for document processing
@@ -187,7 +188,8 @@ def process_documents_with_docling(
             # Multi-node = distributed Ray cluster
             "nodes": 1,  # Increase for larger workloads
             "cpus_per_task": cpus_per_task,  # 2 CPUs for Docker, 8 for supercomputers
-            "mem": memory_per_node,  # 4GB for Docker, 24GB for supercomputers
+            "mem": memory_per_node,  # 4GB for Docker, 12GB for MUSICA CPU nodes
+            **({"time_limit": time_limit} if time_limit else {}),
             # Uncomment for GPU-accelerated OCR:
             # "gres": "gpu:1",
         },
@@ -235,20 +237,22 @@ def process_large_document_collection(
         "../../../../dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/ray/process_documents_docling.py",
     )
 
-    # Configure multi-node Ray cluster
-    ray_launcher = RayLauncher(
-        num_gpus_per_node=0,
-    )
-
     # Adjust resources based on deployment target
     deployment = os.getenv("DAGSTER_DEPLOYMENT", "development")
     is_supercomputer = "supercomputer" in deployment
+    site = os.getenv("SLURM_SUPERCOMPUTER_SITE", "").strip().lower()
+    is_musica = site == "musica"
     cpus_per_task = 8 if is_supercomputer else 2
-    memory_per_node = "24G" if is_supercomputer else "4G"
+    memory_per_node = "64G" if is_musica else ("24G" if is_supercomputer else "4G")
+    ray_launcher = RayLauncher(
+        num_gpus_per_node=0,
+        object_store_memory_gb=8 if is_musica else None,
+    )
 
     context.log.info(
         f"Starting large-scale document processing with multi-node Ray cluster...\n"
         f"  Deployment: {deployment}\n"
+        f"  Site: {site or 'default'}\n"
         f"  CPUs per task: {cpus_per_task}\n"
         f"  Memory per node: {memory_per_node}\n"
         f"  Input: {config.input_glob}\n"
@@ -267,18 +271,16 @@ def process_large_document_collection(
             "OUTPUT_DIR": config.output_dir,
             "NUM_WORKERS": str(config.num_workers),
             "BATCH_SIZE": str(config.batch_size),
-            # Ray object store memory: use 50% of available memory (recommended for Ray Data)
-            "RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION": "0.5",
             # Pass deployment config for environment-aware path resolution
             "DAGSTER_DEPLOYMENT": deployment,
-            "SLURM_SUPERCOMPUTER_SITE": os.getenv("SLURM_SUPERCOMPUTER_SITE", ""),
+            "SLURM_SUPERCOMPUTER_SITE": site,
         },
         extra_slurm_opts={
             # Multi-node configuration
             "nodes": 2,  # Multiple nodes for distributed processing
             "cpus_per_task": cpus_per_task,  # 2 CPUs for Docker, 8 for supercomputers
-            "mem": memory_per_node,  # 4GB for Docker, 24GB for supercomputers
-            "time": "01:00:00",  # 1-hour time limit
+            "mem": memory_per_node,  # 4GB for Docker, 64GB for MUSICA CPU nodes
+            "time_limit": "01:00:00",
         },
     )
 

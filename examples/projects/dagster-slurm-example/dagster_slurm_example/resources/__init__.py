@@ -1,6 +1,5 @@
 import copy
 import os
-import platform
 import shlex
 from typing import Any, Dict
 
@@ -26,7 +25,6 @@ LOCAL_RESOURCES_CONFIG: Dict[str, Any] = {
         "spark": {"driver_memory": "2g", "executor_memory": "4g"},
     },
 }
-
 # --- Docker-based Slurm (Staging/Test) ---
 DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.SLURM,  # Default mode, can be overridden
@@ -50,11 +48,17 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "compute_config": {
         "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
         "debug_mode": False,
-        # Only base packages affect cache key - workload-specific packages excluded
-        # so changes to dagster_slurm_example_hpc_workload don't invalidate the cache
+        # Hash local source trees, not built artifacts, so source edits trigger a cache
+        # miss before the pack step decides whether artifacts need rebuilding.
         "cache_inject_globs": [
-            "../dist/dagster_slurm-*-py3-none-any.whl",
-            "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+            "../projects/dagster-slurm/dagster_slurm/**/*.py",
+            "../projects/dagster-slurm/pyproject.toml",
+            "projects/dagster-slurm-example-shared/dagster_slurm_example_shared/**/*.py",
+            "projects/dagster-slurm-example-shared/pyproject.toml",
+            "projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/**/*.py",
+            "projects/dagster-slurm-example-hpc-workload/pyproject.toml",
+            "projects/dagster-slurm-example/dagster_slurm_example/**/*.py",
+            "projects/dagster-slurm-example/pyproject.toml",
         ],
     },
     "launchers": {
@@ -105,11 +109,17 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "auto_detect_platform": False,
         "pack_platform": "linux-64",
         "debug_mode": False,
-        # Only base packages affect cache key - workload-specific packages excluded
-        # so changes to dagster_slurm_example_hpc_workload don't invalidate the cache
+        # Hash local source trees, not built artifacts, so source edits trigger a cache
+        # miss before the pack step decides whether artifacts need rebuilding.
         "cache_inject_globs": [
-            "../dist/dagster_slurm-*-py3-none-any.whl",
-            "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+            "../projects/dagster-slurm/dagster_slurm/**/*.py",
+            "../projects/dagster-slurm/pyproject.toml",
+            "projects/dagster-slurm-example-shared/dagster_slurm_example_shared/**/*.py",
+            "projects/dagster-slurm-example-shared/pyproject.toml",
+            "projects/dagster-slurm-example-hpc-workload/dagster_slurm_example_hpc_workload/**/*.py",
+            "projects/dagster-slurm-example-hpc-workload/pyproject.toml",
+            "projects/dagster-slurm-example/dagster_slurm_example/**/*.py",
+            "projects/dagster-slurm-example/pyproject.toml",
         ],
     },
     "launchers": {
@@ -164,25 +174,25 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     },
     "musica": {
         "slurm_queue_config": {
-            # For the ASC CPU reservation windows, swap the active GPU lines below to:
+            # Default MUSICA profile: CPU dev queue for quick single-node tests.
             "partition": "zen4_0768",
-            "qos": None,  # Use the partition default QoS, or "dev_zen4_0768" for 10 min tests
             "gpus_per_node": 0,
-            "mem": "64G",  # Give single-node Ray jobs enough headroom on MUSICA's CPU nodes
-            "reservation": "dagster_test",  # April 16, 2026 test window
+            "mem": "12G",
+            # "reservation": "dagster_test",  # April 16, 2026 test window
             # "reservation": "dagster",  # April 17, 2026 webinar window
+            # GPU alternatives:
             # "partition": "zen4_0768_h100x4",
             # "qos": "zen4_0768_h100x4",
-            # "qos": "dev_zen4_0768_h100x4",  # 10 min GPU devel QoS
-            "time_limit": "00:05:00",
+            "qos": "dev_zen4_0768",
+            "time_limit": "00:10:00",
             # "gpus_per_node": 1,
             "num_nodes": 1,
         },
         "slurm_session_config": {
-            "partition": "zen4_0768_h100x4",
-            "qos": "zen4_0768_h100x4",  # Or "dev_zen4_0768_h100x4" for 10 min tests
-            # "time_limit": "00:05:00",
-            "gpus_per_node": 1,
+            "partition": "zen4_0768",
+            "qos": "dev_zen4_0768",
+            "time_limit": "00:10:00",
+            "gpus_per_node": 0,
             "num_nodes": 1,
         },
         "launchers": {
@@ -366,12 +376,6 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     # Step 2.1: Select base config based on docker vs supercomputer
     if _is_docker_based(deployment):
         config = copy.deepcopy(DOCKER_SLURM_BASE_CONFIG)
-        # When running docker-based Slurm from ARM hosts, force linux-aarch64 packs.
-        host_arch = platform.machine().lower()
-        if host_arch in ("arm64", "aarch64"):
-            compute_cfg = config.setdefault("compute_config", {})
-            compute_cfg["auto_detect_platform"] = False
-            compute_cfg["pack_platform"] = "linux-aarch64"
         # Apply production overrides if needed
         if _is_production(deployment):
             _deep_merge(config, PRODUCTION_DOCKER_OVERRIDES)
@@ -440,6 +444,12 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
                 config["slurm_config"]["auth_provider"] = auth_provider
     else:
         raise ValueError(f"Unexpected environment: {deployment_name}")
+
+    explicit_pack_platform = os.environ.get("SLURM_PACK_PLATFORM", "").strip()
+    if explicit_pack_platform:
+        compute_cfg = config.setdefault("compute_config", {})
+        compute_cfg["auto_detect_platform"] = False
+        compute_cfg["pack_platform"] = explicit_pack_platform
 
     # Allow explicit env overrides for partition / QoS / reservation so they can be matched
     # to whatever window is currently available on the supercomputer (e.g. hackathon slots).

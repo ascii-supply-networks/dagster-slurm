@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from dagster import AssetKey
+from dagster._core.errors import DagsterPipesExecutionError
 
 from dagster_slurm import (
     BashLauncher,
@@ -20,6 +21,7 @@ from dagster_slurm import (
     SlurmQueueConfig,
 )
 from dagster_slurm.config.environment import ExecutionMode
+from dagster_slurm.helpers import SlurmJobMetrics
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
 
 
@@ -223,6 +225,76 @@ def test_get_job_state_normalizes_truncated_terminal_state():
     state = client._get_job_state(12345, mock_ssh_pool)
 
     assert state == "OUT_OF_MEMORY"
+
+
+def test_validate_final_slurm_outcome_rejects_failed_batch_state():
+    """Final sacct validation must reject batch-step failures after a transient success."""
+    client = _make_client()
+    mock_ssh_pool = MagicMock()
+    mock_ssh_pool.run.return_value = (
+        "12345|TIMEOUT|0:0\n12345.batch|OUT_OF_ME+|0:125\n12345.extern|COMPLETED|0:0\n"
+    )
+
+    with patch.object(
+        client.metrics_collector,
+        "collect_job_metrics",
+        return_value=SlurmJobMetrics(
+            job_id=12345,
+            elapsed_seconds=340.0,
+            cpu_time_seconds=0.0,
+            max_rss_mb=24554.0,
+            node_hours=0.0,
+            cpu_efficiency=0.0,
+            state="OUT_OF_MEMORY",
+            exit_code=0,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match=r"12345 did not complete successfully"):
+            client._validate_final_slurm_outcome(12345, mock_ssh_pool)
+
+
+def test_validate_final_slurm_outcome_accepts_clean_completed_job():
+    """Final sacct validation should accept clean parent and batch completion."""
+    client = _make_client()
+    mock_ssh_pool = MagicMock()
+    mock_ssh_pool.run.return_value = (
+        "12345|COMPLETED|0:0\n12345.batch|COMPLETED|0:0\n12345.extern|COMPLETED|0:0\n"
+    )
+    expected_metrics = SlurmJobMetrics(
+        job_id=12345,
+        elapsed_seconds=120.0,
+        cpu_time_seconds=240.0,
+        max_rss_mb=512.0,
+        node_hours=0.033,
+        cpu_efficiency=1.0,
+        state="COMPLETED",
+        exit_code=0,
+    )
+
+    with patch.object(
+        client.metrics_collector,
+        "collect_job_metrics",
+        return_value=expected_metrics,
+    ):
+        actual_metrics = client._validate_final_slurm_outcome(12345, mock_ssh_pool)
+
+    assert actual_metrics == expected_metrics
+
+
+def test_raise_if_pipes_process_failed_raises():
+    client = _make_client()
+    message_reader = SimpleNamespace(
+        closed_exception={
+            "name": "RuntimeError",
+            "message": "remote boom",
+        }
+    )
+
+    with pytest.raises(
+        DagsterPipesExecutionError,
+        match="RuntimeError: remote boom",
+    ):
+        client._raise_if_pipes_process_failed(message_reader, job_id=12345)
 
 
 # ---------------------------------------------------------------------------

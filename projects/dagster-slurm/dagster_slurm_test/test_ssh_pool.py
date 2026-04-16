@@ -101,3 +101,69 @@ def test_control_master_failure_password_fallback(monkeypatch, tmp_path):
     # Ensure all commands were executed without ControlPath
     assert commands, "No password-based commands executed"
     assert all("ControlPath" not in " ".join(cmd) for cmd in commands)
+
+
+def test_control_master_key_auth_commands_keep_noninteractive_opts(
+    monkeypatch, tmp_path
+):
+    """Pooled SSH/SCP commands must stay key-based if the control socket vanishes."""
+
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    os.chmod(key_path, 0o600)
+
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        port=2222,
+        user="testuser",
+        key_path=str(key_path),
+        extra_opts=["-o", "Compression=yes"],
+    )
+
+    commands = []
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        if cmd[0] == "ssh":
+            return DummyResult(returncode=0, stdout="ok\n")
+        if cmd[0] == "scp":
+            return DummyResult(returncode=0)
+        return DummyResult(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    pool = SSHConnectionPool(ssh_resource)
+
+    with pool:
+        output = pool.run("echo pooled")
+        assert output == "ok\n"
+
+        local_file = tmp_path / "payload.txt"
+        local_file.write_text("data")
+        pool.upload_file(str(local_file), "/tmp/remote.txt")
+
+    pooled_ssh_calls = [
+        cmd
+        for cmd in commands
+        if cmd and cmd[0] == "ssh" and "-M" not in cmd and "-O" not in cmd
+    ]
+    assert pooled_ssh_calls
+    for cmd in pooled_ssh_calls:
+        assert "-p" in cmd
+        assert cmd[cmd.index("-p") + 1] == "2222"
+        assert "-i" in cmd
+        assert cmd[cmd.index("-i") + 1] == str(key_path)
+        assert "IdentitiesOnly=yes" in cmd
+        assert "BatchMode=yes" in cmd
+        assert "Compression=yes" in cmd
+
+    scp_calls = [cmd for cmd in commands if cmd and cmd[0] == "scp"]
+    assert scp_calls
+    for cmd in scp_calls:
+        assert "-P" in cmd
+        assert cmd[cmd.index("-P") + 1] == "2222"
+        assert "-i" in cmd
+        assert cmd[cmd.index("-i") + 1] == str(key_path)
+        assert "IdentitiesOnly=yes" in cmd
+        assert "BatchMode=yes" in cmd
+        assert "Compression=yes" in cmd
