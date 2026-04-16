@@ -168,7 +168,7 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "partition": "zen4_0768",
             "qos": None,  # Use the partition default QoS, or "dev_zen4_0768" for 10 min tests
             "gpus_per_node": 0,
-            # "reservation": "dagster_test",  # April 16, 2026 test window
+            "reservation": "dagster_test",  # April 16, 2026 test window
             # "reservation": "dagster",  # April 17, 2026 webinar window
             # "partition": "zen4_0768_h100x4",
             # "qos": "zen4_0768_h100x4",

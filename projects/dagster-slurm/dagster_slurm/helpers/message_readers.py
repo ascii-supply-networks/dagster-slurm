@@ -213,6 +213,7 @@ class SSHMessageReader(PipesMessageReader):
         self.total_messages = 0
         self._ssh_pool = ssh_pool
         self._fallback_next_line = 1
+        self._ssh_next_line = 1
         self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
 
     @contextmanager
@@ -331,6 +332,7 @@ class SSHMessageReader(PipesMessageReader):
                         if self._stop_flag.is_set():
                             break
 
+                        self._ssh_next_line += 1
                         line = line.strip()
                         if not line:
                             continue
@@ -398,6 +400,7 @@ class SSHMessageReader(PipesMessageReader):
                         if self._stop_flag.is_set():
                             break
 
+                        self._ssh_next_line += 1
                         line = line.strip()
                         if not line:
                             continue
@@ -709,7 +712,11 @@ class SSHMessageReader(PipesMessageReader):
         # -F: follow by name (handles log rotation)
         # --retry: keep trying if file doesn't exist yet
         # -n +1: start from beginning of file
-        tail_cmd = f"tail -F --retry -n +1 {self.remote_path} 2>/dev/null || tail -f {self.remote_path}"
+        tail_start_line = max(self._ssh_next_line, 1)
+        tail_cmd = (
+            f"tail -F --retry -n +{tail_start_line} {self.remote_path} 2>/dev/null "
+            f"|| tail -f {self.remote_path}"
+        )
         base_cmd.append(tail_cmd)
 
         return base_cmd
