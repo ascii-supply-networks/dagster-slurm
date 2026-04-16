@@ -24,11 +24,15 @@ After running this command, authenticate in your browser. The certificate is val
 Enable automatic OIDC-based certificate refresh by setting `SLURM_SUPERCOMPUTER_SITE=musica` and adding these variables:
 
 ```dotenv
-# OIDC credentials (app password valid for 30 days)
+# OIDC identity
 ASC_OIDC_CLIENT_ID=...
 ASC_OIDC_USERNAME=xy12345
-ASC_OIDC_APP_PASSWORD=...
 ASC_OIDC_TOKEN_URL=https://auth.asc.ac.at/application/o/token/
+
+# Runtime auto-rotation
+ASC_AUTHENTIK_API_BASE=https://auth.asc.ac.at
+ASC_AUTHENTIK_CREDENTIALS_FILE=~/.config/dagster-slurm/musica-auth.env
+ASC_AUTHENTIK_API_TOKEN=...  # bootstrap / recovery only
 
 # Step CA configuration
 ASC_STEP_CA_URL=https://auth.asc.ac.at:9000
@@ -36,23 +40,55 @@ ASC_STEP_FINGERPRINT=44b048473242281db1da57124c2b843741d6c92a8fb5d0482dec032e957
 ```
 
 The refresh hook automatically fetches new certificates before SSH connections.
+The runtime reads the current Authentik credentials from
+`ASC_AUTHENTIK_CREDENTIALS_FILE`. If the file is missing, incomplete, or within
+the refresh window, it creates fresh replacement credentials, writes them
+atomically to that file, and continues automatically.
 
-**Verify the flow:**
+`ASC_AUTHENTIK_API_TOKEN` is only needed to bootstrap the credentials file for
+the first time or to recover after all stored credentials have expired.
+
+**Bootstrap or rotate the credentials file only:**
 
 ```bash
+rm -f "$ASC_AUTHENTIK_CREDENTIALS_FILE"
+pixi run -e dev python scripts/refresh_step_auth.py --rotate-credentials
+```
+
+Expected result:
+
+- the credentials file is created with mode `0600`
+- it now contains the current rotated credentials for future runs
+- the script stops after rotating credentials; it does not talk to Step yet
+
+**Rotate credentials and refresh the Step SSH certificate in one run:**
+
+```bash
+pixi run -e dev python scripts/refresh_step_auth.py --rotate-credentials --refresh-step-after-rotate
+```
+
+**Verify runtime refresh using the stored credentials only:**
+
+```bash
+unset ASC_AUTHENTIK_API_TOKEN
 pixi run -e dev python scripts/refresh_step_auth.py
 ```
 
-**Rotate app password** (requires an authentik API token):
+As long as Dagster or the refresh script runs before the stored credentials
+expire, both the app password and the API token can keep rolling forward from
+that file without another manual bootstrap token.
+
+**Force a manual rotation of both stored credentials:**
 
 ```bash
-pixi run -e dev python scripts/refresh_step_auth.py --rotate-app-password
+pixi run -e dev python scripts/refresh_step_auth.py --rotate-credentials
 ```
 
 Required for rotation:
 
 ```dotenv
 ASC_AUTHENTIK_API_BASE=https://auth.asc.ac.at
+ASC_AUTHENTIK_CREDENTIALS_FILE=~/.config/dagster-slurm/musica-auth.env
 ASC_AUTHENTIK_API_TOKEN=...
 ASC_AUTHENTIK_TOKEN_IDENTIFIER=dagster-slurm
 ```
@@ -65,8 +101,28 @@ use **"New Token"** — not "New App Password".
 - A **Token** grants API access and can create new tokens or app passwords.
 - An **App Password** is only usable with applications (like the step client) and cannot call the authentik API.
 
-Both expire after roughly one month. With a valid Token you can always create a fresh one before it expires.
+Both expire after roughly one month. The file-backed flow above keeps rotating
+both secrets forward, but if the stored API token is already expired and no
+fresh bootstrap token is available, recovery still requires creating a new
+**Token** manually in authentik.
 :::
+
+For short MUSICA test jobs, you can also use the devel QoS:
+
+```dotenv
+SLURM_PARTITION=zen4_0768
+SLURM_QOS=dev_zen4_0768
+```
+
+or for GPU testing:
+
+```dotenv
+SLURM_PARTITION=zen4_0768_h100x4
+SLURM_QOS=dev_zen4_0768_h100x4
+```
+
+These `dev_*` QoS values are limited to 10 minutes and intended for fast
+feedback, not production runs.
 
 ## Configuration
 
