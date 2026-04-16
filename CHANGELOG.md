@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.12.0-rc.2 (2026-04-16)
+
+### Bug Fixes
+
+- Demo ([#118](https://github.com/ascii-supply-networks/dagster-slurm/pull/118),
+  [`e43e085`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e43e085e89b6a8dd93a86d61650b2d448895ec6e))
+
+- Refresh token ([#117](https://github.com/ascii-supply-networks/dagster-slurm/pull/117),
+  [`6735414`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6735414cf7261a9ec38644d1a4051ae6baef9d28))
+
+- Streamline token rotation for all cases
+  ([#121](https://github.com/ascii-supply-networks/dagster-slurm/pull/121),
+  [`f6d8d20`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f6d8d2009111db776d8f580ae95281bc80df3733))
+
+### Features
+
+- Version updates ([#120](https://github.com/ascii-supply-networks/dagster-slurm/pull/120),
+  [`085a609`](https://github.com/ascii-supply-networks/dagster-slurm/commit/085a60962eaefcd19e199cbb2f54747d37a2b480))
+
+- Webinar reservation demo ([#119](https://github.com/ascii-supply-networks/dagster-slurm/pull/119),
+  [`eabd465`](https://github.com/ascii-supply-networks/dagster-slurm/commit/eabd4656f0187e45266be1a418d1a7a1670b7a50))
+
+
 ## v1.12.0-rc.1 (2026-04-04)
 
 ### Bug Fixes
