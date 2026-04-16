@@ -164,9 +164,15 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
     },
     "musica": {
         "slurm_queue_config": {
-            "partition": "zen4_0768_h100x4",
-            "qos": "zen4_0768_h100x4",
-            "gpus_per_node": 1,
+            # For the ASC CPU reservation windows, swap the active GPU lines below to:
+            "partition": "zen4_0768",
+            "qos": None,
+            "gpus_per_node": 0,
+            "reservation": "dagster_test",  # April 16, 2026 test window
+            # "reservation": "dagster",  # April 17, 2026 webinar window
+            # "partition": "zen4_0768_h100x4",
+            # "qos": "zen4_0768_h100x4",
+            # "gpus_per_node": 1,
             "num_nodes": 1,
         },
         "slurm_session_config": {
