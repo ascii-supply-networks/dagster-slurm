@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.12.0-rc.4 (2026-04-16)
+
+### Bug Fixes
+
+- Demo on musica ([#124](https://github.com/ascii-supply-networks/dagster-slurm/pull/124),
+  [`73398ea`](https://github.com/ascii-supply-networks/dagster-slurm/commit/73398ea7398896c5c29ac9a829ac3d9cfed5d359))
+
+
 ## v1.12.0-rc.3 (2026-04-16)
 
 ### Bug Fixes
