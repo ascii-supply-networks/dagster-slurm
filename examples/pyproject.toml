@@ -217,7 +217,7 @@ cmd = "./scripts/decrypt_secrets.sh"
 description = "decrypt secrets with SOPS and AGE"
 
 [tool.pixi.feature.opstooling.tasks.clean-local-branches]
-cmd = "./scripts/git_clean_local_branches.sh"
+cmd = "../scripts/git_clean_local_branches.sh"
 description = "cleanup local non used branches"
 
 [tool.pixi.tasks.fmt]

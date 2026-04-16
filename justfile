@@ -27,45 +27,13 @@ update:
 clean-branches force="false":
     #!/usr/bin/env bash
     set -euo pipefail
-    git fetch --prune
-    default=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
-    original_current=$(git branch --show-current)
-    current="${original_current}"
-    force_value="{{force}}"
+    ./scripts/git_clean_local_branches.sh "{{force}}"
 
-    if [[ "${force_value}" == "--force" || "${force_value}" == "force=true" ]]; then
-        force_value="true"
-    fi
-
-    if [ "${current}" != "${default}" ]; then
-        git checkout "${default}"
-    fi
-
-    if [ "${force_value}" = "true" ]; then
-        echo "Force: deleting ALL local branches except ${default} and the originally checked out branch ${original_current}"
-        branches=$(
-            git for-each-ref --format='%(refname:short)' refs/heads \
-                | grep -vFx "${default}" \
-                | grep -vFx "${original_current}" \
-                || true
-        )
-        if [ -n "${branches}" ]; then
-            echo "${branches}" | xargs git branch -D
-        fi
-    else
-        echo "Safe: deleting branches merged into ${default} and branches whose remote is gone"
-        # branches fully merged into main
-        merged=$(git branch --merged "${default}" | grep -vE "^\*|^\+| ${default}$" || true)
-        if [ -n "${merged}" ]; then
-            echo "${merged}" | xargs git branch -d
-        fi
-        # branches whose remote tracking ref has been pruned
-        gone=$(git branch -vv | awk '/: gone]/{print $1}' | grep -vE "^\*|^\+|^${default}$" || true)
-        if [ -n "${gone}" ]; then
-            echo "${gone}" | xargs git branch -D
-        fi
-        echo "Tip: run 'just clean-branches --force' to nuke ALL branches except ${default}"
-    fi
+# Alias for the examples pixi task name, available from the repo root as well.
+clean-local-branches force="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/git_clean_local_branches.sh "{{force}}"
 
 # Run prek on all files
 prek-run:
