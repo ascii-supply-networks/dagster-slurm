@@ -348,7 +348,7 @@ def test_find_reattachable_job_from_parent_run():
 
     mock_ssh_pool = MagicMock()
 
-    with patch.object(client, "_is_job_still_running", return_value=True):
+    with patch.object(client, "_get_job_state", return_value="RUNNING"):
         result = client._find_reattachable_job(
             mock_op_context, mock_ssh_pool, "my_asset"
         )
@@ -374,7 +374,7 @@ def test_find_reattachable_job_from_failed_run_query():
 
     mock_ssh_pool = MagicMock()
 
-    with patch.object(client, "_is_job_still_running", return_value=True):
+    with patch.object(client, "_get_job_state", return_value="RUNNING"):
         result = client._find_reattachable_job(
             mock_op_context, mock_ssh_pool, "my_asset"
         )

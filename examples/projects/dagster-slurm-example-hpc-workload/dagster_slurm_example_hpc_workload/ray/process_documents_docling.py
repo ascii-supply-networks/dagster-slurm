@@ -28,6 +28,68 @@ from docling_core.types.doc import ImageRefMode
 # from docling.datamodel.pipeline_options import RapidOcrOptions, ThreadedPdfPipelineOptions
 
 
+def _coerce_rapidocr_primitives(value: Any) -> Any:
+    """Convert pathlib objects into primitive values for RapidOCR/OmegaConf."""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _coerce_rapidocr_primitives(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_coerce_rapidocr_primitives(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_coerce_rapidocr_primitives(item) for item in value)
+    return value
+
+
+def _patched_rapidocr_load_config(
+    default_cfg_path: Path,
+    root_dir: Path,
+    parse_params,
+):
+    def _load_config(
+        self, config_path: Optional[str], params: Optional[Dict[str, Any]]
+    ):
+        if config_path is not None and Path(config_path).exists():
+            cfg = parse_params.load(config_path)
+        else:
+            cfg = parse_params.load(default_cfg_path)
+
+        if params:
+            cfg = parse_params.update_batch(cfg, _coerce_rapidocr_primitives(params))
+
+        model_root_dir = cfg.Global.model_root_dir
+        if model_root_dir is None:
+            cfg.Global.model_root_dir = str(root_dir / "models")
+        else:
+            cfg.Global.model_root_dir = _coerce_rapidocr_primitives(model_root_dir)
+
+        return cfg
+
+    return _load_config
+
+
+def _install_rapidocr_path_compat() -> None:
+    """Patch RapidOCR to avoid passing pathlib.Path objects into OmegaConf."""
+    try:
+        from rapidocr.main import DEFAULT_CFG_PATH, ParseParams, RapidOCR, root_dir
+    except ImportError:
+        return
+
+    marker_name = "_dagster_slurm_path_compat"
+    if bool(getattr(RapidOCR, marker_name, False)):
+        return
+
+    RapidOCR._load_config = _patched_rapidocr_load_config(  # type: ignore[method-assign]
+        DEFAULT_CFG_PATH,
+        root_dir,
+        ParseParams,
+    )
+    setattr(RapidOCR, marker_name, True)
+
+
+_install_rapidocr_path_compat()
+
+
 @dataclass
 class ConvertSummary:
     """Summary of document conversion results."""

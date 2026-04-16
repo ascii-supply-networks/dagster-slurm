@@ -4,7 +4,6 @@ TERMINAL_STATES = {
     "COMPLETED",
     "FAILED",
     "CANCELLED",
-    "CANCELLED+",
     "TIMEOUT",
     "PREEMPTED",
     "NODE_FAIL",
@@ -13,6 +12,36 @@ TERMINAL_STATES = {
     "DEADLINE",
     "REVOKED",
 }
+
+
+def normalize_slurm_state(state: str) -> str:
+    """Normalize Slurm states across squeue/sacct variants and truncation."""
+    normalized = state.strip().upper()
+    if not normalized:
+        return ""
+
+    if normalized.startswith("COMPLET"):
+        return "COMPLETED"
+    if normalized.startswith("FAIL"):
+        return "FAILED"
+    if normalized.startswith("CANCELLED"):
+        return "CANCELLED"
+    if normalized.startswith("TIMEOUT"):
+        return "TIMEOUT"
+    if normalized.startswith("PREEMPT"):
+        return "PREEMPTED"
+    if normalized.startswith("NODE_FAIL"):
+        return "NODE_FAIL"
+    if normalized.startswith("OUT_OF_ME"):
+        return "OUT_OF_MEMORY"
+    if normalized.startswith("BOOT_FAIL"):
+        return "BOOT_FAIL"
+    if normalized.startswith("DEADLINE"):
+        return "DEADLINE"
+    if normalized.startswith("REVOKED"):
+        return "REVOKED"
+
+    return normalized
 
 
 def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:

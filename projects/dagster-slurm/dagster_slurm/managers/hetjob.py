@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 from dagster import get_dagster_logger
 
-from ..helpers.ssh_helpers import TERMINAL_STATES
+from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..resources.slurm import SlurmResource
 
@@ -310,16 +310,16 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
             output = self.ssh_pool.run(
                 f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true"
             )
-            state = output.strip()
+            state = normalize_slurm_state(output)
             if state:
                 return state
 
             # Fall back to sacct (for completed jobs)
             output = self.ssh_pool.run(
-                f"sacct -X -n -j {job_id} -o State 2>/dev/null || true"
+                f"sacct -X -n -j {job_id} -o State%20 2>/dev/null || true"
             )
             state = output.strip()
-            return state.split()[0] if state else ""
+            return normalize_slurm_state(state.split()[0]) if state else ""
 
         except Exception as e:
             self.logger.warning(f"Error querying job state: {e}")

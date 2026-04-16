@@ -36,7 +36,6 @@ def distributed_training(
         extra_slurm_opts={
             "nodes": 1,  # Single node = local Ray mode
             "cpus_per_task": 2,
-            "mem": "4G",
         },
     )
     yield from completed_run.get_results()

@@ -214,6 +214,17 @@ def test_wait_for_job_respects_custom_poll_timeout():
         )
 
 
+def test_get_job_state_normalizes_truncated_terminal_state():
+    """sacct state truncation should still resolve to a terminal state."""
+    client = _make_client()
+    mock_ssh_pool = MagicMock()
+    mock_ssh_pool.run.side_effect = ["", "OUT_OF_ME+\n"]
+
+    state = client._get_job_state(12345, mock_ssh_pool)
+
+    assert state == "OUT_OF_MEMORY"
+
+
 # ---------------------------------------------------------------------------
 # ComputeResource.run() -> client.run() propagation test
 # ---------------------------------------------------------------------------
