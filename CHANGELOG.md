@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.12.0-rc.3 (2026-04-16)
+
+### Bug Fixes
+
+- Concurrent asset execution
+  ([#123](https://github.com/ascii-supply-networks/dagster-slurm/pull/123),
+  [`273cd5e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/273cd5ef9594ca04a7c3a5f7d892bf6b749b8bb8))
+
+
 ## v1.12.0-rc.2 (2026-04-16)
 
 ### Bug Fixes
