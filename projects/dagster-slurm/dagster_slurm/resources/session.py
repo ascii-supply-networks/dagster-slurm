@@ -10,7 +10,7 @@ from dagster import ConfigurableResource, InitResourceContext, get_dagster_logge
 from loguru import logger
 from pydantic import Field, PrivateAttr
 
-from ..helpers.ssh_helpers import TERMINAL_STATES
+from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ExecutionPlan
 from ..resources.slurm import SlurmResource
@@ -302,15 +302,15 @@ class SlurmSessionResource(ConfigurableResource):
             output = self._ssh_pool.run(  # type: ignore
                 f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true"
             )
-            state = output.strip()
+            state = normalize_slurm_state(output)
             if state:
                 return state
 
             output = self._ssh_pool.run(  # type: ignore
-                f"sacct -X -n -j {job_id} -o State 2>/dev/null || true"
+                f"sacct -X -n -j {job_id} -o State%20 2>/dev/null || true"
             )
             state = output.strip()
-            return state.split()[0] if state else ""
+            return normalize_slurm_state(state.split()[0]) if state else ""
         except Exception:
             return ""
 

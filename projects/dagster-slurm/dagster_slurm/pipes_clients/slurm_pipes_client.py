@@ -27,7 +27,7 @@ from dagster._utils.interrupts import _received_interrupt
 from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
 from ..helpers.metrics import SlurmMetricsCollector
-from ..helpers.ssh_helpers import TERMINAL_STATES
+from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..resources.session import SlurmSessionResource
@@ -210,7 +210,7 @@ class SlurmPipesClient(PipesClient):
                     old_job_id_str = reattach_info["job_id"]
                     old_run_dir = reattach_info["run_dir"]
                     old_job_id = int(old_job_id_str)
-                    old_job_state = self._get_job_state(old_job_id, ssh_pool).upper()
+                    old_job_state = self._get_job_state(old_job_id, ssh_pool)
 
                     if self._is_job_still_running(old_job_id, ssh_pool):
                         # Case 1: job still active — reattach to monitoring
@@ -656,7 +656,7 @@ class SlurmPipesClient(PipesClient):
         # An empty state means the job_id is completely unknown — skip it.
         for cand in candidates:
             try:
-                state = self._get_job_state(int(cand["job_id"]), ssh_pool).upper()
+                state = self._get_job_state(int(cand["job_id"]), ssh_pool)
                 if not state:
                     continue
                 if state == "COMPLETED" and not bool(cand.get("allow_completed")):
@@ -674,7 +674,7 @@ class SlurmPipesClient(PipesClient):
 
     def _is_job_still_running(self, job_id: int, ssh_pool: SSHConnectionPool) -> bool:
         """Return True if the Slurm job is in an active state."""
-        state = self._get_job_state(job_id, ssh_pool).upper()
+        state = self._get_job_state(job_id, ssh_pool)
         return state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}
 
     def _interruptible_sleep(self, seconds: float, job_id: int) -> None:
@@ -701,7 +701,7 @@ class SlurmPipesClient(PipesClient):
         self,
         job_id: int,
         ssh_pool: SSHConnectionPool,
-        context: AssetExecutionContext,
+        context: Any,
     ) -> None:
         """Collect Slurm job metrics via sacct and attach as output metadata."""
         try:
@@ -713,6 +713,14 @@ class SlurmPipesClient(PipesClient):
                 "max_memory_mb": round(metrics.max_rss_mb, 2),
                 "elapsed_seconds": round(metrics.elapsed_seconds, 2),
             }
+            add_output_metadata = getattr(context, "add_output_metadata", None)
+            if not callable(add_output_metadata):
+                self.logger.debug(
+                    "Skipping Slurm output metadata for %s because the context "
+                    "does not support add_output_metadata().",
+                    type(context).__name__,
+                )
+                return
 
             # Multi-asset executions require specifying the output name.
             output_names: list[str] = []
@@ -740,12 +748,12 @@ class SlurmPipesClient(PipesClient):
                     ]
 
             if not output_names:
-                context.add_output_metadata(metadata)
+                add_output_metadata(metadata)
             elif len(output_names) == 1:
-                context.add_output_metadata(metadata, output_name=output_names[0])
+                add_output_metadata(metadata, output_name=output_names[0])
             else:
                 for output_name in output_names:
-                    context.add_output_metadata(metadata, output_name=output_name)
+                    add_output_metadata(metadata, output_name=output_name)
         except Exception as e:
             self.logger.warning(f"Failed to collect metrics: {e}")
 
@@ -1681,7 +1689,9 @@ class SlurmPipesClient(PipesClient):
                                     if str(job_id) in line:
                                         parts = line.split("|")
                                         if len(parts) >= 2:
-                                            resolved_state = parts[1].strip().upper()
+                                            resolved_state = normalize_slurm_state(
+                                                parts[1]
+                                            )
                             except RuntimeError:
                                 raise
                             except Exception as e:
@@ -1698,7 +1708,9 @@ class SlurmPipesClient(PipesClient):
                                         r"JobState=([A-Z_]+)", scontrol_output or ""
                                     )
                                     if match:
-                                        resolved_state = match.group(1).upper()
+                                        resolved_state = normalize_slurm_state(
+                                            match.group(1)
+                                        )
                                 except Exception as e:
                                     self.logger.debug(
                                         f"Could not get scontrol job info: {e}"
@@ -1897,16 +1909,16 @@ class SlurmPipesClient(PipesClient):
         try:
             # Try squeue first (for running jobs)
             output = ssh_pool.run(f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true")
-            state = output.strip()
+            state = normalize_slurm_state(output)
             if state:
                 return state
 
             # Fall back to sacct (for completed jobs)
             output = ssh_pool.run(
-                f"sacct -X -n -j {job_id} -o State 2>/dev/null || true"
+                f"sacct -X -n -j {job_id} -o State%20 2>/dev/null || true"
             )
             state = output.strip()
-            return state.split()[0] if state else ""
+            return normalize_slurm_state(state.split()[0]) if state else ""
 
         except Exception as e:
             self.logger.warning(f"Error querying job state: {e}")
