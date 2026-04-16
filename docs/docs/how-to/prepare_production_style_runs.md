@@ -13,8 +13,8 @@ Inspect the generated metadata and persist the target path:
 
 ```bash
 deployment_path="$(jq -er '.deployment_path' deployment_metadata.json)"
-echo "DAGSTER_PROD_ENV_PATH=${deployment_path}" > .env.prod
-export DAGSTER_PROD_ENV_PATH="${deployment_path}"
+echo "CI_DEPLOYED_ENVIRONMENT_PATH=${deployment_path}" > .env.prod
+export CI_DEPLOYED_ENVIRONMENT_PATH="${deployment_path}"
 ```
 
 Then start Dagster in production mode:
