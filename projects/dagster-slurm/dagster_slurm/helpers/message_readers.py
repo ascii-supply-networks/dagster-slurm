@@ -215,6 +215,8 @@ class SSHMessageReader(PipesMessageReader):
         self._fallback_next_line = 1
         self._ssh_next_line = 1
         self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
+        self._closed_message: Optional[Dict[str, Any]] = None
+        self._closed_exception: Optional[Dict[str, Any]] = None
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
@@ -282,6 +284,25 @@ class SSHMessageReader(PipesMessageReader):
 
             self.logger.debug("Message reader stopped")
 
+    @property
+    def closed_message(self) -> Optional[Dict[str, Any]]:
+        return self._closed_message
+
+    @property
+    def closed_exception(self) -> Optional[Dict[str, Any]]:
+        return self._closed_exception
+
+    def _record_protocol_message(self, message: Any) -> None:
+        if not isinstance(message, dict) or message.get("method") != "closed":
+            return
+
+        self._closed_message = message
+        params = message.get("params")
+        if isinstance(params, dict):
+            exception = params.get("exception")
+            if isinstance(exception, dict):
+                self._closed_exception = exception
+
     def _read_loop_with_reconnect(self, handler):
         """Read loop that automatically reconnects on failure.
 
@@ -339,6 +360,7 @@ class SSHMessageReader(PipesMessageReader):
 
                         try:
                             message = json.loads(line)
+                            self._record_protocol_message(message)
                             if tracker.observe(message):
                                 continue
                             if (
@@ -407,6 +429,7 @@ class SSHMessageReader(PipesMessageReader):
 
                         try:
                             message = json.loads(line)
+                            self._record_protocol_message(message)
                             if tracker.observe(message):
                                 continue
                             if (
@@ -557,6 +580,7 @@ class SSHMessageReader(PipesMessageReader):
                         processed_lines += 1
                         try:
                             message = json.loads(line)
+                            self._record_protocol_message(message)
                             if tracker.observe(message):
                                 continue
                             if (
@@ -654,19 +678,12 @@ class SSHMessageReader(PipesMessageReader):
                     "ControlMaster=no",
                 ]
             )
+            if self.ssh_config.uses_key_auth:
+                base_cmd.extend(self.ssh_config.get_key_auth_opts(batch_mode=True))
             self.logger.debug(f"Using ControlMaster: {self.control_path}")
         elif self.ssh_config.uses_key_auth:
             # Key auth - add key
-            base_cmd.extend(
-                [
-                    "-i",
-                    self.ssh_config.key_path,
-                    "-o",
-                    "IdentitiesOnly=yes",
-                    "-o",
-                    "BatchMode=yes",
-                ]
-            )
+            base_cmd.extend(self.ssh_config.get_key_auth_opts(batch_mode=True))
         else:
             if self._requires_password_auth():
                 if self._ssh_pool:

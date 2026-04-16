@@ -41,6 +41,38 @@ def _coerce_rapidocr_primitives(value: Any) -> Any:
     return value
 
 
+def _update_rapidocr_config(parse_params, cfg, params: Dict[str, Any]):
+    """Apply RapidOCR config overrides without OmegaConf's merge warning."""
+    from enum import Enum
+
+    from omegaconf import OmegaConf
+
+    global_config = OmegaConf.to_container(cfg.Global)
+    if not isinstance(global_config, dict):
+        raise TypeError("RapidOCR Global config must resolve to a mapping.")
+
+    global_keys = list(global_config)
+    enum_params = {
+        "engine_type",
+        "model_type",
+        "ocr_version",
+        "lang_type",
+        "task_type",
+    }
+
+    for key, value in params.items():
+        key_parts = key.split(".")
+        if key.startswith("Global") and key_parts[1] not in global_keys:
+            raise ValueError(f"{key} is not a valid key.")
+
+        if key_parts[1] in enum_params and not isinstance(value, Enum):
+            raise TypeError(f"The value of {key} must be Enum Type.")
+
+        parse_params.update(cfg, key, value, merge=False)
+
+    return cfg
+
+
 def _patched_rapidocr_load_config(
     default_cfg_path: Path,
     root_dir: Path,
@@ -55,7 +87,11 @@ def _patched_rapidocr_load_config(
             cfg = parse_params.load(default_cfg_path)
 
         if params:
-            cfg = parse_params.update_batch(cfg, _coerce_rapidocr_primitives(params))
+            cfg = _update_rapidocr_config(
+                parse_params,
+                cfg,
+                _coerce_rapidocr_primitives(params),
+            )
 
         model_root_dir = cfg.Global.model_root_dir
         if model_root_dir is None:
@@ -68,9 +104,60 @@ def _patched_rapidocr_load_config(
     return _load_config
 
 
+def _patch_pytorch_model_loader(
+    model_loader_cls,
+    file_info_cls,
+    infer_session_cls,
+    download_file_cls,
+    download_file_input_cls,
+    logger_obj,
+) -> None:
+    """Make RapidOCR's PyTorch backend accept string model_root_dir values."""
+    original_init_model_path = model_loader_cls._init_model_path
+
+    def _init_model_path(self, cfg):
+        model_path = cfg.get("model_path", None)
+        if model_path is None:
+            model_info = infer_session_cls.get_model_url(
+                file_info_cls(
+                    engine_type=cfg.engine_type,
+                    ocr_version=cfg.ocr_version,
+                    task_type=cfg.task_type,
+                    lang_type=cfg.lang_type,
+                    model_type=cfg.model_type,
+                )
+            )
+            default_model_url = model_info["model_dir"]
+            model_root_dir = Path(str(cfg.model_root_dir))
+            model_path = model_root_dir / Path(default_model_url).name
+            download_file_cls.run(
+                download_file_input_cls(
+                    file_url=default_model_url,
+                    sha256=model_info["SHA256"],
+                    save_path=model_path,
+                    logger=logger_obj,
+                )
+            )
+            logger_obj.info(f"Using {model_path}")
+            infer_session_cls._verify_model(model_path)
+            return Path(model_path)
+
+        return original_init_model_path(self, cfg)
+
+    model_loader_cls._init_model_path = _init_model_path  # type: ignore[method-assign]
+
+
 def _install_rapidocr_path_compat() -> None:
     """Patch RapidOCR to avoid passing pathlib.Path objects into OmegaConf."""
     try:
+        from rapidocr.inference_engine.pytorch.networks.main import (
+            DownloadFile,
+            DownloadFileInput,
+            FileInfo,
+            InferSession,
+            ModelLoader,
+            logger,
+        )
         from rapidocr.main import DEFAULT_CFG_PATH, ParseParams, RapidOCR, root_dir
     except ImportError:
         return
@@ -79,6 +166,14 @@ def _install_rapidocr_path_compat() -> None:
     if bool(getattr(RapidOCR, marker_name, False)):
         return
 
+    _patch_pytorch_model_loader(
+        ModelLoader,
+        FileInfo,
+        InferSession,
+        DownloadFile,
+        DownloadFileInput,
+        logger,
+    )
     RapidOCR._load_config = _patched_rapidocr_load_config(  # type: ignore[method-assign]
         DEFAULT_CFG_PATH,
         root_dir,
@@ -112,6 +207,9 @@ class BasicDocumentConverter:
     """
 
     def __init__(self, document_format: InputFormat = InputFormat.PDF):
+        # Ray serializes the mapper class into worker processes, so module-level
+        # side effects from the driver are not sufficient to patch RapidOCR there.
+        _install_rapidocr_path_compat()
         self.converter = DocumentConverter()
         self.converter.initialize_pipeline(document_format)
 
@@ -334,6 +432,13 @@ def warmup_model_cache(context: Optional[PipesContext] = None) -> bool:
         return False
 
 
+def _effective_worker_count(num_workers: int, file_count: int) -> int:
+    """Cap Ray workers to the number of files to avoid useless model duplication."""
+    if file_count <= 0:
+        return max(1, num_workers)
+    return max(1, min(num_workers, file_count))
+
+
 def run_processing(  # noqa: C901
     input_glob: str,
     output_dir: str,
@@ -400,12 +505,18 @@ def run_processing(  # noqa: C901
         return result
 
     log_func(f"Found {len(files)} documents to process")
+    effective_workers = _effective_worker_count(num_workers, len(files))
+    if effective_workers != num_workers:
+        log_func(
+            f"Reducing worker count from {num_workers} to {effective_workers} "
+            f"for {len(files)} input file(s)"
+        )
 
     total_start_time = time.time()
 
     # Create Ray dataset
     ds = rd.from_items([{"path": p} for p in files])
-    target_blocks = max(min(len(files), num_workers * 8), num_workers)
+    target_blocks = max(min(len(files), effective_workers * 8), effective_workers)
     if ds.num_blocks() < target_blocks:
         ds = ds.repartition(target_blocks)
 
@@ -420,7 +531,7 @@ def run_processing(  # noqa: C901
     result = ds.map_batches(
         mapper_document,
         batch_size=batch_size,
-        concurrency=(num_workers, num_workers),
+        concurrency=(effective_workers, effective_workers),
         num_cpus=0,  # Managed by RayLauncher
         num_gpus=0,  # Set to >0 if using GPU-accelerated OCR
     )
@@ -442,7 +553,8 @@ def run_processing(  # noqa: C901
         "failed": failed,
         "duration_seconds": round(total_duration, 2),
         "output_directory": output_dir,
-        "num_workers": num_workers,
+        "num_workers": effective_workers,
+        "requested_num_workers": num_workers,
         "batch_size": batch_size,
     }
 

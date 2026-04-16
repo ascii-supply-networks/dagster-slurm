@@ -119,21 +119,7 @@ class SSHConnectionPool:
             cmd.extend(base_opts)
             cmd.extend(self.config.get_proxy_command_opts())
             if self.config.uses_key_auth:
-                key_path = self.config.key_path
-                if not key_path:
-                    raise RuntimeError(
-                        "SSH key authentication requires key_path to be set"
-                    )
-                cmd.extend(
-                    [
-                        "-i",
-                        key_path,
-                        "-o",
-                        "IdentitiesOnly=yes",
-                        "-o",
-                        "BatchMode=yes",
-                    ]
-                )
+                cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
             cmd.extend(self.config.extra_opts)
             cmd.append(f"{self.config.user}@{self.config.host}")
 
@@ -311,13 +297,25 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 ssh_cmd = [
                     "ssh",
+                    "-p",
+                    str(self.config.port),
                     "-o",
                     f"ControlPath={self.control_path}",
                     "-o",
                     "ControlMaster=no",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "LogLevel=ERROR",
                 ]
+                if self.config.uses_key_auth:
+                    ssh_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
                 if needs_tty:
                     ssh_cmd.append("-tt")
+                ssh_cmd.extend(self.config.get_proxy_command_opts())
+                ssh_cmd.extend(self.config.extra_opts)
                 ssh_cmd.extend(
                     [
                         f"{self.config.user}@{self.config.host}",
@@ -337,21 +335,7 @@ class SSHConnectionPool:
                     "LogLevel=ERROR",
                 ]
                 if self.config.uses_key_auth:
-                    key_path = self.config.key_path
-                    if not key_path:
-                        raise RuntimeError(
-                            "SSH key authentication requires key_path to be set"
-                        )
-                    ssh_cmd.extend(
-                        [
-                            "-i",
-                            key_path,
-                            "-o",
-                            "IdentitiesOnly=yes",
-                            "-o",
-                            "BatchMode=yes",
-                        ]
-                    )
+                    ssh_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
                 else:
                     ssh_cmd.extend(
                         [
@@ -450,11 +434,21 @@ class SSHConnectionPool:
                 scp_cmd = [
                     "scp",
                     "-C",  # Enable compression (critical for large files!)
-                    "-o",
-                    f"ControlPath={self.control_path}",
                     "-P",
                     str(self.config.port),
+                    "-o",
+                    f"ControlPath={self.control_path}",
+                    "-o",
+                    "ControlMaster=no",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "LogLevel=ERROR",
                 ]
+                if self.config.uses_key_auth:
+                    scp_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
             else:
                 scp_cmd = [
                     "scp",
@@ -469,21 +463,7 @@ class SSHConnectionPool:
                     "LogLevel=ERROR",
                 ]
                 if self.config.uses_key_auth:
-                    key_path = self.config.key_path
-                    if not key_path:
-                        raise RuntimeError(
-                            "SSH key authentication requires key_path to be set"
-                        )
-                    scp_cmd.extend(
-                        [
-                            "-i",
-                            key_path,
-                            "-o",
-                            "IdentitiesOnly=yes",
-                            "-o",
-                            "BatchMode=yes",
-                        ]
-                    )
+                    scp_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
                 else:
                     scp_cmd.extend(
                         [

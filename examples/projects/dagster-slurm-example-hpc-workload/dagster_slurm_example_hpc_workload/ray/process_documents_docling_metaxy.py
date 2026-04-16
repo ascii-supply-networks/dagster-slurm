@@ -17,7 +17,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import metaxy as mx
 
@@ -34,6 +34,7 @@ from dagster_pipes import DagsterPipesError, PipesContext, open_dagster_pipes
 from dagster_slurm_example_shared import get_base_output_path
 from metaxy.ext.ray import MetaxyDatasink
 from ray.data import ActorPoolStrategy
+from ray.types import ObjectRef
 
 from dagster_slurm_example_hpc_workload.ray.process_documents_docling import (
     BasicDocumentConverter,
@@ -375,7 +376,11 @@ def run_processing(  # noqa: C901
         + ", ".join(str(cost) for cost in shard_costs)
     )
     arrow_refs = [
-        ray.put(_coerce_metaxy_timestamps_to_utc(table)) for table in shard_tables
+        cast(
+            ObjectRef[pa.Table | bytes],
+            ray.put(_coerce_metaxy_timestamps_to_utc(table)),
+        )
+        for table in shard_tables
     ]
     ds = rd.from_arrow_refs(arrow_refs)
 

@@ -248,6 +248,7 @@ def compute_env_cache_key(
     pack_cmd: Sequence[str],
     lockfile: Path = Path("pixi.lock"),
     cache_inject_globs: Optional[Sequence[str]] = None,
+    env_overrides: Optional[dict[str, str]] = None,
 ) -> Optional[str]:
     """Compute a stable cache key for the packed environment.
 
@@ -286,7 +287,12 @@ def compute_env_cache_key(
     # 2. Hash the pack command (captures platform, environment name, etc.)
     digest.update("::".join(pack_cmd).encode())
 
-    # 3. Hash contents of inject files
+    # 3. Hash environment overrides that affect the packed output
+    if env_overrides:
+        for key, value in sorted(env_overrides.items()):
+            digest.update(f"{key}={value}".encode())
+
+    # 4. Hash contents of inject files
     if cache_inject_globs is not None:
         # User specified which inject patterns should affect cache
         inject_patterns = list(cache_inject_globs)

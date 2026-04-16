@@ -29,8 +29,9 @@ import os
 import platform
 import subprocess
 import sys
-from pathlib import Path
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 # ============================================================================
 # CONFIGURATION - Customize for your project structure
@@ -47,34 +48,50 @@ import time
 #       "projects/package-a/dist/package_a-*.conda",
 #       "projects/package-b/dist/package_b-*.whl",
 #   ]
-INJECT_PATTERNS = [
-    # Local conda packages
-    "projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
-    "projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda",
-    "projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda",
-    # External dependency (dagster-slurm library from parent repo) - remove if not needed
-    "../dist/dagster_slurm-*-py3-none-any.whl",
+@dataclass(frozen=True)
+class BuildTarget:
+    pattern: str
+    build_dir: str
+    build_cmd: list[str]
+
+
+BUILD_TARGETS = [
+    BuildTarget(
+        pattern="projects/dagster-slurm-example-shared/dist/dagster_slurm_example_shared-*.conda",
+        build_dir="projects/dagster-slurm-example-shared",
+        build_cmd=["pixi", "build", "-o", "dist"],
+    ),
+    BuildTarget(
+        pattern="projects/dagster-slurm-example-hpc-workload/dist/dagster_slurm_example_hpc_workload-*.conda",
+        build_dir="projects/dagster-slurm-example-hpc-workload",
+        build_cmd=["pixi", "build", "-o", "dist"],
+    ),
+    BuildTarget(
+        pattern="projects/dagster-slurm-example/dist/dagster_slurm_example-*.conda",
+        build_dir="projects/dagster-slurm-example",
+        build_cmd=["pixi", "build", "-o", "dist"],
+    ),
+    BuildTarget(
+        pattern="../dist/dagster_slurm-*-py3-none-any.whl",
+        build_dir="../projects",
+        build_cmd=["pixi", "run", "-e", "build", "--frozen", "build-lib"],
+    ),
 ]
 
-# Build commands: (relative_dir, command_list)
-# Commands are executed with cwd set to relative_dir (relative to workspace root)
-#
-# Example for a simple project at root:
-#   BUILD_COMMANDS = [(".", ["pixi", "build", "-o", "dist"])]
-#
-# Example for multiple packages:
-#   BUILD_COMMANDS = [
-#       ("projects/package-a", ["pixi", "build", "-o", "dist"]),
-#       ("projects/package-b", ["uv", "build", "-o", "dist"]),
-#   ]
-BUILD_COMMANDS = [
-    # Build local conda packages
-    ("projects/dagster-slurm-example-shared", ["pixi", "build", "-o", "dist"]),
-    ("projects/dagster-slurm-example-hpc-workload", ["pixi", "build", "-o", "dist"]),
-    ("projects/dagster-slurm-example", ["pixi", "build", "-o", "dist"]),
-    # Build external dependency (dagster-slurm library from parent repo) - remove if not needed
-    ("../projects", ["pixi", "run", "-e", "build", "--frozen", "build-lib"]),
-]
+INJECT_PATTERNS = [target.pattern for target in BUILD_TARGETS]
+
+_IGNORED_SOURCE_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".pixi",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    "__pycache__",
+    "dist",
+    "build",
+}
 
 
 def _detect_platform() -> str:
@@ -113,7 +130,80 @@ def _resolve_inject_args(base_dir: Path, allow_missing: bool) -> list[str]:
     return args
 
 
-def main() -> int:
+def _latest_artifact(base_dir: Path, pattern: str) -> Path | None:
+    matches = sorted(
+        [path for path in base_dir.glob(pattern) if path.is_file()],
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not matches:
+        return None
+    return matches[-1]
+
+
+def _latest_source_mtime(root: Path) -> float:
+    latest_mtime = 0.0
+    for path in root.rglob("*"):
+        if any(part in _IGNORED_SOURCE_DIRS for part in path.parts):
+            continue
+        if path.is_file():
+            latest_mtime = max(latest_mtime, path.stat().st_mtime)
+    return latest_mtime
+
+
+def _targets_requiring_build(base_dir: Path) -> list[BuildTarget]:
+    targets: list[BuildTarget] = []
+    for target in BUILD_TARGETS:
+        build_dir = base_dir / target.build_dir
+        if not build_dir.exists():
+            continue
+
+        artifact = _latest_artifact(base_dir, target.pattern)
+        if artifact is None:
+            targets.append(target)
+            continue
+
+        source_mtime = _latest_source_mtime(build_dir)
+        if source_mtime > artifact.stat().st_mtime:
+            targets.append(target)
+
+    return targets
+
+
+def _run_build(base_dir: Path, target: BuildTarget) -> None:
+    build_dir = target.build_dir
+    build_cmd = target.build_cmd
+    build_path = base_dir / build_dir
+    print(f"📦 Building in {build_dir}:")
+    print(f"   $ {' '.join(build_cmd)}")
+
+    build_process = subprocess.Popen(
+        build_cmd,
+        cwd=build_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    build_output_lines = []
+    if build_process.stdout is not None:
+        for line in build_process.stdout:
+            print(line, end="")
+            sys.stdout.flush()
+            build_output_lines.append(line)
+
+    build_returncode = build_process.wait()
+    if build_returncode != 0:
+        raise subprocess.CalledProcessError(
+            build_returncode,
+            build_cmd,
+            "".join(build_output_lines),
+            "",
+        )
+    print("   ✓ Build completed\n")
+
+
+def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser(description="Pack a workload-specific pixi environment.")
     parser.add_argument(
         "--env",
@@ -129,7 +219,7 @@ def main() -> int:
     parser.add_argument(
         "--build-missing",
         action="store_true",
-        help="Build missing artifacts before packing.",
+        help="Build missing or stale local artifacts before packing.",
     )
     parser.add_argument(
         "--allow-missing-injects",
@@ -157,6 +247,13 @@ def main() -> int:
     else:
         platform_value = args.platform
 
+    if args.build_missing:
+        targets_to_build = _targets_requiring_build(base_dir)
+        if targets_to_build:
+            print("\n🔨 Building missing or stale artifacts...\n")
+            for target in targets_to_build:
+                _run_build(base_dir, target)
+
     # Try to find all inject artifacts
     try:
         inject_args = _resolve_inject_args(base_dir, args.allow_missing_injects)
@@ -164,44 +261,16 @@ def main() -> int:
         if not args.build_missing:
             raise
 
-        # Build missing artifacts
-        print(f"\n🔨 Building missing artifacts...")
+        print("\n🔨 Building remaining missing artifacts...")
         print(f"    {exc}\n")
 
-        for build_dir, build_cmd in BUILD_COMMANDS:
-            build_path = base_dir / build_dir
+        for target in BUILD_TARGETS:
+            build_path = base_dir / target.build_dir
             if not build_path.exists():
-                print(f"⚠️  Skipping {build_dir} (directory not found)")
+                print(f"⚠️  Skipping {target.build_dir} (directory not found)")
                 continue
+            _run_build(base_dir, target)
 
-            print(f"📦 Building in {build_dir}:")
-            print(f"   $ {' '.join(build_cmd)}")
-
-            # Stream output while capturing (tee-like behavior)
-            build_process = subprocess.Popen(
-                build_cmd,
-                cwd=build_path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-
-            build_output_lines = []
-            if build_process.stdout is not None:
-                for line in build_process.stdout:
-                    print(line, end='')
-                    sys.stdout.flush()
-                    build_output_lines.append(line)
-
-            build_returncode = build_process.wait()
-            if build_returncode != 0:
-                raise subprocess.CalledProcessError(
-                    build_returncode, build_cmd, ''.join(build_output_lines), ''
-                )
-            print(f"   ✓ Build completed\n")
-
-        # Re-resolve inject args after building
         inject_args = _resolve_inject_args(base_dir, args.allow_missing_injects)
 
     cmd = [
@@ -217,13 +286,13 @@ def main() -> int:
     ]
 
     if args.debug or args.dry_run:
-        print(f"\n📋 Configuration:")
+        print("\n📋 Configuration:")
         print(f"   Environment: {args.env}")
         print(f"   Platform: {platform_value}")
         print(f"   Workspace: {base_dir}")
         print(f"   Injecting {len(inject_args)//2} artifacts")
 
-    print(f"\n📦 Packing environment...")
+    print("\n📦 Packing environment...")
     print(f"   $ {' '.join(cmd)}")
 
     if args.dry_run:
@@ -267,7 +336,7 @@ def main() -> int:
         target = base_dir / f"environment-{safe_env}-{platform_value}-{stamp}.sh"
         packed_path.rename(target)
         size_mb = target.stat().st_size / (1024 * 1024)
-        print(f"\n✅ Successfully created packed environment:")
+        print("\n✅ Successfully created packed environment:")
         print(f"   {target.relative_to(base_dir)}")
         print(f"   Size: {size_mb:.1f} MB")
     return 0
