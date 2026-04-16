@@ -177,7 +177,7 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             # Default MUSICA profile: CPU dev queue for quick single-node tests.
             "partition": "zen4_0768",
             "gpus_per_node": 0,
-            "mem": "12G",
+            "mem": "64G",
             # "reservation": "dagster_test",  # April 16, 2026 test window
             # "reservation": "dagster",  # April 17, 2026 webinar window
             # GPU alternatives:
