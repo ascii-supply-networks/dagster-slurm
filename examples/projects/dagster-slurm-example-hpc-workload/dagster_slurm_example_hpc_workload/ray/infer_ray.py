@@ -1,5 +1,6 @@
 """Example Ray inference script."""
 
+import logging
 import os
 import time
 
@@ -27,14 +28,7 @@ def main():  # noqa: C901
         ray_address = os.environ.get("RAY_ADDRESS", "auto")
         node_ip = os.environ.get("RAY_NODE_IP_ADDRESS")
 
-        # Build init kwargs
-        init_kwargs = {
-            "address": ray_address,
-            "logging_level": "INFO",
-        }
-
         if node_ip:
-            init_kwargs["_node_ip_address"] = node_ip
             context.log.debug(f"Using node IP: {node_ip}")
 
         context.log.info(f"Try Connecting to Ray at: {ray_address}")
@@ -42,7 +36,17 @@ def main():  # noqa: C901
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             try:
-                ray.init(**init_kwargs)
+                if node_ip:
+                    ray.init(
+                        address=ray_address,
+                        logging_level=logging.INFO,
+                        _node_ip_address=node_ip,
+                    )
+                else:
+                    ray.init(
+                        address=ray_address,
+                        logging_level=logging.INFO,
+                    )
                 context.log.info("Connected to Ray cluster.")
                 break
             except Exception as e:

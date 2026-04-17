@@ -146,7 +146,7 @@ def process_documents_with_docling(
     site = os.getenv("SLURM_SUPERCOMPUTER_SITE", "").strip().lower()
     is_musica = site == "musica"
     cpus_per_task = 8 if is_supercomputer else 2
-    memory_per_node = "12G" if is_musica else ("24G" if is_supercomputer else "4G")
+    memory_per_node = "64G" if is_musica else ("24G" if is_supercomputer else "4G")
     time_limit = "00:10:00" if is_musica else None
     ray_launcher = RayLauncher(
         num_gpus_per_node=0,  # Set to >0 if using GPU-accelerated OCR
@@ -188,7 +188,7 @@ def process_documents_with_docling(
             # Multi-node = distributed Ray cluster
             "nodes": 1,  # Increase for larger workloads
             "cpus_per_task": cpus_per_task,  # 2 CPUs for Docker, 8 for supercomputers
-            "mem": memory_per_node,  # 4GB for Docker, 12GB for MUSICA CPU nodes
+            "mem": memory_per_node,  # 4GB for Docker, 64GB for MUSICA CPU nodes
             **({"time_limit": time_limit} if time_limit else {}),
             # Uncomment for GPU-accelerated OCR:
             # "gres": "gpu:1",

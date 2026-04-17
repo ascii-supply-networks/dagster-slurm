@@ -117,7 +117,7 @@ description = "Start dagster webserver in dev mode"
 [tool.pixi.tasks.start-staging]
 cmd = "pixi run -e dev --frozen dg dev --workspace workspace.yaml"
 cwd = "."
-env = { DAGSTER_DEPLOYMENT = "staging_docker" }
+env = { DAGSTER_DEPLOYMENT = "staging_docker", SLURM_EDGE_NODE_HOST = "localhost", SLURM_EDGE_NODE_PORT = "2223", SLURM_EDGE_NODE_USER = "submitter", SLURM_EDGE_NODE_PASSWORD = "submitter", SLURM_EDGE_NODE_KEY_PATH = "", SLURM_DEPLOYMENT_BASE_PATH = "/home/submitter/pipelines/deployments", SLURM_SUPERCOMPUTER_SITE = "", SLURM_SUPERCOMPUTER_PARTITION = "", SLURM_SUPERCOMPUTER_QOS = "", SLURM_SUPERCOMPUTER_RESERVATION = "", SLURM_PACK_PLATFORM = "" }
 description = "Start dagster webserver in staging mode"
 
 [tool.pixi.tasks.deploy-prod-docker]
@@ -217,7 +217,7 @@ cmd = "./scripts/decrypt_secrets.sh"
 description = "decrypt secrets with SOPS and AGE"
 
 [tool.pixi.feature.opstooling.tasks.clean-local-branches]
-cmd = "./scripts/git_clean_local_branches.sh"
+cmd = "../scripts/git_clean_local_branches.sh"
 description = "cleanup local non used branches"
 
 [tool.pixi.tasks.fmt]

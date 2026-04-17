@@ -69,7 +69,7 @@ SLURM_EDGE_NODE_PASSWORD=submitter
 SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 
 # see the JQ command below for dynamically setting this
-# DAGSTER_PROD_ENV_PATH=/home/submitter/pipelines/deployments/<<<your deployment >>>
+# CI_DEPLOYED_ENVIRONMENT_PATH=/home/submitter/pipelines/deployments/<<<your deployment >>>
 ```
 
 ```bash
@@ -78,7 +78,7 @@ SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 pixi run deploy-prod-docker
 
 cat deplyyment_metadata.json
-export DAGSTER_PROD_ENV_PATH="$(jq -er '.deployment_path' foo.json)"
+export CI_DEPLOYED_ENVIRONMENT_PATH="$(jq -er '.deployment_path' foo.json)"
 
 pixi run start-prod-docker
 ```
