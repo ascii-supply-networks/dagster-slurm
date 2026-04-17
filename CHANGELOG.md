@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v1.13.0-rc.1 (2026-04-17)
+
+### Bug Fixes
+
+- Demo more on musica after ASC infra now is hotfixed
+  ([#129](https://github.com/ascii-supply-networks/dagster-slurm/pull/129),
+  [`b3885b1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b3885b1a81e3669e16ded1a613b066bd2d584e6f))
+
+- More demo datalab ([#129](https://github.com/ascii-supply-networks/dagster-slurm/pull/129),
+  [`b3885b1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b3885b1a81e3669e16ded1a613b066bd2d584e6f))
+
+
 ## v1.13.0 (2026-04-17)
 
 ### Bug Fixes
