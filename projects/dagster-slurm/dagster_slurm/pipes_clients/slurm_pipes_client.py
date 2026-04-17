@@ -1280,13 +1280,18 @@ class SlurmPipesClient(PipesClient):
         ssh_pool.run(f"mkdir -p {env_dir}")
 
         remote_pack_file = f"{env_base_dir}/{pack_file.name}"
-        self.logger.debug(f"Uploading environment to {remote_pack_file}...")
-        ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file)
+        # Upload to a per-invocation temp path so concurrent submitters don't clobber
+        # each other's SCP writes to the shared env-cache pack-file path.
+        upload_token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        remote_pack_file_tmp = f"{remote_pack_file}.{upload_token}.tmp"
+        self.logger.debug(f"Uploading environment to {remote_pack_file_tmp}...")
+        ssh_pool.upload_file(str(pack_file.absolute()), remote_pack_file_tmp)
 
         self.logger.debug("Extracting environment on remote host...")
         activation_script = self._extract_environment(
             ssh_pool=ssh_pool,
             pack_file_path=remote_pack_file,
+            pack_file_tmp_path=remote_pack_file_tmp,
             extract_dir=env_dir,
         )
 
@@ -1297,18 +1302,38 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         pack_file_path: str,
         extract_dir: str,
+        pack_file_tmp_path: Optional[str] = None,
     ) -> str:
-        """Extract the self-extracting environment and return activation script path."""
-        ssh_pool.run(f"chmod +x {pack_file_path}")
+        """Extract the self-extracting environment and return activation script path.
 
+        When `pack_file_tmp_path` is provided, the caller uploaded the pack to a
+        per-invocation temp file; we atomically move it into the shared slot under
+        a remote flock so concurrent submitters don't race on SCP or exec.
+        """
         run_dir = str(Path(extract_dir).parent)
-        # Serialize concurrent extractions against the shared env-cache dir to avoid
-        # ETXTBSY ("Text file busy") when one asset is still writing the pack file
-        # while another tries to exec it. This was recomended by Gemini
+        activation_script = f"{run_dir}/activate.sh"
+        python_bin = f"{extract_dir}/bin/python"
         lock_file = f"{run_dir}/.extract.lock"
+
+        # The inner script runs under flock so at most one process extracts. If
+        # another process already finished while we were waiting, we skip and just
+        # drop our temp file.
+        tmp = pack_file_tmp_path or pack_file_path
+        inner = (
+            f"if [ -f {activation_script} ] && [ -x {python_bin} ]; then "
+            f"  rm -f {tmp}; "
+            f"  exit 0; "
+            f"fi; "
+            f"if [ -f {tmp} ] && [ ! -f {pack_file_path} ]; then "
+            f"  mv -f {tmp} {pack_file_path}; "
+            f"fi; "
+            f"rm -f {tmp}; "
+            f"chmod +x {pack_file_path} && "
+            f"cd {run_dir} && {pack_file_path}"
+        )
         extract_cmd = (
             f"mkdir -p {run_dir} && "
-            f"flock {lock_file} bash -c 'cd {run_dir} && {pack_file_path}'"
+            f"flock {lock_file} bash -c {shlex.quote(inner)}"
         )
 
         self.logger.debug(f"Running extraction command: {extract_cmd}")

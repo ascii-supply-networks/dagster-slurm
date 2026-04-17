@@ -242,6 +242,11 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "num_nodes": 1,
             "gpus_per_node": 1,
         },
+        "launchers": {
+            "ray": {
+                "pre_start_commands": ["ulimit -n 65536"],
+            }
+        },
     },
 }
 
