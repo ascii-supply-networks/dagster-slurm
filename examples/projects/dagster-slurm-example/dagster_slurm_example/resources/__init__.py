@@ -1,7 +1,8 @@
 import copy
 import os
 import shlex
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 import dagster as dg
 from dagster_slurm import (
@@ -276,6 +277,127 @@ def _is_production(environment: Environment) -> bool:
     return environment.value.startswith("production_")
 
 
+def _build_musica_auth_provider() -> StepOIDCAuthProvider:
+    return StepOIDCAuthProvider(
+        token_url=os.environ.get(
+            "ASC_OIDC_TOKEN_URL",
+            "https://auth.asc.ac.at/application/o/token/",
+        ),
+        client_id=os.environ.get("ASC_OIDC_CLIENT_ID", ""),
+        username=os.environ.get("ASC_OIDC_USERNAME", ""),
+        app_password=os.environ.get("ASC_OIDC_APP_PASSWORD"),
+        scope=os.environ.get("ASC_OIDC_SCOPE", "profile"),
+        token_field=os.environ.get("ASC_OIDC_TOKEN_FIELD", "access_token"),
+        context=os.environ.get("ASC_STEP_CONTEXT", "asc"),
+        refresh_skew_minutes=int(os.environ.get("ASC_STEP_REFRESH_SKEW", "30")),
+        cert_path=os.environ.get("ASC_STEP_CERT_PATH"),
+        ssh_key_path=os.environ.get("SLURM_EDGE_NODE_KEY_PATH"),
+        bootstrap_ca_url=os.environ.get("ASC_STEP_CA_URL"),
+        bootstrap_fingerprint=os.environ.get("ASC_STEP_FINGERPRINT"),
+        authentik_api_base=os.environ.get("ASC_AUTHENTIK_API_BASE"),
+        authentik_api_token=os.environ.get("ASC_AUTHENTIK_API_TOKEN"),
+        authentik_token_identifier=os.environ.get(
+            "ASC_AUTHENTIK_TOKEN_IDENTIFIER", "dagster-slurm"
+        ),
+        authentik_token_expires_days=int(
+            os.environ.get("ASC_AUTHENTIK_TOKEN_EXPIRES_DAYS", "30")
+        ),
+        authentik_credentials_file=os.environ.get("ASC_AUTHENTIK_CREDENTIALS_FILE"),
+        authentik_refresh_skew_days=int(
+            os.environ.get("ASC_AUTHENTIK_REFRESH_SKEW_DAYS", "7")
+        ),
+    )
+
+
+def _musica_provider_is_configured(provider: StepOIDCAuthProvider) -> bool:
+    return bool(
+        provider.client_id
+        and provider.username
+        and (
+            provider.app_password
+            or provider.authentik_credentials_file
+            or (provider.authentik_api_base and provider.authentik_api_token)
+        )
+    )
+
+
+def _is_future_timestamp(value: Optional[datetime]) -> bool:
+    if value is None:
+        return False
+    normalized = (
+        value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    )
+    return normalized > datetime.now(timezone.utc)
+
+
+def _musica_provider_has_usable_app_password(
+    provider: StepOIDCAuthProvider,
+) -> bool:
+    current_credentials = provider._current_credentials()
+    if provider.app_password:
+        return True
+    return bool(
+        current_credentials.app_password
+        and (
+            current_credentials.app_password_expires_at is None
+            or _is_future_timestamp(current_credentials.app_password_expires_at)
+        )
+    )
+
+
+def _musica_provider_has_usable_api_token(provider: StepOIDCAuthProvider) -> bool:
+    if not provider.authentik_api_base:
+        return False
+    if provider.authentik_api_token:
+        return True
+
+    current_credentials = provider._current_credentials()
+    return bool(
+        current_credentials.api_token
+        and (
+            current_credentials.api_token_expires_at is None
+            or _is_future_timestamp(current_credentials.api_token_expires_at)
+        )
+    )
+
+
+def _musica_provider_can_refresh_certificate(provider: StepOIDCAuthProvider) -> bool:
+    if not provider.client_id or not provider.username:
+        return False
+
+    if _musica_provider_has_usable_app_password(provider):
+        return True
+    return _musica_provider_has_usable_api_token(provider)
+
+
+def _musica_existing_certificate_is_usable(provider: StepOIDCAuthProvider) -> bool:
+    cert_valid_until = provider._read_cert_valid_until()
+    if cert_valid_until is None:
+        return False
+    return not provider._is_expiring_soon(cert_valid_until)
+
+
+def _validate_musica_auth_bootstrap(provider: StepOIDCAuthProvider) -> None:
+    if _musica_provider_can_refresh_certificate(provider):
+        return
+    if _musica_existing_certificate_is_usable(provider):
+        return
+
+    raise RuntimeError(
+        "MUSICA authentication is not bootstrapped. No usable Step SSH certificate "
+        "was found, and the current OIDC settings are not enough to mint one "
+        "automatically. Configure one of: "
+        "(1) an existing valid Step SSH certificate via ASC_STEP_CERT_PATH or "
+        "SLURM_EDGE_NODE_KEY_PATH, "
+        "(2) ASC_OIDC_CLIENT_ID + ASC_OIDC_USERNAME + ASC_OIDC_APP_PASSWORD, "
+        "(3) ASC_OIDC_CLIENT_ID + ASC_OIDC_USERNAME + ASC_AUTHENTIK_CREDENTIALS_FILE "
+        "containing current credentials, or "
+        "(4) ASC_OIDC_CLIENT_ID + ASC_OIDC_USERNAME + ASC_AUTHENTIK_API_BASE + "
+        "ASC_AUTHENTIK_API_TOKEN to bootstrap or recover the credentials file. "
+        "See docs/how-to/hpc-musica.md for the MUSICA bootstrap flow."
+    )
+
+
 def build_slurm_resources(config: Dict[str, Any]) -> Dict[str, Any]:
     """Builds Slurm-related Dagster resources from a configuration dictionary."""
     ssh = SSHConnectionResource(**config["ssh_config"])
@@ -397,54 +519,9 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
                 )
             _deep_merge(config, copy.deepcopy(site_override))
         if site_key == "musica":
-            musica_client_id = os.environ.get("ASC_OIDC_CLIENT_ID")
-            musica_username = os.environ.get("ASC_OIDC_USERNAME")
-            musica_app_password = os.environ.get("ASC_OIDC_APP_PASSWORD")
-            musica_authentik_api_base = os.environ.get("ASC_AUTHENTIK_API_BASE")
-            musica_authentik_api_token = os.environ.get("ASC_AUTHENTIK_API_TOKEN")
-            musica_authentik_credentials_file = os.environ.get(
-                "ASC_AUTHENTIK_CREDENTIALS_FILE"
-            )
-            if (
-                musica_client_id
-                and musica_username
-                and (
-                    musica_app_password
-                    or (musica_authentik_api_base and musica_authentik_api_token)
-                    or musica_authentik_credentials_file
-                )
-            ):
-                auth_provider = StepOIDCAuthProvider(
-                    token_url=os.environ.get(
-                        "ASC_OIDC_TOKEN_URL",
-                        "https://auth.asc.ac.at/application/o/token/",
-                    ),
-                    client_id=musica_client_id,
-                    username=musica_username,
-                    app_password=musica_app_password,
-                    scope=os.environ.get("ASC_OIDC_SCOPE", "profile"),
-                    token_field=os.environ.get("ASC_OIDC_TOKEN_FIELD", "access_token"),
-                    context=os.environ.get("ASC_STEP_CONTEXT", "asc"),
-                    refresh_skew_minutes=int(
-                        os.environ.get("ASC_STEP_REFRESH_SKEW", "30")
-                    ),
-                    cert_path=os.environ.get("ASC_STEP_CERT_PATH"),
-                    ssh_key_path=os.environ.get("SLURM_EDGE_NODE_KEY_PATH"),
-                    bootstrap_ca_url=os.environ.get("ASC_STEP_CA_URL"),
-                    bootstrap_fingerprint=os.environ.get("ASC_STEP_FINGERPRINT"),
-                    authentik_api_base=musica_authentik_api_base,
-                    authentik_api_token=musica_authentik_api_token,
-                    authentik_token_identifier=os.environ.get(
-                        "ASC_AUTHENTIK_TOKEN_IDENTIFIER", "dagster-slurm"
-                    ),
-                    authentik_token_expires_days=int(
-                        os.environ.get("ASC_AUTHENTIK_TOKEN_EXPIRES_DAYS", "30")
-                    ),
-                    authentik_credentials_file=musica_authentik_credentials_file,
-                    authentik_refresh_skew_days=int(
-                        os.environ.get("ASC_AUTHENTIK_REFRESH_SKEW_DAYS", "7")
-                    ),
-                )
+            auth_provider = _build_musica_auth_provider()
+            _validate_musica_auth_bootstrap(auth_provider)
+            if _musica_provider_is_configured(auth_provider):
                 config.setdefault("slurm_config", {})
                 config["slurm_config"]["auth_provider"] = auth_provider
     else:

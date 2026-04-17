@@ -329,7 +329,14 @@ def test_musica_resources_accept_credentials_file_without_env_token(
 ):
     resources_module = _load_example_resources_module()
     ssh_key_path = tmp_path / "id_musica"
+    credentials_path = tmp_path / "musica-auth.env"
     ssh_key_path.write_text("test-key")
+    AuthentikCredentialStore(credentials_path).save(
+        AuthentikCredentials(
+            app_password=TEST_APP_CREDENTIAL,
+            app_password_id=TEST_STORED_APP_CREDENTIAL_ID,
+        )
+    )
 
     monkeypatch.setenv("DAGSTER_DEPLOYMENT", "staging_supercomputer")
     monkeypatch.setenv("SLURM_SUPERCOMPUTER_SITE", "musica")
@@ -338,7 +345,7 @@ def test_musica_resources_accept_credentials_file_without_env_token(
     monkeypatch.setenv("SLURM_EDGE_NODE_KEY_PATH", str(ssh_key_path))
     monkeypatch.setenv("ASC_OIDC_CLIENT_ID", "client-id")
     monkeypatch.setenv("ASC_OIDC_USERNAME", "xy12345")
-    monkeypatch.setenv("ASC_AUTHENTIK_CREDENTIALS_FILE", "/tmp/musica-auth.env")
+    monkeypatch.setenv("ASC_AUTHENTIK_CREDENTIALS_FILE", str(credentials_path))
     monkeypatch.delenv("ASC_OIDC_APP_PASSWORD", raising=False)
     monkeypatch.delenv("ASC_AUTHENTIK_API_TOKEN", raising=False)
 
@@ -347,5 +354,65 @@ def test_musica_resources_accept_credentials_file_without_env_token(
 
     assert isinstance(auth_provider, StepOIDCAuthProvider)
     assert auth_provider.app_password is None
-    assert auth_provider.authentik_credentials_file == "/tmp/musica-auth.env"
+    assert auth_provider._current_credentials().app_password == TEST_APP_CREDENTIAL
+    assert auth_provider.authentik_credentials_file == str(credentials_path)
     assert auth_provider.ssh_key_path == str(ssh_key_path)
+
+
+def test_musica_resources_accept_existing_cert_without_oidc_bootstrap(
+    monkeypatch, tmp_path
+):
+    resources_module = _load_example_resources_module()
+    ssh_key_path = tmp_path / "id_musica"
+    ssh_key_path.write_text("test-key")
+
+    monkeypatch.setenv("DAGSTER_DEPLOYMENT", "staging_supercomputer")
+    monkeypatch.setenv("SLURM_SUPERCOMPUTER_SITE", "musica")
+    monkeypatch.setenv("SLURM_EDGE_NODE_HOST", "musica.vie.asc.ac.at")
+    monkeypatch.setenv("SLURM_EDGE_NODE_USER", "xy12345")
+    monkeypatch.setenv("SLURM_EDGE_NODE_KEY_PATH", str(ssh_key_path))
+    monkeypatch.delenv("ASC_OIDC_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ASC_OIDC_USERNAME", raising=False)
+    monkeypatch.delenv("ASC_OIDC_APP_PASSWORD", raising=False)
+    monkeypatch.delenv("ASC_AUTHENTIK_API_BASE", raising=False)
+    monkeypatch.delenv("ASC_AUTHENTIK_API_TOKEN", raising=False)
+    monkeypatch.delenv("ASC_AUTHENTIK_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setattr(
+        StepOIDCAuthProvider,
+        "_read_cert_valid_until",
+        lambda self: datetime.now(timezone.utc) + timedelta(hours=4),
+    )
+
+    resources = resources_module.get_resources()
+
+    assert resources["compute"].slurm._auth_provider is None
+
+
+def test_musica_resources_raise_clear_error_without_cert_or_bootstrap(
+    monkeypatch, tmp_path
+):
+    resources_module = _load_example_resources_module()
+    ssh_key_path = tmp_path / "id_musica"
+    ssh_key_path.write_text("test-key")
+
+    monkeypatch.setenv("DAGSTER_DEPLOYMENT", "staging_supercomputer")
+    monkeypatch.setenv("SLURM_SUPERCOMPUTER_SITE", "musica")
+    monkeypatch.setenv("SLURM_EDGE_NODE_HOST", "musica.vie.asc.ac.at")
+    monkeypatch.setenv("SLURM_EDGE_NODE_USER", "xy12345")
+    monkeypatch.setenv("SLURM_EDGE_NODE_KEY_PATH", str(ssh_key_path))
+    monkeypatch.delenv("ASC_OIDC_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ASC_OIDC_USERNAME", raising=False)
+    monkeypatch.delenv("ASC_OIDC_APP_PASSWORD", raising=False)
+    monkeypatch.delenv("ASC_AUTHENTIK_API_BASE", raising=False)
+    monkeypatch.delenv("ASC_AUTHENTIK_API_TOKEN", raising=False)
+    monkeypatch.delenv("ASC_AUTHENTIK_CREDENTIALS_FILE", raising=False)
+
+    try:
+        resources_module.get_resources()
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected MUSICA bootstrap validation to fail")
+
+    assert "MUSICA authentication is not bootstrapped" in message
+    assert "ASC_AUTHENTIK_CREDENTIALS_FILE containing current credentials" in message
