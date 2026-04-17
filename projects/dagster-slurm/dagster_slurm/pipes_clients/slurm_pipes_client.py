@@ -1332,8 +1332,7 @@ class SlurmPipesClient(PipesClient):
             f"cd {run_dir} && {pack_file_path}"
         )
         extract_cmd = (
-            f"mkdir -p {run_dir} && "
-            f"flock {lock_file} bash -c {shlex.quote(inner)}"
+            f"mkdir -p {run_dir} && flock {lock_file} bash -c {shlex.quote(inner)}"
         )
 
         self.logger.debug(f"Running extraction command: {extract_cmd}")
