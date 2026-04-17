@@ -300,9 +300,14 @@ def test_prepare_environment_force_pushes(monkeypatch, tmp_path: Path):
 
     assert activation.endswith("/environment.sh")
     assert python_exec == "/remote/base/env-cache/force123/env/bin/python"
-    assert pool.uploads == [
-        (str(pack_path), "/remote/base/env-cache/force123/environment.sh")
-    ]
+    # Pack is uploaded to a per-invocation temp path; _extract_environment then
+    # atomically moves it into the shared slot under flock so concurrent runs
+    # can't clobber each other's SCP or exec.
+    assert len(pool.uploads) == 1
+    local_src, remote_dst = pool.uploads[0]
+    assert local_src == str(pack_path)
+    assert remote_dst.startswith("/remote/base/env-cache/force123/environment.sh.")
+    assert remote_dst.endswith(".tmp")
     assert pool.commands == [
         "uname -s",
         "uname -m",
