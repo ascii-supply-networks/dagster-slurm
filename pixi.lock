@@ -1832,8 +1832,8 @@ packages:
   requires_python: '>=3.10,<3.15'
 - pypi: ./projects/dagster-slurm
   name: dagster-slurm
-  version: 1.12.0rc5
-  sha256: 5e7b2904a26c2c51e190e6ac15fdf6ffec01d6ed805aedbc3cd4a78521528070
+  version: 1.13.0
+  sha256: 3165ae2dab013eba4a039c3db932dbb0f56179bee10ac88fe8564b2394b40cbb
   requires_dist:
   - dagster>=1.13.0,<1.14
   - dagster-pipes>=1.13.0,<1.14
