@@ -5,19 +5,23 @@
   "scripts": {
     "build": "slidev build",
     "build-multimodal": "slidev build slides_multimodal.md --out dist-multimodal",
+    "build-scipy2026": "slidev build slides_scipy2026.md --out dist-scipy2026",
     "build-base": "slidev build --base ./",
     "build-multimodal-base": "slidev build slides_multimodal.md --base ./ --out dist-multimodal",
+    "build-scipy2026-base": "slidev build slides_scipy2026.md --base ./ --out dist-scipy2026",
     "dev": "slidev --open --port 5555",
+    "dev-scipy2026": "slidev --open slides_scipy2026.md --port 5556",
     "export": "slidev export --with-clicks --timeout 120000",
-    "export-multimodal": "slidev export slides_multimodal.md --with-clicks --timeout 120000 --output slides_multimodal-export.pdf"
+    "export-multimodal": "slidev export slides_multimodal.md --with-clicks --timeout 120000 --output slides_multimodal-export.pdf",
+    "export-scipy2026": "slidev export slides_scipy2026.md --with-clicks --timeout 120000 --output slides_scipy2026-export.pdf"
   },
   "dependencies": {
-    "@slidev/cli": "^52.12.0",
-    "@slidev/theme-default": "latest",
-    "@slidev/theme-seriph": "latest",
-    "vue": "^3.5.25"
+    "@slidev/cli": "^52.14.2",
+    "@slidev/theme-default": "^0.25.0",
+    "@slidev/theme-seriph": "^0.25.0",
+    "vue": "^3.5.32"
   },
   "devDependencies": {
-    "playwright-chromium": "^1.57.0"
+    "playwright-chromium": "^1.59.1"
   }
 }

@@ -108,3 +108,6 @@ slides-export-pdf:
 
 slides-export-pdf-multimodal:
     pixi run -e docs --frozen slides-export-pdf-multimodal
+
+slides-export-pdf-scipy2026:
+    pixi run -e docs --frozen slides-export-pdf-scipy2026
