@@ -76,7 +76,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Slides',
-      items: ['slides', 'slides-hackathon', 'slides-multimodal'],
+      items: ['slides', 'slides-scipy2026', 'slides-hackathon', 'slides-multimodal'],
     },
     {
       type: 'category',

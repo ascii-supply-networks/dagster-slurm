@@ -159,6 +159,12 @@ cwd = "slides"
 depends-on = ["slides-install"]
 description = "export multimodal slides pdf"
 
+[tool.pixi.feature.docs.tasks.slides-export-pdf-scipy2026]
+cmd = "bun run export-scipy2026"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "export SciPy 2026 slides pdf"
+
 [tool.pixi.feature.docs.tasks.slides-build]
 cmd = "bun run build"
 cwd = "slides"
@@ -177,9 +183,15 @@ cwd = "slides"
 depends-on = ["slides-install"]
 description = "build static multimodal slides with base"
 
+[tool.pixi.feature.docs.tasks.slides-build-scipy2026-base]
+cmd = "bun run build-scipy2026-base"
+cwd = "slides"
+depends-on = ["slides-install"]
+description = "build static SciPy 2026 slides with base"
+
 [tool.pixi.feature.docs.tasks.docs-collect-slides]
-cmd = "bash -lc 'set -euo pipefail; rm -rf docs/static/slides docs/static/slides-multimodal; cp -R slides/dist/. docs/static/slides; cp -R slides/dist-multimodal/. docs/static/slides-multimodal'"
-depends-on = ["slides-build-base", "slides-build-multimodal-base"]
+cmd = "bash -lc 'set -euo pipefail; rm -rf docs/static/slides docs/static/slides-multimodal docs/static/slides-scipy2026; cp -R slides/dist/. docs/static/slides; cp -R slides/dist-multimodal/. docs/static/slides-multimodal; cp -R slides/dist-scipy2026/. docs/static/slides-scipy2026'"
+depends-on = ["slides-build-base", "slides-build-multimodal-base", "slides-build-scipy2026-base"]
 description = "Copy Slidev dist into Docusaurus static/"
 
 [tool.commitizen]

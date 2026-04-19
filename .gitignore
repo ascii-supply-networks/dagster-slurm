@@ -1269,3 +1269,4 @@ examples/environment-workload-*.sh
 examples/environment-packaged-cluster-*.sh
 docs/static/slides-multimodal/
 slides/dist-multimodal/
+slides/dist-scipy2026/
