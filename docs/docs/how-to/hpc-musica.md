@@ -19,6 +19,21 @@ step ssh certificate 'your.email@example.com' ~/.ssh/id_musica --no-password --i
 
 After running this command, authenticate in your browser. The certificate is valid for a limited time.
 
+### Bootstrap Requirements
+
+The MUSICA integration needs at least one working bootstrap path before the
+first SSH connection. A run can start if any one of these is true:
+
+- you already have a valid local Step SSH certificate
+- your `ASC_AUTHENTIK_CREDENTIALS_FILE` already exists and contains current credentials
+- you provide a fresh bootstrap `ASC_AUTHENTIK_API_TOKEN` so the credentials file can be created or recovered
+- you provide `ASC_OIDC_APP_PASSWORD` directly
+
+Important:
+
+- `ASC_AUTHENTIK_CREDENTIALS_FILE=/some/path.env` by itself is not enough; the file must already be populated
+- if neither a valid certificate nor one of the refresh/bootstrap paths above is available, `dagster-slurm` now fails fast with a clear MUSICA bootstrap error before attempting SSH
+
 ### Automatic Certificate Refresh (Recommended)
 
 Enable automatic OIDC-based certificate refresh by setting `SLURM_SUPERCOMPUTER_SITE=musica` and adding these variables:
