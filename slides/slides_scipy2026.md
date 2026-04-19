@@ -16,7 +16,7 @@ seoMeta:
   ogTitle: "dagster-slurm at SciPy 2026"
   ogDescription: "From laptop to supercomputer without rewriting your pipeline — Dagster + Slurm for productive scientific Python on HPC."
   ogUrl: https://github.com/ascii-supply-networks/dagster-slurm/
-favicon: ./img/dagster-slurm.svg
+favicon: ./img/dagster-slurm-logo.png
 fonts:
   serif: 'EB Garamond'
   provider: google
