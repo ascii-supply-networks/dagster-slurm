@@ -29,12 +29,6 @@ clean-branches force="false":
     set -euo pipefail
     ./scripts/git_clean_local_branches.sh "{{force}}"
 
-# Alias for the examples pixi task name, available from the repo root as well.
-clean-local-branches force="false":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ./scripts/git_clean_local_branches.sh "{{force}}"
-
 # Run prek on all files
 prek-run:
     prek run --all-files
