@@ -231,44 +231,106 @@ layout: light
 </div>
 
 ---
+layout: white
+---
+
+<!-- ──────────────────────────────────────────────────────
+     SLIDE 5: DIFFERENT STRENGTHS  (white · 3-col)
+     Each side does what it is good at. The bridge is what's missing.
+────────────────────────────────────────────────────── -->
+<div class="h-full max-w-6xl mx-auto px-16 py-8 flex flex-col justify-center gap-5">
+  <div class="max-w-5xl space-y-1">
+    <div class="eyebrow">Closing The Gap</div>
+    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.2rem">Different strengths, better together</h1>
+    <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">
+      The two worlds are not redundant — they are complementary. The missing piece is the bridge that lets each keep its strengths.
+    </p>
+  </div>
+  <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr 1fr;align-items:stretch">
+    <div class="border border-neutral-300 rounded-lg p-4 bg-white flex flex-col">
+      <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Data Orchestrator</div>
+      <div class="j-serif mt-1 text-xl text-neutral-950">Plans the work</div>
+      <ul class="mt-3 space-y-1.5 text-sm leading-snug text-neutral-600 list-disc pl-4">
+        <li>Models data products and refresh policies</li>
+        <li>Captures lineage, metadata, and failures</li>
+        <li>Keeps engineers productive with local runs and data quality tests</li>
+      </ul>
+    </div>
+    <div class="border border-neutral-300 rounded-lg p-4 bg-white flex flex-col">
+      <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Slurm + HPC</div>
+      <div class="j-serif mt-1 text-xl text-neutral-950">Owns the execution</div>
+      <ul class="mt-3 space-y-1.5 text-sm leading-snug text-neutral-600 list-disc pl-4">
+        <li>Maximises utilisation of scarce accelerators</li>
+        <li>Enforces fair-share, placement, and resource binding</li>
+        <li>Provides high-performance filesystems and interconnects</li>
+      </ul>
+    </div>
+    <div class="border-2 border-teal-600 rounded-lg p-4 bg-teal-50/60 flex flex-col">
+      <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">dagster-slurm</div>
+      <div class="j-serif mt-1 text-xl text-neutral-950">Is the bridge</div>
+      <ul class="mt-3 space-y-1.5 text-sm leading-snug text-neutral-700 list-disc pl-4">
+        <li>Dagster plans; Slurm owns physical execution</li>
+        <li>One orchestrator spans HPC and non-HPC workloads</li>
+        <li>Unified observability instead of two operational universes</li>
+      </ul>
+    </div>
+  </div>
+  <div class="teal-callout" style="padding:0.7rem 1rem">
+    <p class="text-sm leading-relaxed text-neutral-700">
+      The orchestrator: Fast feedback loop. <br> The cluster: massive scale. <br>The bridge: a thin Python library — not a new platform to operate.
+    </p>
+  </div>
+</div>
+
+---
 layout: dark
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 5: ARCHITECTURE  (dark navy · layered)
+     SLIDE 6: ARCHITECTURE  (dark navy · layered building-blocks)
 ────────────────────────────────────────────────────── -->
 <div class="relative z-10 h-full py-4">
   <div class="max-w-6xl mx-auto px-16 flex flex-col justify-center gap-3 h-full">
     <div class="max-w-4xl space-y-1">
       <div class="eyebrow-light">Architecture</div>
-      <h1 class="slide-heading text-white" style="text-wrap:balance;font-size:2.5rem">One graph — pluggable execution.</h1>
+      <h1 class="slide-heading text-white" style="text-wrap:balance;font-size:2.4rem">One graph — pluggable execution.</h1>
     </div>
-    <div class="grid gap-3" style="grid-template-columns:1fr 1fr">
-      <div class="stage-card">
-        <div class="mono-label text-teal-300">Asset Layer</div>
-        <div class="j-serif mt-1 text-xl text-white">Dagster</div>
-        <p class="mt-2 text-sm leading-snug text-slate-300">Typed assets, lineage, schedules, retries, backfills. Unchanged when the target switches from laptop to Slurm.</p>
+    <!-- Layered building-blocks stack -->
+    <div class="flex flex-col gap-1.5">
+      <div class="rounded-md border border-teal-400/40 bg-teal-900/20 px-4 py-2 flex items-center gap-4">
+        <div class="mono-label text-teal-300 w-40">Your code</div>
+        <div class="j-serif text-lg text-white">Python asset</div>
+        <div class="text-xs text-slate-400">configurable IO paths · unchanged local dev ↔ HPC</div>
       </div>
-      <div class="stage-card">
-        <div class="mono-label text-teal-300">Compute Facade</div>
-        <div class="j-serif mt-1 text-xl text-white">ComputeResource</div>
-        <p class="mt-2 text-sm leading-snug text-slate-300">Pluggable abstraction over the execution target. Asset code never branches on <code class="text-xs">mode</code> — flip configuration instead.</p>
+      <div class="rounded-md border border-slate-500/50 bg-slate-800/50 px-4 py-2 flex items-center gap-4">
+        <div class="mono-label text-teal-300 w-40">Asset layer</div>
+        <div class="j-serif text-lg text-white">Dagster</div>
+        <div class="text-xs text-slate-400">lineage · schedules · retries · backfills · UI</div>
       </div>
-      <div class="stage-card">
-        <div class="mono-label text-teal-300">Launcher (what to run)</div>
-        <div class="j-serif mt-1 text-xl text-white">Bash · Ray</div>
-        <p class="mt-2 text-sm leading-snug text-slate-300">Plan generators for plain scripts or multi-node Ray clusters. New launchers (MPI, Dask, Spark, …) are additive.</p>
+      <div class="rounded-md border border-slate-500/50 bg-slate-800/50 px-4 py-2 flex items-center gap-4">
+        <div class="mono-label text-teal-300 w-40">Compute facade</div>
+        <div class="j-serif text-lg text-white">ComputeResource</div>
+        <div class="text-xs text-slate-400">mode = local · slurm</div>
       </div>
-      <div class="stage-card">
-        <div class="mono-label text-teal-300">Execution + Packaging</div>
-        <div class="j-serif mt-1 text-xl text-white">dagster-pipes · pixi-pack</div>
-        <p class="mt-2 text-sm leading-snug text-slate-300">Structured metrics and events stream back over <a href="https://docs.dagster.io/guides/build/external-pipelines" class="text-teal-300 underline">dagster-pipes</a>; environments ship reproducibly via <a href="https://github.com/Quantco/pixi-pack" class="text-teal-300 underline">pixi-pack</a>.</p>
+      <div class="rounded-md border border-slate-500/50 bg-slate-800/50 px-4 py-2 flex items-center gap-4">
+        <div class="mono-label text-teal-300 w-40">Launcher</div>
+        <div class="j-serif text-lg text-white">Bash · Ray</div>
+        <div class="text-xs text-slate-400">what to run — Spark / MPI / Dask / … additive</div>
+      </div>
+      <div class="rounded-md border border-slate-500/50 bg-slate-800/50 px-4 py-2 flex items-center gap-4">
+        <div class="mono-label text-teal-300 w-40">Transport + env</div>
+        <div class="j-serif text-lg text-white">dagster-pipes · pixi-pack</div>
+        <div class="text-xs text-slate-400">bidirectional events · reproducible conda envs</div>
+      </div>
+      <div class="rounded-md border border-teal-400/40 bg-teal-900/20 px-4 py-2 flex items-center gap-4">
+        <div class="mono-label text-teal-300 w-40">Target</div>
+        <div class="j-serif text-lg text-white">laptop · Slurm</div>
       </div>
     </div>
     <div class="dark-callout" style="padding:0.5rem 0.75rem">
-      <div class="mono-label text-teal-200">Why four layers, not one</div>
+      <div class="mono-label text-teal-200">Why layers, not a monolith</div>
       <div class="mt-1 text-sm leading-snug text-white">
-        Targets can be swapped without touching asset code — not only <strong>laptop → HPC</strong>, but also <strong>one HPC site for another</strong> as quotas or GPU availability shift.
+        Swap targets without touching asset code — <strong>laptop → HPC</strong>, or <strong>one HPC site for another</strong> as quotas and GPU availability shift.
       </div>
     </div>
   </div>
@@ -279,18 +341,18 @@ layout: white
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 6: CODE STAYS THE SAME  (white · magic-move code)
+     SLIDE 7: CODE STAYS THE SAME  (white · magic-move code)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-6 flex flex-col justify-start gap-3">
   <div class="max-w-4xl space-y-1">
     <div class="eyebrow">Portable Asset Code</div>
-    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.15rem">Same asset. Same launcher. Different target.</h1>
-    <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">Only configuration decides whether the payload runs locally or lands as a Slurm job. Dagster Pipes carries structured events back either way.</p>
+    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.15rem">Same asset. Same payload. Different target.</h1>
+    <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">Only the <code class="text-xs">ComputeResource</code> config decides whether the payload runs locally or lands as a Slurm job. Asset and payload stay identical.</p>
   </div>
 
 ````md magic-move {lines: true}
 ```python
-# asset definition — identical in dev and on HPC
+# the asset — identical in dev and on HPC
 import dagster as dg
 from dagster_slurm import BashLauncher, ComputeResource
 
@@ -324,6 +386,41 @@ if __name__ == "__main__":
     with open_dagster_pipes() as context:
         main()
 ```
+
+```python
+# dev laptop (no SSH, no Slurm)
+from dagster_slurm import ComputeResource, BashLauncher
+
+compute = ComputeResource(
+    mode="local",
+    default_launcher=BashLauncher(),
+)
+```
+
+```python
+# HPC (same asset, same payload, different target)
+from dagster_slurm import (
+    ComputeResource, SlurmResource, SSHConnectionResource,
+    SlurmQueueConfig, BashLauncher,
+)
+
+compute = ComputeResource(
+    mode="slurm",
+    slurm=SlurmResource(
+        ssh=SSHConnectionResource(host="vsc5.vsc.ac.at", user="scipyuser"),
+        queue=SlurmQueueConfig(
+            partition="zen3_0512_a100x2",   # site-specific
+            qos="zen3_0512_a100x2",         # quota class on that partition
+            num_nodes=1,
+            gpus_per_node=1,
+            time_limit="04:00:00",
+        ),
+        remote_base="$HOME/dagster_runs",
+    ),
+    default_launcher=BashLauncher(),
+    pack_platform="linux-64",               # pixi-pack target arch
+)
+```
 ````
 
 </div>
@@ -333,16 +430,53 @@ layout: white
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 7: COMPUTE FLEX  (white · laptop↔cluster visual)
+     SLIDE 8: COMPUTE FLEX  (white · laptop↔cluster visual)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-6 flex flex-col justify-start gap-3">
   <div class="max-w-5xl space-y-1">
     <div class="eyebrow">Compute Flexibility</div>
     <h1 class="slide-heading" style="font-size:2.15rem;line-height:1.05">One asset, three runtimes.</h1>
-    <p class="text-sm leading-snug text-neutral-600 max-w-4xl">Scale without rewriting: <strong>script local</strong> for print-debug, <strong>Ray local</strong> for realistic multi-process dev, and <strong>Ray elastic</strong> — k8s or Slurm HPC — when it's time to fan out across nodes and GPUs.</p>
+    <p class="text-sm leading-snug text-neutral-600 max-w-4xl">Scale without rewriting — <strong>Bash on your laptop</strong> for quick iteration, <strong>Ray on one box</strong> for realistic multi-process dev, <strong>Ray on Slurm</strong> when you need multi-node GPUs.</p>
   </div>
   <div class="flex-1 min-h-0 flex items-center justify-center">
     <img src="/img/compute-flex.svg" class="w-full h-full object-contain" alt="Three runtime tiers side by side: Script local (BashLauncher on laptop), Ray local (RayLauncher on one box), and Ray elastic (RayLauncher on k8s or Slurm HPC) — same asset graph, configuration picks the runtime." />
+  </div>
+</div>
+
+---
+layout: white
+---
+
+<!-- ──────────────────────────────────────────────────────
+     SLIDE 9: PIPES MENTAL MODEL  (white · bidirectional messaging)
+────────────────────────────────────────────────────── -->
+<div class="h-full max-w-6xl mx-auto px-16 py-5 flex flex-col justify-start gap-3">
+  <div class="max-w-5xl space-y-1">
+    <div class="eyebrow">How the remote job talks back</div>
+    <h1 class="slide-heading" style="font-size:2.05rem;line-height:1.05">Dagster Pipes — one protocol, two directions</h1>
+    <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">
+      <a href="https://docs.dagster.io/guides/build/external-pipelines" class="underline decoration-teal-700/40 underline-offset-[0.14em]">Pipes</a> is the thin wire between the Dagster process and the remote payload. Context and parameters go out; structured logs, progress, and materialization metadata come back — during the run, not after.
+    </p>
+  </div>
+  <div class="flex-1 min-h-0 flex items-center justify-center">
+    <img src="/img/pipes-architecture.svg" class="max-h-full max-w-full object-contain" alt="Dagster Pipes architecture — asset process sends context to the external process; the external process streams logs, events, and metadata back." />
+  </div>
+  <div class="grid gap-3" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="border-t border-neutral-300 py-2">
+      <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">→ Outbound</div>
+      <div class="j-serif mt-0.5 text-base text-neutral-950">Context + params</div>
+      <div class="mt-0.5 text-xs leading-snug text-neutral-600">Asset key, run id, partition, <code class="text-xs">extras</code>, env vars — serialised into the job.</div>
+    </div>
+    <div class="border-t border-neutral-300 py-2">
+      <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">← Inbound</div>
+      <div class="j-serif mt-0.5 text-base text-neutral-950">Events + metrics</div>
+      <div class="mt-0.5 text-xs leading-snug text-neutral-600">Log lines, progress, asset checks, <code class="text-xs">report_asset_materialization()</code> with typed metadata.</div>
+    </div>
+    <div class="border-t border-neutral-300 py-2">
+      <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Transport</div>
+      <div class="j-serif mt-0.5 text-base text-neutral-950">File or stream</div>
+      <div class="mt-0.5 text-xs leading-snug text-neutral-600">Shared FS on HPC; local pipe in dev. No daemon, no broker to operate.</div>
+    </div>
   </div>
 </div>
 
@@ -351,7 +485,7 @@ layout: dark
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 7: SECTION HEADER — dagster-slurm AT ASCII  (dark)
+     SLIDE 10: SECTION HEADER — dagster-slurm AT ASCII  (dark)
 ────────────────────────────────────────────────────── -->
 <div class="relative z-10 h-full max-w-6xl mx-auto px-16 py-20 flex flex-col justify-center gap-6">
   <div class="eyebrow-light">Part II · In Depth</div>
@@ -374,7 +508,7 @@ layout: light
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 8: THE ASCII USE CASE  (light)
+     SLIDE 11: THE ASCII USE CASE  (light)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-8 flex items-center">
   <div class="grid w-full gap-10" style="grid-template-columns:1fr 1fr;align-items:stretch">
@@ -421,7 +555,7 @@ layout: dark
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 9: PIPELINE SHAPE  (dark · arch diagram)
+     SLIDE 12: PIPELINE SHAPE  (dark · arch diagram)
 ────────────────────────────────────────────────────── -->
 <div class="relative z-10 h-full max-w-6xl mx-auto px-16 py-8 flex flex-col justify-start gap-4">
   <div class="max-w-5xl space-y-1">
@@ -441,7 +575,7 @@ layout: white
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 10: WHAT ASCII RUNS WHERE  (white)
+     SLIDE 13: WHAT ASCII RUNS WHERE  (white)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-6 flex flex-col justify-center gap-4">
   <div class="max-w-5xl space-y-1">
@@ -484,7 +618,7 @@ layout: white
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 11: WHAT DAGSTER-SLURM HANDLES  (white · screenshot)
+     SLIDE 14: WHAT DAGSTER-SLURM HANDLES  (white · screenshot)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-4 flex flex-col justify-center gap-3">
   <div class="max-w-5xl space-y-1">
@@ -524,7 +658,7 @@ layout: white
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 12: ASSET VIEW  (white · asset-level metadata)
+     SLIDE 15: ASSET VIEW  (white · asset-level metadata)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-4 flex flex-col justify-start gap-3">
   <div class="flex items-baseline justify-between gap-6">
@@ -537,11 +671,53 @@ layout: white
 </div>
 
 ---
+layout: white
+---
+
+<!-- ──────────────────────────────────────────────────────
+     SLIDE 16: QUICKSTART  (white · try it yourself)
+────────────────────────────────────────────────────── -->
+<div class="h-full max-w-6xl mx-auto px-16 py-6 flex flex-col justify-center gap-4">
+  <div class="max-w-5xl space-y-1">
+    <div class="eyebrow">Try It Yourself</div>
+    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.1rem">Real Slurm on your laptop — no cluster account required</h1>
+    <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">
+      The example ships a Dockerised Slurm edge node. The same asset submits through real <code class="text-xs">sbatch</code> / <code class="text-xs">sacct</code> / <code class="text-xs">squeue</code> — locally.
+    </p>
+  </div>
+  <div class="grid gap-4 items-start" style="grid-template-columns:1.1fr 0.9fr">
+    <div class="rounded-lg bg-neutral-950 px-5 py-3.5">
+      <pre class="font-mono text-[0.82rem] leading-[1.55] text-slate-100 m-0"><span class="text-slate-500"># clone</span>
+git clone https://github.com/ascii-supply-networks/dagster-slurm
+cd dagster-slurm/examples
+<span>&nbsp;</span>
+<span class="text-slate-500"># dev on the laptop — Dagster UI on :3000</span>
+pixi run start
+<span>&nbsp;</span>
+<span class="text-slate-500"># flip config → submits to Slurm-in-Docker</span>
+pixi run start-staging</pre>
+    </div>
+    <div class="space-y-0">
+      <div class="border-t border-neutral-300 py-2.5">
+        <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">The magic moment</div>
+        <div class="j-serif mt-1 text-base text-neutral-950">Same asset, real Slurm</div>
+        <div class="mt-1 text-xs leading-snug text-neutral-600">Identical Python runs in dev → then submits through a real local Slurm stack. Same UI, sacct metrics, job IDs.</div>
+      </div>
+      <div class="border-t border-neutral-300 py-2.5">
+        <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Install surface</div>
+        <div class="j-serif mt-1 text-base text-neutral-950"><code class="text-sm">pip install dagster-slurm</code></div>
+        <div class="mt-1 text-xs leading-snug text-neutral-600">Or <code class="text-xs">pixi add --pypi dagster-slurm</code>.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+---
 layout: light
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 13: METAXY AS REFERENCE  (light · brief mention)
+     SLIDE 17: METAXY AS REFERENCE  (light · brief mention)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-8 flex items-center">
   <div class="grid w-full gap-10" style="grid-template-columns:0.85fr 1.15fr;align-items:center">
@@ -577,15 +753,16 @@ layout: dark
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 14: EU SOVEREIGN GPU CLOUD  (statement · dark)
+     SLIDE 18: A CALL TO THE ROOM  (statement · dark)
+     Universal framing: Slurm lives everywhere — make it usable.
 ────────────────────────────────────────────────────── -->
 <div class="relative z-10 h-full max-w-6xl mx-auto px-16 py-16 flex flex-col justify-center items-center gap-8 text-center">
   <div class="eyebrow-light">A Call To The Room</div>
   <h1 class="slide-title text-white" style="text-wrap:balance;font-size:4rem;line-height:1.05">
-    EU sovereign GPU cloud<br/>does not come out of nowhere.
+    Sovereign compute<br/>does not come out of nowhere.
   </h1>
-  <p class="j-serif" style="font-size:1.6rem;line-height:1.35;color:rgba(94,234,212,0.88);text-wrap:balance;max-width:48rem">
-    Maybe this project can help make HPC systems more accessible.
+  <p class="j-serif" style="font-size:1.6rem;line-height:1.35;color:rgba(94,234,212,0.88);text-wrap:balance;max-width:52rem">
+    Most research GPUs sit behind Slurm. Make them usable from the same Python workflow you already run on your laptop — wherever your institution hosts them.
   </p>
   <a href="https://github.com/ascii-supply-networks/dagster-slurm" class="mt-4">
     <img src="/img/featured.png" alt="dagster-slurm" class="h-28 w-auto object-contain rounded-xl" style="filter:drop-shadow(0 8px 32px rgba(94,234,212,0.2))" />
@@ -597,7 +774,7 @@ layout: dark-closing
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 16: CLOSING  (dark · 3 takeaways)
+     SLIDE 19: CLOSING  (dark · 3 takeaways)
 ────────────────────────────────────────────────────── -->
 <div class="relative z-10 h-full max-w-6xl mx-auto px-16 py-16 flex flex-col justify-between">
   <div class="eyebrow-light">Three Takeaways</div>
@@ -629,7 +806,7 @@ layout: light
 ---
 
 <!-- ──────────────────────────────────────────────────────
-     SLIDE 16: ACKNOWLEDGEMENTS  (light)
+     SLIDE 20: ACKNOWLEDGEMENTS  (light)
 ────────────────────────────────────────────────────── -->
 <div class="h-full max-w-6xl mx-auto px-16 py-10 flex flex-col justify-center gap-5">
   <div class="max-w-5xl space-y-1">
