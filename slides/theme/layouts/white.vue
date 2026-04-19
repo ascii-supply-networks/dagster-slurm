@@ -1,1 +1,5 @@
-/Users/geoheil/development/promonow/jubust/apps/decks/theme/layouts/white.vue
+<template>
+  <div class="slide-white h-full w-full overflow-hidden">
+    <slot />
+  </div>
+</template>

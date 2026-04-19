@@ -325,6 +325,24 @@ if __name__ == "__main__":
 </div>
 
 ---
+layout: white
+---
+
+<!-- ──────────────────────────────────────────────────────
+     SLIDE 7: COMPUTE FLEX  (white · laptop↔cluster visual)
+────────────────────────────────────────────────────── -->
+<div class="h-full max-w-6xl mx-auto px-16 py-6 flex flex-col justify-start gap-3">
+  <div class="max-w-5xl space-y-1">
+    <div class="eyebrow">Compute Flexibility</div>
+    <h1 class="slide-heading" style="font-size:2.15rem;line-height:1.05">One asset, three runtimes.</h1>
+    <p class="text-sm leading-snug text-neutral-600 max-w-4xl">Scale without rewriting: <strong>script local</strong> for print-debug, <strong>Ray local</strong> for realistic multi-process dev, and <strong>Ray elastic</strong> — k8s or Slurm HPC — when it's time to fan out across nodes and GPUs.</p>
+  </div>
+  <div class="flex-1 min-h-0 flex items-center justify-center">
+    <img src="/img/compute-flex.svg" class="w-full h-full object-contain" alt="Three runtime tiers side by side: Script local (BashLauncher on laptop), Ray local (RayLauncher on one box), and Ray elastic (RayLauncher on k8s or Slurm HPC) — same asset graph, configuration picks the runtime." />
+  </div>
+</div>
+
+---
 layout: dark
 ---
 

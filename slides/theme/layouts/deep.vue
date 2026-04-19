@@ -1,1 +1,5 @@
-/Users/geoheil/development/promonow/jubust/apps/decks/theme/layouts/deep.vue
+<template>
+  <div class="slide-deep h-full w-full overflow-hidden">
+    <slot />
+  </div>
+</template>
