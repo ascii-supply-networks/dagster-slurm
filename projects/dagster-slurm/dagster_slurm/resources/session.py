@@ -23,6 +23,9 @@ class SlurmSessionResource(ConfigurableResource):
     of a Slurm allocation across multiple assets in a run.
 
     Usage in definitions.py:
+
+    .. code-block:: python
+
         session = SlurmSessionResource(
             slurm=slurm,
             num_nodes=4,
