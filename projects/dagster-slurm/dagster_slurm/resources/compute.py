@@ -25,24 +25,35 @@ class ComputeResource(ConfigurableResource):
     Hides complexity of local vs Slurm vs session execution.
 
     Usage:
-        @asset
-        def my_asset(context: AssetExecutionContext, compute: ComputeResource):
-            return compute.run(
-                context=context,
-                payload_path="script.py",
-                launcher=RayLauncher(num_gpus_per_node=2)
-            )
+        .. code-block:: python
+
+            @asset
+            def my_asset(context: AssetExecutionContext, compute: ComputeResource):
+                return compute.run(
+                    context=context,
+                    payload_path="script.py",
+                    launcher=RayLauncher(num_gpus_per_node=2)
+                )
 
     Configuration Examples:
 
     Local mode (dev):
+
+    .. code-block:: python
+
         compute = ComputeResource(mode="local")
 
     Slurm per-asset mode (staging):
+
+    .. code-block:: python
+
         slurm = SlurmResource.from_env()
         compute = ComputeResource(mode="slurm", slurm=slurm)
 
     Slurm session mode with cluster reuse (prod):
+
+    .. code-block:: python
+
         slurm = SlurmResource.from_env()
         session = SlurmSessionResource(slurm=slurm, num_nodes=10)
         compute = ComputeResource(
@@ -54,6 +65,9 @@ class ComputeResource(ConfigurableResource):
         )
 
     Heterogeneous job mode (optimal resource allocation):
+
+    .. code-block:: python
+
         compute = ComputeResource(
             mode="slurm-hetjob",
             slurm=slurm,
@@ -791,13 +805,11 @@ class ComputeResource(ConfigurableResource):
 
         Args:
             context: Dagster execution context
-            assets: List of (asset_key, payload_path, resource_requirements)
-                resource_requirements:
-                    - nodes: int (default: 1)
-                    - cpus_per_task: int (default: 2)
-                    - mem: str (default: "4G")
-                    - gpus_per_node: int (default: 0)
-                    - time_limit: str (default: "01:00:00")
+            assets: List of ``(asset_key, payload_path, resource_requirements)``.
+                Each ``resource_requirements`` dict may contain ``nodes`` (int, default 1),
+                ``cpus_per_task`` (int, default 2), ``mem`` (str, default ``"4G"``),
+                ``gpus_per_node`` (int, default 0), and ``time_limit`` (str, default
+                ``"01:00:00"``).
             launchers: Optional dict mapping asset_key to ComputeLauncher
 
         Yields:

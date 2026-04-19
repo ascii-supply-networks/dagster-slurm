@@ -21,6 +21,8 @@ class SlurmRunConfig(dg.Config):
 
     Example usage in an asset:
 
+    .. code-block:: python
+
         @dg.asset
         def my_asset(
             context: dg.AssetExecutionContext,
@@ -34,8 +36,9 @@ class SlurmRunConfig(dg.Config):
             ).get_results()
 
     Then in the Dagster launchpad, you can override:
-        - force_env_push: True to force re-upload the environment
-        - skip_payload_upload: True to skip uploading the payload script
+
+    - ``force_env_push``: ``True`` to force re-upload the environment
+    - ``skip_payload_upload``: ``True`` to skip uploading the payload script
     """
 
     force_env_push: bool = Field(

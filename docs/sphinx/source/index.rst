@@ -16,5 +16,3 @@ documentation for details.
    :caption: Contents:
 
    api_core
-   api_ray
-   api_spark
