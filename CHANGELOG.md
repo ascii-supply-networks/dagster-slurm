@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.13.0-rc.2 (2026-04-19)
+
+### Bug Fixes
+
+- **slides**: Replace cross-repo symlinks with real files + add compute-flex slide
+  ([#131](https://github.com/ascii-supply-networks/dagster-slurm/pull/131),
+  [`f5ae0ea`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f5ae0ea759a191a4afed9ac39c57634996432cda))
+
+### Chores
+
+- Docs build and slides html
+  ([#132](https://github.com/ascii-supply-networks/dagster-slurm/pull/132),
+  [`1aa4ded`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1aa4ded15f013dcee4144dce216db9ff278f5aff))
+
+- Reifne docs for step-oidc auth
+  ([#130](https://github.com/ascii-supply-networks/dagster-slurm/pull/130),
+  [`07b9fe5`](https://github.com/ascii-supply-networks/dagster-slurm/commit/07b9fe5f3db25277ba6ddbf0c0253f04d992497f))
+
+- Scipi-2026-slides v1 ([#131](https://github.com/ascii-supply-networks/dagster-slurm/pull/131),
+  [`f5ae0ea`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f5ae0ea759a191a4afed9ac39c57634996432cda))
+
+
 ## v1.13.0-rc.1 (2026-04-17)
 
 ### Bug Fixes
