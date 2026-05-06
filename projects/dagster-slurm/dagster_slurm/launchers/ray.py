@@ -245,9 +245,17 @@ class RayLauncher(ComputeLauncher):
     dash_port="{self.dashboard_port}"
     _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-}}}}"
     if [[ "{self.port_strategy}" == "hash_jobid" && -n "$_port_seed" ]]; then
-        off=$(( _port_seed % 1000 ))
-        port=$(( {self.ray_port} + off ))
-        dash_port=$(( {self.dashboard_port} + off ))
+        if [[ -n "${{RAY_PORT_SEED:-}}" ]]; then
+            # CI/local runs share a host, so use high ports instead of small
+            # offsets from Ray defaults where collisions are common.
+            off=$(( _port_seed % 20000 ))
+            port=$(( 20000 + off ))
+            dash_port=$(( 40000 + off ))
+        else
+            off=$(( _port_seed % 1000 ))
+            port=$(( {self.ray_port} + off ))
+            dash_port=$(( {self.dashboard_port} + off ))
+        fi
     fi
     # Resolve head address for local mode.
     # Always attempt IP resolution when use_head_ip=true, not just under Slurm.
@@ -257,15 +265,15 @@ class RayLauncher(ComputeLauncher):
     if [[ "{str(self.use_head_ip).lower()}" == "true" ]]; then
       head_node_name="$(hostname)"
       if command -v getent >/dev/null 2>&1; then
-        ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}')
+        ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}' || true)
         if [[ -n "$ipv4" ]]; then
           head_bind_addr="$ipv4"
         else
-          ipv6=$(getent ahostsv6 "$head_node_name" | awk 'NR==1{{print $1}}')
+          ipv6=$(getent ahostsv6 "$head_node_name" | awk 'NR==1{{print $1}}' || true)
           if [[ -n "$ipv6" ]]; then head_bind_addr="$ipv6"; fi
         fi
       elif command -v hostname >/dev/null 2>&1; then
-        ipv4=$(hostname -I 2>/dev/null | awk '{{print $1}}')
+        ipv4=$(hostname -I 2>/dev/null | awk '{{print $1}}' || true)
         if [[ -n "$ipv4" ]]; then head_bind_addr="$ipv4"; fi
       fi
     fi
@@ -620,10 +628,16 @@ class RayLauncher(ComputeLauncher):
     dash_port="{self.dashboard_port}"
     _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-}}}}"
     if [[ "{self.port_strategy}" == "hash_jobid" && -n "$_port_seed" ]]; then
-        # keep in user space; avoid reserved/system ports
-        off=$(( _port_seed % 1000 ))
-        port=$(( {self.ray_port} + off ))
-        dash_port=$(( {self.dashboard_port} + off ))
+        if [[ -n "${{RAY_PORT_SEED:-}}" ]]; then
+            off=$(( _port_seed % 20000 ))
+            port=$(( 20000 + off ))
+            dash_port=$(( 40000 + off ))
+        else
+            # keep in user space; avoid reserved/system ports
+            off=$(( _port_seed % 1000 ))
+            port=$(( {self.ray_port} + off ))
+            dash_port=$(( {self.dashboard_port} + off ))
+        fi
     fi
     
     # Choose head node (first host in allocation)
@@ -632,11 +646,11 @@ class RayLauncher(ComputeLauncher):
     head_bind_addr="$head_node_name"
     if [[ "{str(self.use_head_ip).lower()}" == "true" ]]; then
       # Prefer IPv4; fall back to IPv6; finally fall back to hostname
-      ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}')
+      ipv4=$(getent ahostsv4 "$head_node_name" | awk 'NR==1{{print $1}}' || true)
       if [[ -n "$ipv4" ]]; then
           head_bind_addr="$ipv4"
       else
-          ipv6=$(getent ahostsv6 "$head_node_name" | awk 'NR==1{{print $1}}')
+          ipv6=$(getent ahostsv6 "$head_node_name" | awk 'NR==1{{print $1}}' || true)
           if [[ -n "$ipv6" ]]; then head_bind_addr="$ipv6"; fi
       fi
     fi

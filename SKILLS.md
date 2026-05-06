@@ -15,9 +15,11 @@ git submodule update --init --recursive
 - `dagster-expert`: Dagster architecture, definitions, assets, automation, CLI workflows.
 - `dignified-python`: Production Python coding standards and modern typing/style patterns.
 - `metaxy`: Metaxy feature definitions, versioning, metadata stores, CLI, and testing patterns.
+- `stax`: Stacked Git branch and PR workflows using Stax.
 
 ## Skill Paths
 
 - `.agent-skills/dagster-skills/skills/dagster-expert`
 - `.agent-skills/dagster-skills/skills/dignified-python`
 - `.agent-skills/metaxy/SKILL.md`
+- `.agent-skills/stax/SKILL.md`
