@@ -709,3 +709,66 @@ def test_sigterm_preserves_slurm_job(
 
         # Cleanup
         ssh_pool.run(f"rm -rf {run_dir}")
+
+
+@pytest.mark.needs_slurm_docker
+def test_orphan_reconciler_detects_completed_docker_job(
+    slurm_resource_for_testing,
+    slurm_cluster_ready,
+):
+    """A completed Slurm job with a STARTED Dagster run gets a reattach retry."""
+    import time
+    import uuid
+
+    import dagster as dg
+    from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
+    from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
+
+    with dg.DagsterInstance.ephemeral() as instance:
+        ssh_pool = SSHConnectionPool(slurm_resource_for_testing.ssh)
+        with ssh_pool:
+            run_dir = f"/home/submitter/dagster_ci_runs/test_orphan_{int(time.time())}"
+            job_id = _submit_sleep_job(
+                ssh_pool,
+                run_dir,
+                "test_orphan",
+                sleep_seconds=1,
+            )
+
+            for _ in range(30):
+                final_state = _get_final_state(ssh_pool, job_id)
+                if "COMPLETED" in final_state.upper():
+                    break
+                time.sleep(1)
+            assert "COMPLETED" in _get_final_state(ssh_pool, job_id).upper()
+
+        asset_key = dg.AssetKey("orphan_asset")
+        run = dg.DagsterRun(
+            job_name="__ASSET_JOB",
+            run_id=uuid.uuid4().hex,
+            asset_selection={asset_key},
+            status=dg.DagsterRunStatus.STARTED,
+            tags={
+                _TAG_JOB_ID: str(job_id),
+                _TAG_RUN_DIR: run_dir,
+                _TAG_ASSET_KEY: asset_key.to_user_string(),
+            },
+        )
+        instance.add_run(run)
+
+        requests = reconcile_orphaned_slurm_runs(
+            instance,
+            slurm_resource_for_testing,
+            now=time.time(),
+        )
+
+        stored_run = instance.get_run_by_id(run.run_id)
+        assert stored_run is not None
+        assert stored_run.status == dg.DagsterRunStatus.FAILURE
+        assert len(requests) == 1
+        assert requests[0].tags[_TAG_JOB_ID] == str(job_id)
+        assert requests[0].tags[_TAG_RUN_DIR] == run_dir
+
+        ssh_pool = SSHConnectionPool(slurm_resource_for_testing.ssh)
+        with ssh_pool:
+            ssh_pool.run(f"rm -rf {run_dir}")

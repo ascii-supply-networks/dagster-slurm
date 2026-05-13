@@ -49,6 +49,7 @@ def _docker_slurm_env(key_path: Path | None = None) -> Dict[str, str]:
         "SLURM_SUPERCOMPUTER_QOS": "",
         "SLURM_SUPERCOMPUTER_RESERVATION": "",
         "SLURM_PACK_PLATFORM": "",
+        "PYTHON_DOTENV_DISABLED": "1",
     }
     if key_path is not None:
         env["SLURM_EDGE_NODE_KEY_PATH"] = str(key_path)
@@ -461,14 +462,14 @@ def _ensure_remote_deployment(
 @pytest.fixture
 def deployment_metadata(
     example_project_dir: Path,
-    docker_ssh_key: Path,
+    slurm_cluster_ready,
 ) -> Dict[str, Any]:
     """Read deployment metadata for PRODUCTION_DOCKER mode."""
 
     metadata_file = example_project_dir / "deployment_metadata.json"
     prep_cmd = _detect_deploy_command(example_project_dir)
     pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
-    pixi_env.update(_docker_slurm_env(key_path=docker_ssh_key))
+    pixi_env.update(_docker_slurm_env())
 
     if not metadata_file.exists():
         subprocess.run(

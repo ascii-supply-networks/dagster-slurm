@@ -14,6 +14,7 @@ import threading
 import time
 import tomllib
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -23,6 +24,7 @@ from dagster import (
     OpExecutionContext,
     PipesClient,
     PipesEnvContextInjector,
+    RunsFilter,
     get_dagster_logger,
     open_pipes_session,
 )
@@ -42,6 +44,10 @@ from ..resources.slurm import SlurmResource
 _TAG_JOB_ID = "dagster_slurm/job_id"
 _TAG_RUN_DIR = "dagster_slurm/run_dir"
 _TAG_ASSET_KEY = "dagster_slurm/asset_key"
+_TAG_LAST_SUPERVISOR_HEARTBEAT = "dagster_slurm/last_supervisor_heartbeat"
+_TAG_ORPHAN_RECONCILED_AT = "dagster_slurm/orphan_reconciled_at"
+_TAG_ORPHAN_RETRY_OF = "dagster_slurm/orphan_retry_of"
+_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 
 def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
@@ -137,6 +143,7 @@ class SlurmPipesClient(PipesClient):
         self._ssh_pool = None
         self._cancellation_requested = False
         self._sigterm_received = False
+        self._last_heartbeat_at = 0.0
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
         self.pack_on_remote = pack_on_remote
@@ -267,6 +274,7 @@ class SlurmPipesClient(PipesClient):
                         job_id = old_job_id
                         run_dir = old_run_dir
                         self._store_job_tags(op_ctx, old_job_id, run_dir, asset_key_str)
+                        self._store_supervisor_heartbeat(op_ctx, force=True)
 
                         message_reader = SSHMessageReader(
                             remote_path=f"{run_dir}/messages.jsonl",
@@ -340,6 +348,7 @@ class SlurmPipesClient(PipesClient):
                         self._current_job_id = old_job_id
                         job_id = old_job_id
                         run_dir = old_run_dir
+                        self._store_supervisor_heartbeat(op_ctx, force=True)
 
                         context_injector = PipesEnvContextInjector()
                         message_reader = SSHMessageReader(
@@ -831,6 +840,33 @@ class SlurmPipesClient(PipesClient):
         except Exception as exc:
             self.logger.debug(f"Could not store reattach tags: {exc}")
 
+    def _store_supervisor_heartbeat(
+        self,
+        op_context: Optional[OpExecutionContext],
+        *,
+        now: float | None = None,
+        force: bool = False,
+    ) -> None:
+        """Stamp the run so an external sensor can detect dead supervisors."""
+        if op_context is None:
+            return
+
+        timestamp = time.time() if now is None else now
+        if (
+            not force
+            and timestamp - self._last_heartbeat_at < _HEARTBEAT_INTERVAL_SECONDS
+        ):
+            return
+
+        self._last_heartbeat_at = timestamp
+        try:
+            op_context.instance.add_run_tags(
+                op_context.run_id,
+                {_TAG_LAST_SUPERVISOR_HEARTBEAT: str(int(timestamp))},
+            )
+        except Exception as exc:
+            self.logger.debug(f"Could not store Slurm supervisor heartbeat: {exc}")
+
     def _find_reattachable_job(
         self,
         op_context: Optional[OpExecutionContext],
@@ -851,28 +887,44 @@ class SlurmPipesClient(PipesClient):
 
         candidates: list[Dict[str, Any]] = []
 
+        def add_tag_candidate(tags: Any, *, allow_completed: bool) -> None:
+            if not isinstance(tags, Mapping):
+                return
+
+            job_id = tags.get(_TAG_JOB_ID)
+            run_dir = tags.get(_TAG_RUN_DIR)
+            if not job_id or not run_dir:
+                return
+
+            candidates.append(
+                {
+                    "job_id": job_id,
+                    "run_dir": run_dir,
+                    "allow_completed": allow_completed,
+                }
+            )
+
+        # Strategy 0: orphan-reconcile sensor path. The sensor launches a new
+        # run request carrying the original Slurm job tags directly.
+        try:
+            current_tags = getattr(op_context.dagster_run, "tags", {}) or {}
+            add_tag_candidate(current_tags, allow_completed=True)
+        except Exception as exc:
+            self.logger.debug(f"Could not check current run tags: {exc}")
+
         # Strategy 1: Retry path – check parent run's tags
         try:
             parent_run_id = getattr(op_context.dagster_run, "parent_run_id", None)
             if parent_run_id:
                 parent_run = op_context.instance.get_run_by_id(parent_run_id)
-                if parent_run and parent_run.tags.get(_TAG_JOB_ID):
-                    candidates.append(
-                        {
-                            "job_id": parent_run.tags[_TAG_JOB_ID],
-                            "run_dir": parent_run.tags.get(_TAG_RUN_DIR, ""),
-                            "allow_completed": True,
-                        }
-                    )
+                if parent_run:
+                    add_tag_candidate(parent_run.tags, allow_completed=True)
         except Exception as exc:
             self.logger.debug(f"Could not check parent run tags: {exc}")
 
         # Strategy 2: Re-materialize path – query recent FAILURE runs
         if not candidates and asset_key:
             try:
-                from dagster import DagsterRunStatus
-                from dagster._core.storage.dagster_run import RunsFilter
-
                 failed_runs = op_context.instance.get_runs(
                     filters=RunsFilter(
                         tags={_TAG_ASSET_KEY: asset_key},
@@ -881,11 +933,7 @@ class SlurmPipesClient(PipesClient):
                     limit=5,
                 )
                 for run in failed_runs:
-                    jid = run.tags.get(_TAG_JOB_ID)
-                    rdir = run.tags.get(_TAG_RUN_DIR)
-                    if jid and rdir:
-                        candidates.append({"job_id": jid, "run_dir": rdir})
-                        candidates[-1]["allow_completed"] = False
+                    add_tag_candidate(run.tags, allow_completed=False)
             except Exception as exc:
                 self.logger.debug(f"Could not query failed runs: {exc}")
 
@@ -2034,6 +2082,7 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         # Store reattach tags so a future run can find this job
         asset_key_str = self._get_asset_key_string(op_context)
         self._store_job_tags(op_context, job_id, run_dir, asset_key_str)
+        self._store_supervisor_heartbeat(op_context, force=True)
 
         # Query estimated start time for pending jobs
         self._log_estimated_start_time(job_id, ssh_pool)
@@ -2379,6 +2428,8 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         try:
             while True:
                 try:
+                    self._store_supervisor_heartbeat(op_context)
+
                     # Check for overall timeout
                     if time.time() - start_time > poll_timeout:
                         raise RuntimeError(
