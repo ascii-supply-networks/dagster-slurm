@@ -462,14 +462,14 @@ def _ensure_remote_deployment(
 @pytest.fixture
 def deployment_metadata(
     example_project_dir: Path,
-    slurm_cluster_ready,
+    docker_ssh_key: Path,
 ) -> Dict[str, Any]:
     """Read deployment metadata for PRODUCTION_DOCKER mode."""
 
     metadata_file = example_project_dir / "deployment_metadata.json"
     prep_cmd = _detect_deploy_command(example_project_dir)
     pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
-    pixi_env.update(_docker_slurm_env())
+    pixi_env.update(_docker_slurm_env(key_path=docker_ssh_key))
 
     if not metadata_file.exists():
         subprocess.run(
