@@ -36,7 +36,7 @@ def run_dg_command(
         "dev",
         "dg",
         "--target-path",
-        "examples",
+        ".",
         "launch",
         "--assets",
         assets,

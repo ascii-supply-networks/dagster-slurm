@@ -1,6 +1,7 @@
 """Slurm Pipes client for remote execution."""
 
 import glob
+import hashlib
 import os
 import posixpath
 import platform
@@ -13,6 +14,7 @@ import threading
 import time
 import tomllib
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -22,6 +24,7 @@ from dagster import (
     OpExecutionContext,
     PipesClient,
     PipesEnvContextInjector,
+    RunsFilter,
     get_dagster_logger,
     open_pipes_session,
 )
@@ -41,6 +44,10 @@ from ..resources.slurm import SlurmResource
 _TAG_JOB_ID = "dagster_slurm/job_id"
 _TAG_RUN_DIR = "dagster_slurm/run_dir"
 _TAG_ASSET_KEY = "dagster_slurm/asset_key"
+_TAG_LAST_SUPERVISOR_HEARTBEAT = "dagster_slurm/last_supervisor_heartbeat"
+_TAG_ORPHAN_RECONCILED_AT = "dagster_slurm/orphan_reconciled_at"
+_TAG_ORPHAN_RETRY_OF = "dagster_slurm/orphan_retry_of"
+_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 
 def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
@@ -136,6 +143,7 @@ class SlurmPipesClient(PipesClient):
         self._ssh_pool = None
         self._cancellation_requested = False
         self._sigterm_received = False
+        self._last_heartbeat_at = 0.0
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
         self.pack_on_remote = pack_on_remote
@@ -232,8 +240,9 @@ class SlurmPipesClient(PipesClient):
                 self._control_path = ssh_pool.control_path
 
                 remote_base = self._get_remote_base(run_id, ssh_pool)
+                op_ctx = context.op_execution_context
 
-                run_dir = f"{remote_base}/runs/{run_id}"
+                run_dir = self._get_remote_run_dir(remote_base, run_id, op_ctx)
                 messages_path = f"{run_dir}/messages.jsonl"
                 self.logger.debug(f"Creating remote run directory: {run_dir}")
                 ssh_pool.run(f"mkdir -p {run_dir}")
@@ -245,7 +254,6 @@ class SlurmPipesClient(PipesClient):
                 #   1. Job still running → reattach and monitor
                 #   2. Job already COMPLETED → collect metrics, skip submission
                 #   3. Job failed / not found → fall through to normal path
-                op_ctx = context.op_execution_context
                 asset_key_str = self._get_asset_key_string(op_ctx)
                 reattach_info = self._find_reattachable_job(
                     op_ctx, ssh_pool, asset_key_str
@@ -266,6 +274,7 @@ class SlurmPipesClient(PipesClient):
                         job_id = old_job_id
                         run_dir = old_run_dir
                         self._store_job_tags(op_ctx, old_job_id, run_dir, asset_key_str)
+                        self._store_supervisor_heartbeat(op_ctx, force=True)
 
                         message_reader = SSHMessageReader(
                             remote_path=f"{run_dir}/messages.jsonl",
@@ -339,6 +348,7 @@ class SlurmPipesClient(PipesClient):
                         self._current_job_id = old_job_id
                         job_id = old_job_id
                         run_dir = old_run_dir
+                        self._store_supervisor_heartbeat(op_ctx, force=True)
 
                         context_injector = PipesEnvContextInjector()
                         message_reader = SSHMessageReader(
@@ -654,6 +664,139 @@ class SlurmPipesClient(PipesClient):
             f"process reported an exception: {exc_name}: {exc_message}"
         )
 
+    def _get_remote_run_dir(
+        self,
+        remote_base: str,
+        run_id: str,
+        op_context: Optional[OpExecutionContext],
+    ) -> str:
+        """Return the remote work directory for one Dagster step invocation."""
+        execution_key = self._get_execution_key_string(op_context)
+        step_dir_name = self._sanitize_remote_path_component(execution_key)
+        return f"{remote_base}/runs/{run_id}/{step_dir_name}"
+
+    def _get_execution_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> str:
+        """Return a stable identity for one step, partition, and mapping instance."""
+        parts = [self._get_step_key_string(op_context)]
+
+        partition_key = self._get_partition_key_string(op_context)
+        if partition_key:
+            parts.append(f"partition={partition_key}")
+
+        mapping_key = self._get_mapping_key_string(op_context)
+        if mapping_key:
+            parts.append(f"mapping={mapping_key}")
+
+        return "__".join(parts)
+
+    def _get_step_key_string(self, op_context: Optional[OpExecutionContext]) -> str:
+        """Best-effort extraction of a stable Dagster step key."""
+        if op_context is None:
+            return "step"
+
+        step_key = self._safe_context_attr(op_context, "step_key")
+        if isinstance(step_key, str) and step_key.strip():
+            return step_key
+
+        op_def = self._safe_context_attr(op_context, "op_def")
+        op_name = self._safe_context_attr(op_def, "name") if op_def else None
+        if isinstance(op_name, str) and op_name.strip():
+            return op_name
+
+        asset_key = self._get_asset_key_string(op_context)
+        if asset_key:
+            return asset_key
+
+        return "step"
+
+    def _get_partition_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> Optional[str]:
+        """Best-effort extraction of the partition identity for this invocation."""
+        if op_context is None:
+            return None
+
+        has_partition_key = self._safe_context_attr(op_context, "has_partition_key")
+        if has_partition_key:
+            partition_key = self._safe_context_attr(op_context, "partition_key")
+            if partition_key:
+                return str(partition_key)
+
+        has_partition_key_range = self._safe_context_attr(
+            op_context, "has_partition_key_range"
+        )
+        if has_partition_key_range:
+            key_range = self._safe_context_attr(op_context, "partition_key_range")
+            if key_range:
+                start = self._safe_context_attr(key_range, "start")
+                end = self._safe_context_attr(key_range, "end")
+                if start and end:
+                    return f"{start}..{end}"
+
+        has_partitions = self._safe_context_attr(op_context, "has_partitions")
+        if has_partitions:
+            partition_keys = self._safe_context_attr(op_context, "partition_keys")
+            if isinstance(partition_keys, list) and partition_keys:
+                if len(partition_keys) == 1:
+                    return str(partition_keys[0])
+                return (
+                    f"{partition_keys[0]}..{partition_keys[-1]}"
+                    f"__count={len(partition_keys)}"
+                )
+
+        run_tags = self._safe_context_attr(op_context, "run_tags")
+        if isinstance(run_tags, dict):
+            partition_tag = run_tags.get("dagster/partition")
+            if partition_tag:
+                return str(partition_tag)
+
+        return None
+
+    def _get_mapping_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> Optional[str]:
+        """Best-effort extraction of a dynamic mapping key, when present."""
+        if op_context is None:
+            return None
+
+        get_mapping_key = self._safe_context_attr(op_context, "get_mapping_key")
+        if callable(get_mapping_key):
+            try:
+                mapping_key = get_mapping_key()
+            except Exception:
+                return None
+            if mapping_key:
+                return str(mapping_key)
+
+        mapping_key = self._safe_context_attr(op_context, "mapping_key")
+        if mapping_key:
+            return str(mapping_key)
+
+        return None
+
+    @staticmethod
+    def _safe_context_attr(obj: Any, name: str) -> Any:
+        try:
+            return getattr(obj, name, None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _sanitize_remote_path_component(raw: str) -> str:
+        """Convert a Dagster step key into a safe remote path segment."""
+        value = raw.strip() or "step"
+        sanitized = re.sub(r"[^A-Za-z0-9_.=-]+", "_", value).strip("._-")
+        if not sanitized:
+            return "step"
+        if sanitized == value and len(sanitized) <= 100:
+            return sanitized
+
+        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+        trimmed = sanitized[:100].rstrip("._-") or "step"
+        return f"{trimmed}-{digest}"
+
     def _get_asset_key_string(
         self, op_context: Optional[OpExecutionContext]
     ) -> Optional[str]:
@@ -697,6 +840,33 @@ class SlurmPipesClient(PipesClient):
         except Exception as exc:
             self.logger.debug(f"Could not store reattach tags: {exc}")
 
+    def _store_supervisor_heartbeat(
+        self,
+        op_context: Optional[OpExecutionContext],
+        *,
+        now: float | None = None,
+        force: bool = False,
+    ) -> None:
+        """Stamp the run so an external sensor can detect dead supervisors."""
+        if op_context is None:
+            return
+
+        timestamp = time.time() if now is None else now
+        if (
+            not force
+            and timestamp - self._last_heartbeat_at < _HEARTBEAT_INTERVAL_SECONDS
+        ):
+            return
+
+        self._last_heartbeat_at = timestamp
+        try:
+            op_context.instance.add_run_tags(
+                op_context.run_id,
+                {_TAG_LAST_SUPERVISOR_HEARTBEAT: str(int(timestamp))},
+            )
+        except Exception as exc:
+            self.logger.debug(f"Could not store Slurm supervisor heartbeat: {exc}")
+
     def _find_reattachable_job(
         self,
         op_context: Optional[OpExecutionContext],
@@ -717,28 +887,44 @@ class SlurmPipesClient(PipesClient):
 
         candidates: list[Dict[str, Any]] = []
 
+        def add_tag_candidate(tags: Any, *, allow_completed: bool) -> None:
+            if not isinstance(tags, Mapping):
+                return
+
+            job_id = tags.get(_TAG_JOB_ID)
+            run_dir = tags.get(_TAG_RUN_DIR)
+            if not job_id or not run_dir:
+                return
+
+            candidates.append(
+                {
+                    "job_id": job_id,
+                    "run_dir": run_dir,
+                    "allow_completed": allow_completed,
+                }
+            )
+
+        # Strategy 0: orphan-reconcile sensor path. The sensor launches a new
+        # run request carrying the original Slurm job tags directly.
+        try:
+            current_tags = getattr(op_context.dagster_run, "tags", {}) or {}
+            add_tag_candidate(current_tags, allow_completed=True)
+        except Exception as exc:
+            self.logger.debug(f"Could not check current run tags: {exc}")
+
         # Strategy 1: Retry path – check parent run's tags
         try:
             parent_run_id = getattr(op_context.dagster_run, "parent_run_id", None)
             if parent_run_id:
                 parent_run = op_context.instance.get_run_by_id(parent_run_id)
-                if parent_run and parent_run.tags.get(_TAG_JOB_ID):
-                    candidates.append(
-                        {
-                            "job_id": parent_run.tags[_TAG_JOB_ID],
-                            "run_dir": parent_run.tags.get(_TAG_RUN_DIR, ""),
-                            "allow_completed": True,
-                        }
-                    )
+                if parent_run:
+                    add_tag_candidate(parent_run.tags, allow_completed=True)
         except Exception as exc:
             self.logger.debug(f"Could not check parent run tags: {exc}")
 
         # Strategy 2: Re-materialize path – query recent FAILURE runs
         if not candidates and asset_key:
             try:
-                from dagster import DagsterRunStatus
-                from dagster._core.storage.dagster_run import RunsFilter
-
                 failed_runs = op_context.instance.get_runs(
                     filters=RunsFilter(
                         tags={_TAG_ASSET_KEY: asset_key},
@@ -747,11 +933,7 @@ class SlurmPipesClient(PipesClient):
                     limit=5,
                 )
                 for run in failed_runs:
-                    jid = run.tags.get(_TAG_JOB_ID)
-                    rdir = run.tags.get(_TAG_RUN_DIR)
-                    if jid and rdir:
-                        candidates.append({"job_id": jid, "run_dir": rdir})
-                        candidates[-1]["allow_completed"] = False
+                    add_tag_candidate(run.tags, allow_completed=False)
             except Exception as exc:
                 self.logger.debug(f"Could not query failed runs: {exc}")
 
@@ -1900,6 +2082,7 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         # Store reattach tags so a future run can find this job
         asset_key_str = self._get_asset_key_string(op_context)
         self._store_job_tags(op_context, job_id, run_dir, asset_key_str)
+        self._store_supervisor_heartbeat(op_context, force=True)
 
         # Query estimated start time for pending jobs
         self._log_estimated_start_time(job_id, ssh_pool)
@@ -2245,6 +2428,8 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         try:
             while True:
                 try:
+                    self._store_supervisor_heartbeat(op_context)
+
                     # Check for overall timeout
                     if time.time() - start_time > poll_timeout:
                         raise RuntimeError(

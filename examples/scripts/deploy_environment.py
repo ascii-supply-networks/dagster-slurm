@@ -61,8 +61,10 @@ def main():
     args = parser.parse_args()  
     env_path = ".env"
     if os.path.exists(env_path):
-        dotenv.load_dotenv(env_path)
-        logger.info(f"Environment loaded from {env_path}")
+        if dotenv.load_dotenv(env_path):
+            logger.info(f"Environment loaded from {env_path}")
+        else:
+            logger.info(f"Environment file {env_path} did not add values")
     else:
         logger.info(f"No .env file found at {env_path} (skipping).")
     try:
@@ -71,8 +73,8 @@ def main():
         ssh_port = int(os.environ["SLURM_EDGE_NODE_PORT"])
         ssh_user = os.environ["SLURM_EDGE_NODE_USER"]
         
-        key_path = os.getenv("SLURM_EDGE_NODE_KEY_PATH")
-        password = os.getenv("SLURM_EDGE_NODE_PASSWORD")
+        key_path = os.getenv("SLURM_EDGE_NODE_KEY_PATH") or None
+        password = os.getenv("SLURM_EDGE_NODE_PASSWORD") or None
 
         if not key_path and not password:
             raise ValueError("Authentication failed: You must set either SLURM_EDGE_NODE_KEY_PATH or SLURM_EDGE_NODE_PASSWORD.")

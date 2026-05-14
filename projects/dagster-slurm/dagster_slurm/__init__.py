@@ -26,6 +26,7 @@ from .resources.compute import ComputeResource
 from .resources.session import SlurmAllocation, SlurmSessionResource
 from .resources.slurm import SlurmQueueConfig, SlurmResource
 from .resources.ssh import SSHConnectionResource
+from .sensors import build_slurm_orphan_reconcile_sensor, reconcile_orphaned_slurm_runs
 
 __all__ = [
     # Main facade (most users only need this)
@@ -46,4 +47,7 @@ __all__ = [
     # Advanced: Direct client access
     "LocalPipesClient",
     "SlurmPipesClient",
+    # Sensors / reconciliation helpers
+    "build_slurm_orphan_reconcile_sensor",
+    "reconcile_orphaned_slurm_runs",
 ]

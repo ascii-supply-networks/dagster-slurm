@@ -521,7 +521,8 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     # --- Case 2: All Slurm-based environments ---
 
     # Step 2.1: Select base config based on docker vs supercomputer
-    if _is_docker_based(deployment):
+    docker_based = _is_docker_based(deployment)
+    if docker_based:
         config = copy.deepcopy(DOCKER_SLURM_BASE_CONFIG)
         # Apply production overrides if needed
         if _is_production(deployment):
@@ -576,32 +577,46 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
 
     # Apply environment overrides for the SSH connection settings.
     ssh_cfg = config.setdefault("ssh_config", {})
-    ssh_cfg["host"] = os.environ.get(
-        "SLURM_EDGE_NODE_HOST", ssh_cfg.get("host", "127.0.0.1")
+    docker_env_polluted = (
+        docker_based and os.environ.get("SLURM_SUPERCOMPUTER_SITE", "").strip()
     )
-    ssh_cfg["port"] = int(
-        os.environ.get("SLURM_EDGE_NODE_PORT", str(ssh_cfg.get("port", 2223)))
-    )
-    ssh_cfg["user"] = os.environ.get(
-        "SLURM_EDGE_NODE_USER", ssh_cfg.get("user", "submitter")
-    )
-    password_value = os.environ.get("SLURM_EDGE_NODE_PASSWORD")
-    if password_value:
-        ssh_cfg["password"] = password_value
+    if docker_env_polluted:
+        ssh_cfg["host"] = "localhost"
+        ssh_cfg["port"] = 2223
+        ssh_cfg["user"] = "submitter"
+        ssh_cfg["password"] = "submitter"
+        ssh_cfg.pop("key_path", None)
     else:
-        ssh_cfg["password"] = None
+        ssh_cfg["host"] = os.environ.get(
+            "SLURM_EDGE_NODE_HOST", ssh_cfg.get("host", "127.0.0.1")
+        )
+        ssh_cfg["port"] = int(
+            os.environ.get("SLURM_EDGE_NODE_PORT", str(ssh_cfg.get("port", 2223)))
+        )
+        ssh_cfg["user"] = os.environ.get(
+            "SLURM_EDGE_NODE_USER", ssh_cfg.get("user", "submitter")
+        )
+        password_value = os.environ.get("SLURM_EDGE_NODE_PASSWORD")
+        if password_value:
+            ssh_cfg["password"] = password_value
+        else:
+            ssh_cfg["password"] = None
 
-    key_value = os.environ.get("SLURM_EDGE_NODE_KEY_PATH")
-    if key_value:
-        ssh_cfg["key_path"] = key_value
-        ssh_cfg["password"] = None
-    else:
-        ssh_cfg["key_path"] = ssh_cfg.get("key_path")
+        key_value = os.environ.get("SLURM_EDGE_NODE_KEY_PATH")
+        if key_value:
+            ssh_cfg["key_path"] = key_value
+            ssh_cfg["password"] = None
+        else:
+            ssh_cfg["key_path"] = ssh_cfg.get("key_path")
 
     # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
     target_host = ssh_cfg.get("host")
     jump_host_env = os.environ.get("SLURM_EDGE_NODE_JUMP_HOST")
-    if jump_host_env and target_host not in {"localhost", "127.0.0.1"}:
+    if (
+        not docker_env_polluted
+        and jump_host_env
+        and target_host not in {"localhost", "127.0.0.1"}
+    ):
         jump_config: Dict[str, Any] = {
             "host": jump_host_env,
             "port": int(os.environ.get("SLURM_EDGE_NODE_JUMP_PORT", "22")),
