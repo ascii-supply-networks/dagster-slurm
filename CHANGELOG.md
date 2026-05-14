@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v1.13.0-rc.5 (2026-05-14)
+
+### Bug Fixes
+
+- Concurrent executions of asset
+  ([#143](https://github.com/ascii-supply-networks/dagster-slurm/pull/143),
+  [`2188025`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2188025263074e13bb15e8b05d6053dbf849cc7d))
+
+- Improve resiliency ([#143](https://github.com/ascii-supply-networks/dagster-slurm/pull/143),
+  [`2188025`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2188025263074e13bb15e8b05d6053dbf849cc7d))
+
+### Features
+
+- Remote packaging ([#143](https://github.com/ascii-supply-networks/dagster-slurm/pull/143),
+  [`2188025`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2188025263074e13bb15e8b05d6053dbf849cc7d))
+
+
 ## v1.13.0-rc.4 (2026-05-14)
 
 ### Bug Fixes
