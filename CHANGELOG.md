@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v1.13.0-rc.3 (2026-05-14)
+
+### Chores
+
+- Cleanup ([#135](https://github.com/ascii-supply-networks/dagster-slurm/pull/135),
+  [`cf51a11`](https://github.com/ascii-supply-networks/dagster-slurm/commit/cf51a110ee153c9c4cabdf9395ce58c8bf9b7059))
+
+- Docs favicon more ([#134](https://github.com/ascii-supply-networks/dagster-slurm/pull/134),
+  [`94b5bb9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/94b5bb968b15c27bd29234cd2c2a4dcca15fa332))
+
+- Favicon for slides ([#133](https://github.com/ascii-supply-networks/dagster-slurm/pull/133),
+  [`bafde12`](https://github.com/ascii-supply-networks/dagster-slurm/commit/bafde12755747b124acb8f06c1bab45b07d23464))
+
+- Refine slides ([#136](https://github.com/ascii-supply-networks/dagster-slurm/pull/136),
+  [`49bf5c1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/49bf5c1803ba5f5cc8e68c144559d5e8ca5e8e90))
+
+### Features
+
+- Remote packaging ([#140](https://github.com/ascii-supply-networks/dagster-slurm/pull/140),
+  [`0baec8a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0baec8a8694df856bb28eb363a66b70271b96922))
+
+- Update things ([#139](https://github.com/ascii-supply-networks/dagster-slurm/pull/139),
+  [`f1cd690`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f1cd690165f6a305b581f94a0aec2c8665309be9))
+
+
 ## v1.13.0-rc.2 (2026-04-19)
 
 ### Bug Fixes
