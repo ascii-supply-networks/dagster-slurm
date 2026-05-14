@@ -18,6 +18,24 @@ from dagster_slurm import (
 from dagster_slurm.auth.step_oidc import StepOIDCAuthProvider
 from dagster_slurm.config.environment import Environment, ExecutionMode
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value.strip())
+    except ValueError:
+        return default
+
+
 LOCAL_RESOURCES_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.LOCAL,
     "launchers": {
@@ -109,6 +127,8 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     "compute_config": {
         "auto_detect_platform": False,
         "pack_platform": "linux-64",
+        "pack_on_remote": _env_bool("SLURM_PACK_ON_REMOTE", True),
+        "remote_pack_timeout": _env_int("SLURM_REMOTE_PACK_TIMEOUT", 600),
         "debug_mode": False,
         # Hash local source trees, not built artifacts, so source edits trigger a cache
         # miss before the pack step decides whether artifacts need rebuilding.

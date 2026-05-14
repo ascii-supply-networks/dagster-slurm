@@ -1,14 +1,17 @@
 """Slurm Pipes client for remote execution."""
 
+import glob
 import os
+import posixpath
 import platform
-import shlex
 import re
+import shlex
 import signal
 import subprocess
 import sys
 import threading
 import time
+import tomllib
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -40,6 +43,38 @@ _TAG_RUN_DIR = "dagster_slurm/run_dir"
 _TAG_ASSET_KEY = "dagster_slurm/asset_key"
 
 
+def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
+    """Join a remote path and keep it inside the remote pack workspace root."""
+    if posixpath.isabs(relative_path):
+        raise ValueError(
+            f"Remote pack input path must be relative, got: {relative_path}"
+        )
+
+    root_norm = posixpath.normpath(root)
+    path_norm = posixpath.normpath(posixpath.join(base, relative_path))
+    if path_norm != root_norm and not path_norm.startswith(f"{root_norm}/"):
+        raise ValueError(
+            "Remote pack input path escapes staging workspace: "
+            f"{relative_path} -> {path_norm}"
+        )
+    return path_norm
+
+
+def _local_pack_workspace_root(project_dir: Path) -> Path:
+    """Return the local root from which remote pack inputs may be staged."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=project_dir,
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        return Path(result.stdout.strip()).resolve()
+    except (OSError, subprocess.CalledProcessError):
+        return project_dir.resolve()
+
+
 class SlurmPipesClient(PipesClient):
     """Pipes client for Slurm execution with real-time log streaming and cancellation support.
 
@@ -66,6 +101,8 @@ class SlurmPipesClient(PipesClient):
         pack_platform: Optional[str] = None,
         pre_deployed_env_path: Optional[str] = None,
         cache_inject_globs: Optional[list[str]] = None,
+        pack_on_remote: bool = False,
+        remote_pack_timeout: int = 600,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -79,6 +116,9 @@ class SlurmPipesClient(PipesClient):
             should affect the environment cache key. If None, all --inject patterns
             from the pack command are hashed. Use this to exclude workload-specific
             packages from cache invalidation (e.g., only include base libraries).
+        pack_on_remote: If True, stage small pack inputs on the edge node and run
+            pixi-pack there instead of uploading the self-extracting environment.
+        remote_pack_timeout: Timeout in seconds for the remote pack and extract step.
 
         """
         super().__init__()
@@ -98,6 +138,8 @@ class SlurmPipesClient(PipesClient):
         self._sigterm_received = False
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
+        self.pack_on_remote = pack_on_remote
+        self.remote_pack_timeout = remote_pack_timeout
 
     def run(  # ty: ignore[invalid-method-override]  # Dagster PipesClient is designed for extension
         self,
@@ -1160,6 +1202,256 @@ class SlurmPipesClient(PipesClient):
             self.logger.debug(f"Could not compute environment cache key: {exc}")
             return None
 
+    def _extract_inject_patterns_from_command(self, pack_cmd: list[str]) -> list[str]:
+        """Extract pixi-pack --inject values from a shell command."""
+        patterns: list[str] = []
+        i = 0
+        while i < len(pack_cmd):
+            arg = pack_cmd[i]
+            if arg == "--inject" and i + 1 < len(pack_cmd):
+                patterns.append(pack_cmd[i + 1])
+                i += 2
+            elif arg.startswith("--inject="):
+                patterns.append(arg[len("--inject=") :])
+                i += 1
+            else:
+                i += 1
+        return patterns
+
+    def _extract_pixi_task_names(self, pack_cmd: list[str]) -> list[str]:
+        """Return pixi task names invoked by commands like ``pixi run pack``."""
+        if (
+            len(pack_cmd) < 3
+            or Path(pack_cmd[0]).name != "pixi"
+            or pack_cmd[1] != "run"
+        ):
+            return []
+
+        task_names: list[str] = []
+        i = 2
+        options_with_values = {"-e", "--environment", "--manifest-path"}
+        while i < len(pack_cmd):
+            arg = pack_cmd[i]
+            if arg == "--":
+                if i + 1 < len(pack_cmd):
+                    task_names.append(pack_cmd[i + 1])
+                break
+            if arg in options_with_values:
+                i += 2
+                continue
+            if arg.startswith("-"):
+                i += 1
+                continue
+            task_names.append(arg)
+            break
+        return task_names
+
+    def _load_pixi_task_command(
+        self, task_name: str, project_dir: Path
+    ) -> Optional[list[str]]:
+        """Load a task command from the local pixi/pyproject manifest if present."""
+        manifest = project_dir / "pixi.toml"
+        if not manifest.exists():
+            manifest = project_dir / "pyproject.toml"
+        if not manifest.exists():
+            return None
+
+        try:
+            data = tomllib.loads(manifest.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            self.logger.debug(f"Could not read pixi task {task_name!r}: {exc}")
+            return None
+
+        tasks = data.get("tasks")
+        if tasks is None:
+            tasks = data.get("tool", {}).get("pixi", {}).get("tasks", {})
+        task = tasks.get(task_name) if isinstance(tasks, dict) else None
+        if task is None:
+            return None
+        if isinstance(task, str):
+            return shlex.split(task)
+        if isinstance(task, dict) and isinstance(task.get("cmd"), str):
+            return shlex.split(task["cmd"])
+        return None
+
+    def _remote_pack_input_files(
+        self, pack_cmds: list[list[str]], project_dir: Path
+    ) -> list[tuple[Path, str]]:
+        """Return local files to stage for remote packing.
+
+        The staged set is intentionally small: manifests, lockfiles, pack helper
+        scripts, selected cache source globs, and already-built inject artifacts.
+        Payload scripts and per-run extra files are handled by the normal ad hoc
+        upload path, so script/config edits do not require re-shipping the env.
+        """
+        files: dict[str, Path] = {}
+        workspace_root = _local_pack_workspace_root(project_dir)
+
+        def add_file(path: Path) -> None:
+            if not path.is_file():
+                return
+            resolved = path.resolve()
+            try:
+                resolved.relative_to(workspace_root)
+            except ValueError as exc:
+                raise ValueError(
+                    "Remote packing input file is outside the local workspace "
+                    f"root {workspace_root}: {resolved}"
+                ) from exc
+
+            try:
+                relative = resolved.relative_to(project_dir.resolve())
+            except ValueError:
+                relative = Path(os.path.relpath(resolved, project_dir.resolve()))
+            files[relative.as_posix()] = resolved
+
+        for name in ("pyproject.toml", "pixi.toml", "pixi.lock"):
+            add_file(project_dir / name)
+
+        patterns: list[str] = []
+        for pack_cmd in pack_cmds:
+            patterns.extend(self._extract_inject_patterns_from_command(pack_cmd))
+            for task_name in self._extract_pixi_task_names(pack_cmd):
+                if task_cmd := self._load_pixi_task_command(
+                    task_name, project_dir=project_dir
+                ):
+                    patterns.extend(
+                        self._extract_inject_patterns_from_command(task_cmd)
+                    )
+            for arg in pack_cmd:
+                if arg.endswith("scripts/pack_environment.py"):
+                    add_file(project_dir / arg)
+
+        if self.cache_inject_globs:
+            patterns.extend(self.cache_inject_globs)
+
+        missing_patterns: list[str] = []
+        for pattern in patterns:
+            matches = [
+                Path(match)
+                for match in glob.glob(str(project_dir / pattern), recursive=True)
+                if Path(match).is_file()
+            ]
+            if not matches:
+                missing_patterns.append(pattern)
+                continue
+            for match in matches:
+                add_file(Path(match))
+
+        if missing_patterns:
+            missing = ", ".join(sorted(set(missing_patterns)))
+            raise FileNotFoundError(
+                "Remote packing input pattern(s) did not match any files: "
+                f"{missing}. Build the inject artifacts first or update the "
+                "pack/cache_inject_globs configuration."
+            )
+
+        return sorted((path, relative) for relative, path in files.items())
+
+    def _stage_remote_pack_workspace(
+        self,
+        ssh_pool: SSHConnectionPool,
+        remote_project_dir: str,
+        pack_cmds: list[list[str]],
+    ) -> None:
+        """Upload the small set of files needed to run pixi-pack remotely."""
+        project_dir = Path.cwd()
+        files = self._remote_pack_input_files(pack_cmds, project_dir=project_dir)
+        if not files:
+            raise RuntimeError("Remote packing could not find any local pack inputs")
+        remote_pack_root = posixpath.dirname(remote_project_dir)
+
+        self.logger.info(
+            "Staging %s small pack input file(s) on the Slurm edge node", len(files)
+        )
+        ssh_pool.run(f"mkdir -p {shlex.quote(remote_project_dir)}")
+        for local_path, relative_path in files:
+            remote_path = _remote_join_under_root(
+                root=remote_pack_root,
+                base=remote_project_dir,
+                relative_path=relative_path,
+            )
+            ssh_pool.run(f"mkdir -p {shlex.quote(posixpath.dirname(remote_path))}")
+            ssh_pool.upload_file(str(local_path), remote_path)
+
+    def _pack_environment_on_remote(
+        self,
+        ssh_pool: SSHConnectionPool,
+        env_base_dir: str,
+        env_dir: str,
+        pack_cmd: list[str],
+        env_overrides: dict[str, str],
+    ) -> str:
+        """Run pixi-pack on the edge node and extract into the shared env cache."""
+        token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        remote_project_dir = f"{env_base_dir}/pack-work/{token}/project"
+        self._stage_remote_pack_workspace(
+            ssh_pool=ssh_pool,
+            remote_project_dir=remote_project_dir,
+            pack_cmds=[pack_cmd],
+        )
+
+        activation_script = f"{env_base_dir}/activate.sh"
+        python_bin = f"{env_dir}/bin/python"
+        lock_file = f"{env_base_dir}/.remote-pack.lock"
+        env_prefix = " ".join(
+            f"{key}={shlex.quote(value)}"
+            for key, value in sorted(env_overrides.items())
+        )
+        command = f"{env_prefix} {shlex.join(pack_cmd)}".strip()
+        project_dir_quoted = shlex.quote(remote_project_dir)
+        env_base_quoted = shlex.quote(env_base_dir)
+        env_dir_quoted = shlex.quote(env_dir)
+        activation_quoted = shlex.quote(activation_script)
+        python_quoted = shlex.quote(python_bin)
+        pack_script_quoted = f"{project_dir_quoted}/$pack_file"
+
+        inner = f"""
+set -euo pipefail
+if [ -f {activation_quoted} ] && [ -x {python_quoted} ]; then
+  rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
+  exit 0
+fi
+mkdir -p {env_dir_quoted}
+cd {project_dir_quoted}
+{command}
+pack_file="$(ls -t environment.sh environment-*.sh *.tar.bz2 2>/dev/null | head -n 1 || true)"
+if [ -z "$pack_file" ]; then
+  echo "Remote pixi-pack completed but no environment.sh/environment-*.sh/*.tar.bz2 was found" >&2
+  exit 1
+fi
+case "$pack_file" in
+  *.sh)
+    chmod +x "$pack_file"
+    cd {env_base_quoted}
+    {pack_script_quoted}
+    ;;
+  *)
+    echo "Remote pack produced $pack_file; only self-extracting .sh packs are supported by dagster-slurm" >&2
+    exit 1
+    ;;
+esac
+rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
+"""
+        pack_cmd_remote = (
+            f"mkdir -p {env_base_quoted} && "
+            f"flock {shlex.quote(lock_file)} bash -c {shlex.quote(inner)}"
+        )
+        self.logger.info("Packing environment on Slurm edge node with pixi...")
+        try:
+            output = ssh_pool.run(pack_cmd_remote, timeout=self.remote_pack_timeout)
+            self.logger.debug(f"Remote pack output:\n{output}")
+        except Exception as exc:
+            raise RuntimeError(
+                "Remote environment packing failed. Ensure pixi/pixi-pack are "
+                "available on the edge node and the staged inject artifacts exist."
+            ) from exc
+
+        verify_cmd = f"test -f {activation_quoted} && test -x {python_quoted}"
+        ssh_pool.run(verify_cmd)
+        self.logger.info("Remote-packed environment is ready")
+        return activation_script
+
     def _cached_env_ready(
         self,
         ssh_pool: SSHConnectionPool,
@@ -1168,7 +1460,9 @@ class SlurmPipesClient(PipesClient):
     ) -> bool:
         """Check if a cached environment is already present on the remote host."""
         try:
-            ssh_pool.run(f"test -f {activation_script} && test -f {python_executable}")
+            activation_quoted = shlex.quote(activation_script)
+            python_quoted = shlex.quote(python_executable)
+            ssh_pool.run(f"test -f {activation_quoted} && test -x {python_quoted}")
             return True
         except Exception:
             return False
@@ -1254,6 +1548,31 @@ class SlurmPipesClient(PipesClient):
             self.logger.info("No cache key available, packing environment...")
         else:
             self.logger.info(f"Cache miss for {cache_key}, packing environment...")
+
+        if self.pack_on_remote:
+            self.logger.info(
+                "Remote pack mode enabled: packaging base environment on the edge node"
+            )
+            self.logger.debug(f"Preparing remote environment directory: {env_dir}")
+            ssh_pool.run(f"mkdir -p {shlex.quote(env_dir)}")
+            try:
+                activation_script = self._pack_environment_on_remote(
+                    ssh_pool=ssh_pool,
+                    env_base_dir=env_base_dir,
+                    env_dir=env_dir,
+                    pack_cmd=pack_cmd_for_cache,
+                    env_overrides=pack_env_overrides,
+                )
+                return activation_script, python_executable
+            except Exception as exc:
+                self.logger.warning(
+                    "Remote environment packing failed; falling back to local "
+                    "packaging and upload. Remote packing requires pixi, pixi-pack, "
+                    "and access to the required package repositories on the edge "
+                    "node. Disable pack_on_remote for air-gapped clusters. Error: %s",
+                    exc,
+                )
+
         self.logger.info("Packing environment with pixi...")
         pack_file = pack_environment_with_pixi(
             pack_cmd=pack_cmd,
@@ -1348,7 +1667,10 @@ class SlurmPipesClient(PipesClient):
 
         # Verify extraction
         activation_script = f"{run_dir}/activate.sh"
-        verify_cmd = f"test -f {activation_script} && test -f {extract_dir}/bin/python"
+        verify_cmd = (
+            f"test -f {shlex.quote(activation_script)} && "
+            f"test -x {shlex.quote(f'{extract_dir}/bin/python')}"
+        )
 
         try:
             ssh_pool.run(verify_cmd)

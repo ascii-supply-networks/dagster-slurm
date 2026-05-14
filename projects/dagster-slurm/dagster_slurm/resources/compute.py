@@ -116,6 +116,20 @@ class ComputeResource(ConfigurableResource):
         description="If set, uses a pre-deployed environment at this path instead of live packaging.",
     )
 
+    pack_on_remote: bool = Field(
+        default=False,
+        description=(
+            "If True, run pixi-pack on the Slurm edge node on environment cache misses "
+            "and upload only small pack inputs instead of the packed environment. "
+            "Falls back to local packaging and upload if remote packing fails."
+        ),
+    )
+
+    remote_pack_timeout: int = Field(
+        default=600,
+        description="Timeout in seconds for remote environment packing on the edge node.",
+    )
+
     cache_inject_globs: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -260,6 +274,8 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
+                pack_on_remote=self.pack_on_remote,
+                remote_pack_timeout=self.remote_pack_timeout,
             )
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
@@ -282,6 +298,8 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
+                pack_on_remote=self.pack_on_remote,
+                remote_pack_timeout=self.remote_pack_timeout,
             )
 
         else:  # ExecutionMode.SLURM_HETJOB
@@ -298,6 +316,8 @@ class ComputeResource(ConfigurableResource):
                 pack_platform=self.pack_platform,
                 pre_deployed_env_path=self.pre_deployed_env_path,
                 cache_inject_globs=self.cache_inject_globs,
+                pack_on_remote=self.pack_on_remote,
+                remote_pack_timeout=self.remote_pack_timeout,
             )
 
     def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:
