@@ -13,7 +13,7 @@ This companion page focuses on how Dagster concepts map onto the Ray launcher an
 from dagster import Definitions
 from dagster_slurm import ComputeResource, RayLauncher
 
-ray_launcher = RayLauncher(num_cpus_per_node=32, runtime_env={"working_dir": "."})
+ray_launcher = RayLauncher(num_gpus_per_node=0)
 
 defs = Definitions(
     assets=[train_model, evaluate_model, export_model],
@@ -27,7 +27,42 @@ defs = Definitions(
 )
 ```
 
-The shared launcher keeps every asset on the same Ray launcher configuration while still running each one in its own Slurm job. Session reuse remains experimental.
+The shared launcher keeps every asset on the same Ray launcher configuration while still running each one in its own Slurm job.
+
+### One run-owned Ray allocation
+
+When several dependent Ray assets use the same Slurm shape, configure the Ray resource for run scope:
+
+```python title="repository.py"
+from dagster import Definitions
+from dagster_slurm import (
+    ComputeResource,
+    RayLauncher,
+    SlurmAllocationScope,
+    SlurmRunAllocationConfig,
+)
+
+defs = Definitions(
+    assets=[train_model, evaluate_model, export_model],
+    resources={
+        "compute_ray": ComputeResource(
+            mode="slurm",
+            slurm=slurm_resource,
+            default_launcher=RayLauncher(num_gpus_per_node=1),
+            allocation_scope=SlurmAllocationScope.RUN,
+            run_allocation=SlurmRunAllocationConfig(
+                num_nodes=2,
+                gpus_per_node=1,
+                cpus_per_task=8,
+                mem="64G",
+                time_limit="04:00:00",
+            ),
+        ),
+    },
+)
+```
+
+This starts Ray once for the Dagster run and injects the same `RAY_ADDRESS` into each compatible asset step.
 
 ### Asset-specific overrides
 
@@ -37,13 +72,13 @@ from dagster_slurm import RayLauncher
 
 @asset(required_resource_keys={"compute"})
 def preprocess(context):
-    launcher = RayLauncher(num_cpus_per_node=16, working_dir="ray_jobs/preprocess")
+    launcher = RayLauncher(num_gpus_per_node=0)
     return context.resources.compute.run(context=context, payload_path="python -m jobs.preprocess", launcher=launcher)
 
 
 @asset(required_resource_keys={"compute"})
 def train(context, preprocess):
-    launcher = RayLauncher(num_gpus_per_node=4, runtime_env={"env_vars": {"MODEL_SIZE": "xl"}})
+    launcher = RayLauncher(num_gpus_per_node=4)
     return context.resources.compute.run(context=context, payload_path="python -m jobs.train", launcher=launcher)
 ```
 
@@ -57,9 +92,9 @@ Use Dagster's `MultiAssetSensor`, `AssetCheck`, or `AutomationCondition` to coor
 - Fan out inference shards as individual materializations by emitting multiple Dagster outputs from a single Ray job.
 - Use `context.defer_asset` to schedule dependent Ray assets once the cluster has produced a success marker.
 
-## Roadmap: session reuse
+## Compatibility rules
 
-Keeping a Ray head node alive across multiple Dagster assets (often referred to as `slurm-session`) is still under active development. The configuration hooks remain in the code to avoid breaking changes, but we recommend sticking to the `slurm` mode for production work today. Track progress or join the design discussions on GitHub if your workloads would benefit from long-lived clusters.
+Run-scoped Ray allocation is intentionally strict. All assets in the run must use compatible Ray launcher settings and the same Slurm allocation shape. Put shared Slurm settings in `SlurmRunAllocationConfig`; keep asset-specific environment variables in `extra_env`.
 
 ## Mixing Ray with other launchers
 

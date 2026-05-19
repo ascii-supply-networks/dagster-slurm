@@ -1,7 +1,7 @@
 import io
 import json
 
-from dagster_slurm.helpers.message_readers import SSHMessageReader
+from dagster_slurm.helpers.message_readers import LocalMessageReader, SSHMessageReader
 from dagster_slurm.resources.ssh import SSHConnectionResource
 
 
@@ -165,3 +165,30 @@ def test_ssh_message_reader_control_path_keeps_key_auth_opts(tmp_path):
     assert cmd[cmd.index("-i") + 1] == str(key_path)
     assert "IdentitiesOnly=yes" in cmd
     assert "BatchMode=yes" in cmd
+
+
+def test_local_message_reader_uses_configurable_closed_drain_timeout(tmp_path):
+    messages_path = tmp_path / "messages.jsonl"
+    messages_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"method": "opened", "params": {}}),
+                json.dumps({"method": "closed", "params": {}}),
+            ]
+        )
+        + "\n"
+    )
+    reader = LocalMessageReader(
+        messages_path=str(messages_path),
+        poll_interval=0.01,
+        creation_timeout=0.1,
+        closed_message_drain_timeout=0.01,
+    )
+    handler = _CollectingHandler()
+
+    reader._tail_file(handler)
+
+    assert [message["method"] for message in handler.messages] == [
+        "opened",
+        "closed",
+    ]

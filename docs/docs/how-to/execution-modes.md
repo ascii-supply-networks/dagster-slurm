@@ -13,10 +13,10 @@ title: Choose an execution mode
 
 ## Mode summary
 
-| Mode    | Description                                                | Typical use                                   | Requirements                                        |
-| ------- | ---------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------- |
-| `local` | Runs assets directly on the Dagster code location process. | Laptop development, CI smoke tests.           | No Slurm or SSH connectivity.                       |
-| `slurm` | Submits one Slurm job per asset materialization.           | Staging clusters, production pipelines today. | `SlurmResource` with queue/partition configuration. |
+| Mode    | Description                                                                                                                           | Typical use                                   | Requirements                                        |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------- |
+| `local` | Runs assets directly on the Dagster code location process.                                                                            | Laptop development, CI smoke tests.           | No Slurm or SSH connectivity.                       |
+| `slurm` | Submits one Slurm job per asset materialization by default. Ray assets can explicitly share one run-owned Slurm allocation if needed. | Staging clusters, production pipelines today. | `SlurmResource` with queue/partition configuration. |
 
 Switch modes by updating the `ComputeResource.mode` field—asset code stays identical.
 
@@ -50,6 +50,39 @@ compute = ComputeResource(
 - Jobs terminate as soon as the asset finishes—ideal for isolated workloads.
 - Override `launcher=` on individual assets to run Ray or Spark (WIP) workloads inside the allocation.
 
+## Slurm mode with run-scoped Ray allocation
+
+Use `allocation_scope="run"` when a Dagster run selects several Ray-backed assets that should reuse one Slurm allocation and one Ray cluster. The default remains per-asset jobs.
+
+```python
+from dagster_slurm import (
+    ComputeResource,
+    RayLauncher,
+    SlurmAllocationScope,
+    SlurmRunAllocationConfig,
+)
+
+compute_ray = ComputeResource(
+    mode="slurm",
+    slurm=slurm,
+    default_launcher=RayLauncher(num_gpus_per_node=1),
+    allocation_scope=SlurmAllocationScope.RUN,
+    run_allocation=SlurmRunAllocationConfig(
+        num_nodes=2,
+        gpus_per_node=1,
+        cpus_per_task=8,
+        mem="64G",
+        time_limit="04:00:00",
+        partition="gpu",
+    ),
+)
+```
+
+- The allocation belongs to the Dagster run, not to one asset.
+- `dagster-slurm` starts Ray once, passes `RAY_ADDRESS` to each compatible asset step, and releases the allocation during resource teardown.
+- Per-asset Slurm resource overrides must match the run allocation. Incompatible overrides fail before submission instead of silently creating a different scheduling model.
+- The example project enables this for the Ray resource with `SLURM_ALLOCATION_SCOPE=run`.
+
 ## Executor choice and Dagster restarts
 
 :::tip Use the in-process executor for reliable Slurm runs
@@ -64,13 +97,13 @@ See [Troubleshooting: Dagster restarts and Slurm job survival](./troubleshooting
 
 ## Work in progress
 
-Session reuse (`slurm-session`) and heterogeneous jobs (`slurm-hetjob`) are on the roadmap. Configuration stubs remain in the API so early adopters can experiment, but we recommend planning production systems around the stable `local` and `slurm` modes for now.
+Heterogeneous jobs (`slurm-hetjob`) remain experimental. The older `slurm-session` mode is still present for compatibility, but new Ray allocation reuse should use `mode="slurm"` with `allocation_scope="run"`.
 
 ## Choosing a launcher per mode
 
-| Mode    | Recommended launcher(s)                              | Notes                                                                                          |
-| ------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `local` | `BashLauncher`, `RayLauncher` (single node)          | Keeps development parity with production launchers.                                            |
-| `slurm` | `BashLauncher`, `RayLauncher`, `SparkLauncher` (WIP) | Each asset gets a fresh allocation. Session-based reuse will extend this list once stabilised. |
+| Mode    | Recommended launcher(s)                              | Notes                                                                                               |
+| ------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `local` | `BashLauncher`, `RayLauncher` (single node)          | Keeps development parity with production launchers.                                                 |
+| `slurm` | `BashLauncher`, `RayLauncher`, `SparkLauncher` (WIP) | Each asset gets a fresh allocation by default; Ray can opt into a shared run allocation explicitly. |
 
 Remember to include launcher-specific dependencies (e.g. `ray`) in your pixi environment or `pyproject.toml`.

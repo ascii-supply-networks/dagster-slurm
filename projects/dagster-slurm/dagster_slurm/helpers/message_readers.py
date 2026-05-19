@@ -55,11 +55,13 @@ class LocalMessageReader(PipesMessageReader):
         include_stdio: bool = True,
         poll_interval: float = 0.2,
         creation_timeout: float = 30.0,
+        closed_message_drain_timeout: float = 2.0,
     ):
         self.messages_path = messages_path
         self.include_stdio = include_stdio
         self.poll_interval = poll_interval
         self.creation_timeout = creation_timeout
+        self.closed_message_drain_timeout = closed_message_drain_timeout
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -91,7 +93,7 @@ class LocalMessageReader(PipesMessageReader):
                 time.sleep(0.5)
 
         # Tail file
-        tracker = _ClosedMessageTracker()
+        tracker = _ClosedMessageTracker(drain_timeout=self.closed_message_drain_timeout)
 
         while not self._stop.is_set():
             try:

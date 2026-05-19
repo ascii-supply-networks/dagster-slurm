@@ -68,6 +68,8 @@ def _prepare_docker_slurm_paths():
             "-lc",
             (
                 f"mkdir -p {DOCKER_SLURM_TEST_REMOTE_BASE} "
+                f"{DOCKER_SLURM_TEST_REMOTE_BASE}/runs "
+                f"{DOCKER_SLURM_TEST_REMOTE_BASE}/run_scope_markers "
                 f"{DOCKER_SLURM_DEPLOYMENT_BASE_PATH} && "
                 f"chown -R submitter:submitter {DOCKER_SLURM_TEST_REMOTE_BASE} "
                 f"{DOCKER_SLURM_DEPLOYMENT_BASE_PATH}"

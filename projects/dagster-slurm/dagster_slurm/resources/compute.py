@@ -1,5 +1,6 @@
 """Unified compute resource - main facade."""
 
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -11,10 +12,15 @@ from ..config.environment import ExecutionMode
 from ..config.runtime import SlurmRunConfig
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
+from ..launchers.ray import RayLauncher
 from ..managers.hetjob import HeterogeneousJobManager, HetJobComponent
 from ..pipes_clients.local_pipes_client import LocalPipesClient
 from ..pipes_clients.slurm_pipes_client import SlurmPipesClient
-from .session import SlurmSessionResource
+from .session import (
+    SlurmAllocationScope,
+    SlurmRunAllocationConfig,
+    SlurmSessionResource,
+)
 from .slurm import SlurmResource
 
 
@@ -49,6 +55,19 @@ class ComputeResource(ConfigurableResource):
 
         slurm = SlurmResource.from_env()
         compute = ComputeResource(mode="slurm", slurm=slurm)
+
+    Slurm run-scoped Ray allocation (opt-in):
+
+    .. code-block:: python
+
+        slurm = SlurmResource.from_env()
+        compute_ray = ComputeResource(
+            mode="slurm",
+            slurm=slurm,
+            default_launcher=RayLauncher(num_gpus_per_node=1),
+            allocation_scope=SlurmAllocationScope.RUN,
+            run_allocation=SlurmRunAllocationConfig(num_nodes=2, gpus_per_node=1),
+        )
 
     Slurm session mode with cluster reuse (prod):
 
@@ -85,6 +104,20 @@ class ComputeResource(ConfigurableResource):
 
     session: Optional[SlurmSessionResource] = Field(
         default=None, description="Session resource (required for slurm-session mode)"
+    )
+
+    allocation_scope: SlurmAllocationScope = Field(
+        default=SlurmAllocationScope.ASSET,
+        description=(
+            "Allocation scope for mode='slurm'. 'asset' keeps one Slurm job per "
+            "asset; 'run' opts into one run-owned Slurm allocation for compatible "
+            "Ray assets."
+        ),
+    )
+
+    run_allocation: SlurmRunAllocationConfig = Field(
+        default_factory=SlurmRunAllocationConfig,
+        description="Run-owned Slurm allocation shape when allocation_scope='run'.",
     )
 
     # Launcher configuration
@@ -174,6 +207,10 @@ class ComputeResource(ConfigurableResource):
 
     # Private state for cluster management
     _active_clusters: Dict[str, Dict[str, Any]] = PrivateAttr(default_factory=dict)
+    _run_allocation_session: Optional[SlurmSessionResource] = PrivateAttr(default=None)
+    _run_allocation_session_lock: threading.RLock = PrivateAttr(
+        default_factory=threading.RLock
+    )
 
     @model_validator(mode="after")
     def validate_configuration(self) -> "ComputeResource":
@@ -192,6 +229,14 @@ class ComputeResource(ConfigurableResource):
 
         if self.mode == ExecutionMode.SLURM_SESSION and not self.session:
             raise ValueError("session resource required for mode=slurm-session")
+
+        if (
+            self.allocation_scope == SlurmAllocationScope.RUN
+            and self.mode != ExecutionMode.SLURM
+        ):
+            raise ValueError(
+                "allocation_scope='run' is only supported with mode='slurm'"
+            )
 
         # Validate cluster reuse only works in session mode
         if self.enable_cluster_reuse and self.mode != ExecutionMode.SLURM_SESSION:
@@ -218,6 +263,9 @@ class ComputeResource(ConfigurableResource):
             logger.info(
                 "🎯 Heterogeneous job mode: optimal per-asset resource allocation"
             )
+
+        if self.allocation_scope == SlurmAllocationScope.RUN:
+            logger.info("Run-scoped Slurm allocation enabled for compatible Ray assets")
 
         # Log platform settings
         if self.mode in (
@@ -264,10 +312,22 @@ class ComputeResource(ConfigurableResource):
             # Per-asset mode: each asset = separate sbatch job
             if not self.slurm:
                 raise ValueError("slurm resource is required for SLURM mode")
+            run_session = None
+            run_allocation_scope = False
+            if self.allocation_scope == SlurmAllocationScope.RUN:
+                if not isinstance(effective_launcher, RayLauncher):
+                    raise ValueError(
+                        "allocation_scope='run' currently supports RayLauncher assets "
+                        "only. Use allocation_scope='asset' for Bash/Spark assets."
+                    )
+                self._validate_run_allocation_launcher(effective_launcher)
+                run_session = self._get_or_create_run_allocation_session(context)
+                run_allocation_scope = True
             return SlurmPipesClient(
                 slurm_resource=self.slurm,
                 launcher=effective_launcher,
-                session_resource=None,  # No session
+                session_resource=run_session,
+                run_allocation_scope=run_allocation_scope,
                 cleanup_on_failure=self.cleanup_on_failure,
                 debug_mode=self.debug_mode,
                 auto_detect_platform=self.auto_detect_platform,
@@ -319,6 +379,104 @@ class ComputeResource(ConfigurableResource):
                 pack_on_remote=self.pack_on_remote,
                 remote_pack_timeout=self.remote_pack_timeout,
             )
+
+    def _get_or_create_run_allocation_session(
+        self,
+        context: InitResourceContext,
+    ) -> SlurmSessionResource:
+        """Return the run-owned allocation session for allocation_scope='run'."""
+        if not self.slurm:
+            raise ValueError("slurm resource is required for run-scoped allocation")
+
+        with self._run_allocation_session_lock:
+            session = self._run_allocation_session
+            if session is None:
+                shape = self._run_allocation_shape()
+                session = SlurmSessionResource(
+                    slurm=self.slurm,
+                    num_nodes=shape["num_nodes"],
+                    time_limit=shape["time_limit"],
+                    partition=shape["partition"],
+                    gpus_per_node=shape["gpus_per_node"],
+                    cpus_per_task=shape["cpus_per_task"],
+                    mem=shape["mem"],
+                    mem_per_cpu=shape["mem_per_cpu"],
+                    qos=shape["qos"],
+                    account=shape["account"],
+                    reservation=shape["reservation"],
+                    constraint=shape["constraint"],
+                )
+                object.__setattr__(session, "_shared_lifecycle", True)
+                object.__setattr__(self, "_run_allocation_session", session)
+
+            if not session._initialized:
+                session.setup_for_execution(context)
+
+        return session
+
+    def _run_allocation_shape(self) -> Dict[str, Any]:
+        """Resolve the effective run-owned Slurm allocation shape."""
+        if not self.slurm:
+            raise ValueError("slurm resource is required for run-scoped allocation")
+
+        cfg = self.run_allocation
+        queue = self.slurm.queue
+        return {
+            "num_nodes": cfg.num_nodes or queue.num_nodes or 1,
+            "gpus_per_node": (
+                cfg.gpus_per_node
+                if cfg.gpus_per_node is not None
+                else queue.gpus_per_node
+            ),
+            "cpus_per_task": cfg.cpus_per_task or queue.cpus,
+            "mem": cfg.mem if cfg.mem is not None else queue.mem,
+            "mem_per_cpu": (
+                cfg.mem_per_cpu if cfg.mem_per_cpu is not None else queue.mem_per_cpu
+            ),
+            "time_limit": cfg.time_limit or queue.time_limit,
+            "partition": cfg.partition or queue.partition or None,
+            "qos": cfg.qos or queue.qos,
+            "account": cfg.account or queue.account,
+            "reservation": cfg.reservation or queue.reservation,
+            "constraint": cfg.constraint,
+        }
+
+    def _validate_run_allocation_launcher(self, launcher: RayLauncher) -> None:
+        """Fail if Ray asks for resources the run allocation cannot provide."""
+        shape = self._run_allocation_shape()
+        launcher_gpus = int(getattr(launcher, "num_gpus_per_node", 0) or 0)
+        allocation_gpus = int(shape["gpus_per_node"] or 0)
+        if launcher_gpus > allocation_gpus:
+            raise ValueError(
+                "Run-scoped Ray allocation requires RayLauncher GPU settings to fit "
+                "inside the run allocation. RayLauncher requests "
+                f"{launcher_gpus} GPU(s) per node, but run_allocation provides "
+                f"{allocation_gpus}."
+            )
+
+    def _validate_run_allocation_overrides(
+        self,
+        extra_slurm_opts: Dict[str, Any],
+    ) -> None:
+        """Fail if an asset tries to change the run-owned allocation shape."""
+        shape = self._run_allocation_shape()
+        expected = {**shape, "nodes": shape["num_nodes"]}
+
+        for key, requested in extra_slurm_opts.items():
+            if key not in expected or requested is None:
+                continue
+            if expected[key] is None:
+                raise ValueError(
+                    "Run-scoped Slurm allocation cannot accept per-asset "
+                    f"Slurm override {key}={requested!r}; set it on "
+                    "run_allocation instead."
+                )
+            if str(requested) != str(expected[key]):
+                raise ValueError(
+                    "Run-scoped Slurm allocation requires all assets to share one "
+                    f"allocation shape. Override {key}={requested!r} does not "
+                    f"match run_allocation value {expected[key]!r}."
+                )
 
     def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:
         """Merge launcher overrides with the deployment default when possible."""
@@ -779,6 +937,9 @@ class ComputeResource(ConfigurableResource):
         if resolved_extra_files:
             kwargs["extra_files"] = resolved_extra_files
 
+        if extra_slurm_opts and self.allocation_scope == SlurmAllocationScope.RUN:
+            self._validate_run_allocation_overrides(extra_slurm_opts)
+
         # Create client with effective launcher (default or override)
         client = self.get_pipes_client(context, launcher=effective_launcher)
 
@@ -804,6 +965,8 @@ class ComputeResource(ConfigurableResource):
 
         # Add use_session flag for session mode
         if self.mode == ExecutionMode.SLURM_SESSION:
+            kwargs.setdefault("use_session", True)
+        elif self.allocation_scope == SlurmAllocationScope.RUN:
             kwargs.setdefault("use_session", True)
 
         # Run with the configured client
@@ -1135,3 +1298,10 @@ class ComputeResource(ConfigurableResource):
             and self.session._initialized
         ):
             self.session.teardown_after_execution(context)
+
+        if self._run_allocation_session and self._run_allocation_session._initialized:
+            self._run_allocation_session.teardown_after_execution(context)
+
+    def teardown_after_execution(self, context: InitResourceContext) -> None:
+        """Release run-scoped allocations through Dagster's resource lifecycle."""
+        self.teardown(context)

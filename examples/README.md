@@ -52,6 +52,16 @@ pixi run start-staging
 
 go to http://localhost:3000 and you should see the dagster webserver running.
 
+To test the run-scoped Ray allocation path, keep `DAGSTER_DEPLOYMENT=STAGING_DOCKER`
+and add:
+
+```bash
+export SLURM_ALLOCATION_SCOPE=run
+```
+
+This applies one run-owned Slurm allocation to the Ray resource (`compute_ray`) while
+leaving the shell examples on the default one-job-per-asset behavior.
+
 #### prod docker local execution
 
 - Test everything works on SLURM
