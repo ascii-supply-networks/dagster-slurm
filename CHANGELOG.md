@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.13.0-rc.6 (2026-05-29)
+
+### Features
+
+- Single slurm allocation ([#146](https://github.com/ascii-supply-networks/dagster-slurm/pull/146),
+  [`f649b44`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f649b44ff5b7e850486a23279d2258af965f852a))
+
+
 ## v1.13.0-rc.5 (2026-05-14)
 
 ### Bug Fixes
