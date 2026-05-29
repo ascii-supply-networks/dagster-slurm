@@ -67,8 +67,9 @@ class TestDevelopmentMode:
         # Check for local execution indicators
         assert "LocalPipesClient" in result.stderr or "local" in result.stderr.lower()
 
+    @pytest.mark.slow
     def test_ray_assets_development(self, example_project_dir: Path):
-        """Test Ray assets in local mode (single-node)."""
+        """Test Ray assets in host-local mode (single-node)."""
         result = run_dg_command(
             example_project_dir,
             deployment="development",
@@ -77,7 +78,9 @@ class TestDevelopmentMode:
             # from the Slurm containers. Keep local-mode Ray outside those
             # host ranges even when CI sets a global RAY_PORT_SEED.
             env_overrides={"RAY_PORT_SEED": "500"},
-            timeout=180,
+            # Local Ray startup/teardown is slow on macOS under the Docker
+            # integration load; keep this above the normal ~100s runtime.
+            timeout=300,
         )
 
         assert_materialization_success(

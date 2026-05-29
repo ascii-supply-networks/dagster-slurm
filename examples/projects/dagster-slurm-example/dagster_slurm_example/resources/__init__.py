@@ -9,8 +9,10 @@ from dagster_slurm import (
     BashLauncher,
     ComputeResource,
     RayLauncher,
+    SlurmAllocationScope,
     SlurmQueueConfig,
     SlurmResource,
+    SlurmRunAllocationConfig,
     SlurmSessionResource,
     SparkLauncher,
     SSHConnectionResource,
@@ -458,12 +460,19 @@ def build_compute_resources(
     for key, LauncherClass in launcher_map.items():
         resource_key = compute_resource_keys[key]
         launcher_config = config["launchers"].get(key, {})
+        compute_config = dict(config.get("compute_config", {}))
+        if (
+            compute_config.get("allocation_scope") == SlurmAllocationScope.RUN
+            and key != "ray"
+        ):
+            compute_config.pop("allocation_scope", None)
+            compute_config.pop("run_allocation", None)
 
         resources[resource_key] = ComputeResource(
             mode=config["mode"],
             default_launcher=LauncherClass(**launcher_config),
             **slurm_resources,
-            **config.get("compute_config", {}),
+            **compute_config,
         )
     return resources
 
@@ -574,6 +583,27 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     _apply_queue_field("SLURM_SUPERCOMPUTER_PARTITION", "partition")
     _apply_queue_field("SLURM_SUPERCOMPUTER_QOS", "qos")
     _apply_queue_field("SLURM_SUPERCOMPUTER_RESERVATION", "reservation")
+
+    allocation_scope = os.environ.get("SLURM_ALLOCATION_SCOPE", "").strip().lower()
+    if allocation_scope in {"run", "run_scoped", "run-scoped"}:
+        config.setdefault("compute_config", {})
+        config["compute_config"]["allocation_scope"] = SlurmAllocationScope.RUN
+        config["compute_config"]["run_allocation"] = SlurmRunAllocationConfig(
+            num_nodes=session_cfg.get("num_nodes") or queue_cfg.get("num_nodes"),
+            gpus_per_node=session_cfg.get("gpus_per_node")
+            if session_cfg.get("gpus_per_node") is not None
+            else queue_cfg.get("gpus_per_node"),
+            cpus_per_task=queue_cfg.get("cpus"),
+            mem=queue_cfg.get("mem"),
+            mem_per_cpu=queue_cfg.get("mem_per_cpu"),
+            time_limit=session_cfg.get("time_limit") or queue_cfg.get("time_limit"),
+            partition=session_cfg.get("partition") or queue_cfg.get("partition"),
+            qos=session_cfg.get("qos") or queue_cfg.get("qos"),
+            account=session_cfg.get("account") or queue_cfg.get("account"),
+            reservation=session_cfg.get("reservation") or queue_cfg.get("reservation"),
+        )
+    elif allocation_scope and allocation_scope != "asset":
+        raise ValueError("SLURM_ALLOCATION_SCOPE must be 'asset' or 'run' when set.")
 
     # Apply environment overrides for the SSH connection settings.
     ssh_cfg = config.setdefault("ssh_config", {})

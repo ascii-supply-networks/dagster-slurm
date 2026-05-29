@@ -407,11 +407,13 @@ class SSHConnectionPool:
         if not content:
             raise ValueError("Cannot write empty content to file")
 
-        safe_content = content.replace("'", "'\\''")
+        content_lines = set(content.splitlines())
+        delimiter = f"DAGSTER_EOF_{uuid.uuid4().hex}"
+        while delimiter in content_lines:
+            delimiter = f"DAGSTER_EOF_{uuid.uuid4().hex}"
+
         cmd = (
-            f"cat > {shlex.quote(remote_path)} <<'DAGSTER_EOF'\n"
-            f"{safe_content}\n"
-            f"DAGSTER_EOF"
+            f"cat > {shlex.quote(remote_path)} <<'{delimiter}'\n{content}\n{delimiter}"
         )
 
         try:

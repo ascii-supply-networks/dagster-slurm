@@ -106,12 +106,12 @@ Set the variables in a `.env` file or your orchestrator’s secret store. Passwo
 
 `ComputeResource` currently supports two stable execution modes:
 
-| Mode    | Description                                | Typical use                                        |
-| ------- | ------------------------------------------ | -------------------------------------------------- |
-| `local` | Runs assets without SSH or Slurm.          | Developer laptops and CI smoke tests.              |
-| `slurm` | Submits one Slurm job per asset execution. | Staging clusters and production deployments today. |
+| Mode    | Description                                                                                                                           | Typical use                                        |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `local` | Runs assets without SSH or Slurm.                                                                                                     | Developer laptops and CI smoke tests.              |
+| `slurm` | Submits one Slurm job per asset execution by default. Ray assets can opt into one run-owned allocation with `allocation_scope="run"`. | Staging clusters and production deployments today. |
 
-> Session-based reuse (`slurm-session`) and heterogeneous job submissions (`slurm-hetjob`) are active areas of development. The configuration stubs remain in the codebase but are not yet ready for day-to-day operations.
+> Heterogeneous job submissions (`slurm-hetjob`) are still experimental. Run-scoped allocation is currently Ray-focused and requires all participating assets to share one allocation shape.
 
 Launchers (Bash, Ray, Spark—WIP, or custom) can be chosen globally or per asset to fit your workload.
 

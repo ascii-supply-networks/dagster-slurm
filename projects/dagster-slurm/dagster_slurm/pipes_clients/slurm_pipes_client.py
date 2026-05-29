@@ -38,7 +38,8 @@ from ..helpers.metrics import SlurmMetricsCollector
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
-from ..resources.session import SlurmSessionResource
+from ..launchers.ray import RayLauncher
+from ..resources.session import SlurmSessionResource, SlurmStepExecutionResult
 from ..resources.slurm import SlurmResource
 
 _TAG_JOB_ID = "dagster_slurm/job_id"
@@ -110,6 +111,7 @@ class SlurmPipesClient(PipesClient):
         cache_inject_globs: Optional[list[str]] = None,
         pack_on_remote: bool = False,
         remote_pack_timeout: int = 600,
+        run_allocation_scope: bool = False,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -148,6 +150,7 @@ class SlurmPipesClient(PipesClient):
         self.cache_inject_globs = cache_inject_globs
         self.pack_on_remote = pack_on_remote
         self.remote_pack_timeout = remote_pack_timeout
+        self.run_allocation_scope = run_allocation_scope
 
     def run(  # ty: ignore[invalid-method-override]  # Dagster PipesClient is designed for extension
         self,
@@ -205,6 +208,11 @@ class SlurmPipesClient(PipesClient):
         skip_payload_upload = (
             bool(skip_payload_upload) if skip_payload_upload is not None else False
         )
+        if self.run_allocation_scope and not use_session:
+            raise ValueError(
+                "run_allocation_scope=True requires use_session=True so the payload "
+                "runs inside the run-owned Slurm allocation."
+            )
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
@@ -488,7 +496,36 @@ class SlurmPipesClient(PipesClient):
                                 "slurm_job_id": allocation.slurm_job_id,
                             }
 
-                    execution_plan = self.launcher.prepare_execution(
+                    effective_launcher = self.launcher
+                    if self.run_allocation_scope:
+                        if not isinstance(effective_launcher, RayLauncher):
+                            raise ValueError(
+                                "Run-scoped Slurm allocation currently supports "
+                                "RayLauncher workloads only."
+                            )
+                        if not self.session or not self.session._allocation:
+                            raise RuntimeError(
+                                "Run-scoped Slurm allocation was requested but no "
+                                "allocation is initialized."
+                            )
+                        ray_address = self.session._allocation.ensure_ray_cluster(
+                            ssh_pool=ssh_pool,
+                            launcher=effective_launcher,
+                            activation_script=activation_script,
+                            startup_timeout=effective_launcher.head_startup_timeout,
+                        )
+                        effective_launcher = effective_launcher.model_copy(
+                            update={"ray_address": ray_address}
+                        )
+                        extra_env = {
+                            **(extra_env or {}),
+                            "RAY_ADDRESS": ray_address,
+                            "SLURM_RUN_ALLOCATION_JOB_ID": str(
+                                self.session._allocation.slurm_job_id
+                            ),
+                        }
+
+                    execution_plan = effective_launcher.prepare_execution(
                         payload_path=remote_payload,
                         python_executable=python_executable,
                         working_dir=run_dir,
@@ -507,14 +544,16 @@ class SlurmPipesClient(PipesClient):
                         raise RuntimeError("Execution cancelled before job submission")
 
                     # Execute with real-time log streaming
+                    step_result: SlurmStepExecutionResult | None = None
                     if use_session and self.session:
                         self.logger.info("Executing in Slurm session")
-                        job_id = self._execute_in_session(
+                        step_result = self._execute_in_session(
                             execution_plan=execution_plan,
                             context=context,
                             run_dir=run_dir,
                             ssh_pool=ssh_pool,
                         )
+                        job_id = step_result.job_id
                     else:
                         self.logger.info("Executing as standalone Slurm job")
                         job_id = self._execute_standalone(
@@ -532,24 +571,39 @@ class SlurmPipesClient(PipesClient):
                         ssh_pool=ssh_pool,
                         run_dir=run_dir,
                         job_id=job_id,
+                        stdout_path=step_result.stdout_path
+                        if step_result is not None
+                        else None,
+                        stderr_path=step_result.stderr_path
+                        if step_result is not None
+                        else None,
                     )
 
-                    final_metrics = self._validate_final_slurm_outcome(
-                        job_id,
-                        ssh_pool,
-                    )
-                    self.logger.info(f"Job {job_id} completed successfully")
+                    if use_session and self.session:
+                        self.logger.info(
+                            f"Slurm allocation step completed in allocation {job_id}"
+                        )
+                        if step_result is not None:
+                            self._emit_session_metadata(step_result, context)
+                    else:
+                        final_metrics = self._validate_final_slurm_outcome(
+                            job_id,
+                            ssh_pool,
+                        )
+                        self.logger.info(f"Job {job_id} completed successfully")
 
-                    self._collect_and_emit_metrics(
-                        job_id,
-                        ssh_pool,
-                        context,
-                        metrics=final_metrics,
-                    )
+                        self._collect_and_emit_metrics(
+                            job_id,
+                            ssh_pool,
+                            context,
+                            metrics=final_metrics,
+                        )
 
-                    # Clear reattach tags so stale tags don't trigger
-                    # false reattach on a future run.
-                    self._store_job_tags(context.op_execution_context, job_id, "", "")
+                        # Clear reattach tags so stale tags don't trigger
+                        # false reattach on a future run.
+                        self._store_job_tags(
+                            context.op_execution_context, job_id, "", ""
+                        )
 
                 self._current_job_id = None
                 self._raise_if_pipes_process_failed(
@@ -1044,6 +1098,44 @@ class SlurmPipesClient(PipesClient):
                     add_output_metadata(metadata, output_name=output_name)
         except Exception as e:
             self.logger.warning(f"Failed to collect metrics: {e}")
+
+    def _emit_session_metadata(
+        self, step_result: SlurmStepExecutionResult, context: Any
+    ) -> None:
+        """Attach allocation metadata for a step executed inside a shared allocation."""
+        add_output_metadata = getattr(context, "add_output_metadata", None)
+        if not callable(add_output_metadata):
+            return
+
+        metadata = {
+            "slurm_job_id": step_result.job_id,
+            "slurm_allocation_job_id": step_result.job_id,
+            "slurm_step_stdout_path": step_result.stdout_path,
+            "slurm_step_stderr_path": step_result.stderr_path,
+        }
+
+        output_names: list[str] = []
+        if getattr(context, "op_execution_context", None):
+            nested = getattr(
+                context.op_execution_context,
+                "selected_output_names",
+                None,
+            )
+            if nested:
+                output_names = [name for name in nested if name]
+
+        if not output_names:
+            selected = getattr(context, "selected_output_names", None)
+            if selected:
+                output_names = [name for name in selected if name]
+
+        if not output_names:
+            add_output_metadata(metadata)
+        elif len(output_names) == 1:
+            add_output_metadata(metadata, output_name=output_names[0])
+        else:
+            for output_name in output_names:
+                add_output_metadata(metadata, output_name=output_name)
 
     @staticmethod
     def _parse_slurm_exit_code(exit_code: str) -> tuple[int, int]:
@@ -1886,17 +1978,15 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         context: AssetExecutionContext,
         run_dir: str,
         ssh_pool: SSHConnectionPool,
-    ) -> int:
+    ) -> SlurmStepExecutionResult:
         """Execute in shared Slurm allocation with log streaming."""
         if not self.session:
             raise RuntimeError("Session resource not provided")
         if not self.session._initialized:
             raise RuntimeError("Session not initialized")
 
-        # For session mode, we use srun which doesn't create separate log files
-        # Logs go directly to the session allocation's output
-        # The session resource handles execution
-        # Handle multi-assets: use selected_asset_keys joined, or single asset_key
+        # Handle multi-assets: use selected_asset_keys joined, or single asset_key.
+        # The session resource keeps stdout/stderr files distinct per srun step.
         selected_keys = context.selected_asset_keys
         asset_key_str = (
             "/".join(str(k) for k in sorted(selected_keys))
@@ -1906,6 +1996,7 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         return self.session.execute_in_session(
             execution_plan=execution_plan,
             asset_key=asset_key_str,
+            run_dir=run_dir,
         )
 
     def _execute_standalone(
@@ -2105,6 +2196,8 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
         ssh_pool: SSHConnectionPool,
         run_dir: str,
         job_id: int,
+        stdout_path: str | None = None,
+        stderr_path: str | None = None,
     ) -> None:
         """Emit stdout/stderr once if Pipes streaming produced no messages."""
 
@@ -2119,13 +2212,13 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
             streamed_lines = {}
 
         log_paths = [
-            (f"{run_dir}/slurm-{job_id}.out", sys.stdout, "stdout"),
-            (f"{run_dir}/slurm-{job_id}.err", sys.stderr, "stderr"),
+            (stdout_path or f"{run_dir}/slurm-{job_id}.out", sys.stdout, "stdout"),
+            (stderr_path or f"{run_dir}/slurm-{job_id}.err", sys.stderr, "stderr"),
         ]
 
         for path, stream, label in log_paths:
             try:
-                content = ssh_pool.run(f"cat {path} 2>/dev/null || true")
+                content = ssh_pool.run(f"cat {shlex.quote(path)} 2>/dev/null || true")
                 if content.strip():
                     lines = content.splitlines()
                     forwarded = forwarded_lines.get(label, 0)
