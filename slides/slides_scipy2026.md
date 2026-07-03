@@ -149,34 +149,32 @@ layout: white
   </a>
   <div class="max-w-5xl space-y-1 pr-40">
     <div class="eyebrow">Why this talk exists</div>
-    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.2rem">Science groups need reproducible compute, not a second codebase for HPC</h1>
+    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.2rem">One research pipeline, many compute shapes</h1>
     <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">
-      ASCII studies firm-level supply chain interactions at continental scale. The pipeline blends scraping, document AI, graph construction, and ML — and each of those steps has a different compute profile.
+      ASCII builds firm-level supply-chain graphs from public web data. The same workflow moves from crawling to document AI to graph analytics.
     </p>
   </div>
   <div class="grid w-full gap-3 items-stretch" style="grid-template-columns:1fr 1fr 1fr">
     <div class="border border-neutral-300 rounded-lg p-4 bg-white">
       <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Scale</div>
       <div class="j-serif mt-1 text-xl text-neutral-950">Millions of firms</div>
-      <div class="mt-1 text-sm leading-snug text-neutral-600">Continental, multi-country company coverage with recurring refreshes.</div>
+      <div class="mt-1 text-sm leading-snug text-neutral-600">Repeated across countries and crawls.</div>
     </div>
     <div class="border border-neutral-300 rounded-lg p-4 bg-white">
       <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Data</div>
-      <div class="j-serif mt-1 text-xl text-neutral-950">Heterogeneous web evidence</div>
-      <div class="mt-1 text-sm leading-snug text-neutral-600">HTML, PDFs, registers, sanction lists, unstructured prose.</div>
+      <div class="j-serif mt-1 text-xl text-neutral-950">Messy web evidence</div>
+      <div class="mt-1 text-sm leading-snug text-neutral-600">HTML, PDFs, registers, prose.</div>
     </div>
     <div class="border border-neutral-300 rounded-lg p-4 bg-white">
       <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Compute</div>
       <div class="j-serif mt-1 text-xl text-neutral-950">CPU · GPU · graph</div>
-      <div class="mt-1 text-sm leading-snug text-neutral-600">Parsing, embeddings, GNN training, link prediction — each with different resource shapes.</div>
+      <div class="mt-1 text-sm leading-snug text-neutral-600">Different steps need different machines.</div>
     </div>
   </div>
   <div class="teal-callout" style="padding:0.75rem 1rem">
-    <div class="mono-label text-teal-700">Where we started — and why we moved on</div>
+    <div class="mono-label text-teal-700">Why HPC entered the story</div>
     <p class="mt-1 text-sm leading-relaxed text-neutral-700">
-      We began on <strong>EMR Spark</strong>, already shaving ~50% off the Databricks surcharge
-      (<a href="https://georgheiler.com/2024/06/21/cost-efficient-alternative-to-databricks-lock-in/" class="underline decoration-teal-700/40 underline-offset-[0.18em]">blog</a>).
-      Rising AI-compute demand outgrew our public-cloud budget. Today compute spans a <strong>local server</strong>, <strong>cloud</strong> partitions, and <strong>institutional HPC</strong> — three schedulers, one unified observability and control plane.
+      EMR Spark cut cloud cost, but AI workloads changed the budget. We now need laptop development, cloud bursts, and institutional HPC in one workflow.
     </p>
   </div>
 </div>
@@ -208,7 +206,7 @@ layout: light
     <div class="text-left space-y-1">
       <div style="font-size:4.5rem;line-height:1">🏛️</div>
       <div class="j-serif text-2xl text-neutral-950">HPC</div>
-      <div class="text-sm text-neutral-500">sbatch · modules · queue minutes</div>
+      <div class="text-sm text-neutral-500">sbatch · modules · queue hours</div>
     </div>
   </div>
   <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr 1fr">
@@ -225,7 +223,7 @@ layout: light
     <div class="border-t border-neutral-300 pt-2">
       <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Feedback-loop gap</div>
       <div class="j-serif mt-1 text-lg text-neutral-950">Iteration waits in queue</div>
-      <div class="mt-1 text-sm leading-snug text-neutral-600">Local dev needs seconds. Fair-share queues stretch from minutes to days, so people stop testing the HPC path.</div>
+      <div class="mt-1 text-sm leading-snug text-neutral-600">Local dev needs seconds. Queues stretch from minutes to days, so people stop testing the HPC path.</div>
     </div>
   </div>
 </div>
@@ -243,7 +241,7 @@ layout: white
     <div class="eyebrow">Closing The Gap</div>
     <h1 class="slide-heading" style="text-wrap:balance;font-size:2.2rem">Different strengths, better together</h1>
     <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">
-      Dagster plans and observes. Slurm places and runs. The bridge keeps both.
+      Dagster plans and observes. Slurm places and runs.
     </p>
   </div>
   <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr 1fr;align-items:stretch">
@@ -260,7 +258,7 @@ layout: white
       <div class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-700">Slurm + HPC</div>
       <div class="j-serif mt-1 text-xl text-neutral-950">Owns the execution</div>
       <ul class="mt-3 space-y-1.5 text-sm leading-snug text-neutral-600 list-disc pl-4">
-        <li>fair-share queues</li>
+        <li>queues</li>
         <li>GPU / CPU placement</li>
         <li>shared storage and interconnect</li>
       </ul>
@@ -277,7 +275,7 @@ layout: white
   </div>
   <div class="teal-callout" style="padding:0.7rem 1rem">
     <p class="text-sm leading-relaxed text-neutral-700">
-      The point is not a new platform. It is a thin hand-off between Python orchestration and the scheduler you already operate.
+      Thin hand-off between Python orchestration and the scheduler.
     </p>
   </div>
 </div>
@@ -324,7 +322,7 @@ layout: dark
       </div>
       <div class="rounded-md border border-teal-400/40 bg-teal-900/20 px-4 py-2 flex items-center gap-4">
         <div class="mono-label text-teal-300 w-40">Target</div>
-        <div class="j-serif text-lg text-white">agentic laptop prototype → CI → production Slurm cluster</div>
+        <div class="j-serif text-lg text-white">agentic laptop prototype → production Slurm cluster</div>
       </div>
     </div>
   </div>
@@ -446,10 +444,8 @@ layout: white
   <div class="max-w-5xl space-y-1">
     <div class="eyebrow">How the remote job talks back</div>
     <h1 class="slide-heading" style="font-size:2.05rem;line-height:1.05">Dagster Pipes — one protocol, two directions</h1>
-    <p class="text-sm leading-relaxed text-neutral-600 max-w-4xl">
-      <a href="https://docs.dagster.io/guides/build/external-pipelines" class="underline decoration-teal-700/40 underline-offset-[0.14em]">Pipes</a> is the thin wire between the Dagster process and the remote payload. Context and parameters go out; structured logs, progress, and materialization metadata come back — during the run, not after.
-    </p>
-  </div>
+
+</div>
   <div class="flex-1 min-h-0 flex items-center justify-center">
     <img src="/img/pipes-architecture.svg" class="max-h-full max-w-full object-contain" alt="Dagster Pipes architecture: asset process sends context to the external process; the external process streams logs, events, and metadata back." />
   </div>
@@ -724,7 +720,7 @@ layout: white
 <div class="h-full max-w-6xl mx-auto px-16 py-7 flex flex-col justify-center gap-4">
   <div class="max-w-5xl space-y-1">
     <div class="eyebrow">Roadmap + contribution</div>
-    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.1rem">What ships, what needs help</h1>
+    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.1rem">Contributions welcome</h1>
   </div>
   <div class="grid w-full gap-5" style="grid-template-columns:1fr 1fr 1fr;align-items:stretch">
     <div class="border border-neutral-300 rounded-lg p-4 bg-white">
@@ -756,8 +752,45 @@ layout: white
   <div class="teal-callout" style="padding:0.75rem 1rem">
     <div class="mono-label text-teal-700">Start here</div>
     <p class="mt-1 text-sm leading-snug text-neutral-700">
-      <a href="https://github.com/ascii-supply-networks/dagster-slurm" class="underline decoration-teal-700/40 underline-offset-[0.18em]">github.com/ascii-supply-networks/dagster-slurm</a> · docs at <a href="https://dagster-slurm.geoheil.com/" class="underline decoration-teal-700/40 underline-offset-[0.18em]">dagster-slurm.geoheil.com</a>
+      <a href="https://github.com/ascii-supply-networks/dagster-slurm" class="underline decoration-teal-700/40 underline-offset-[0.18em]">github.com/ascii-supply-networks/dagster-slurm</a> res
     </p>
+  </div>
+</div>
+
+---
+layout: light
+---
+
+<!-- ──────────────────────────────────────────────────────
+     COMPANION PROJECT: METAXY  (light · restored)
+────────────────────────────────────────────────────── -->
+<div class="h-full max-w-6xl mx-auto px-16 py-10 flex items-center gap-20">
+  <div class="w-[40%] space-y-5">
+    <img src="/img/metaxy.svg" alt="Metaxy" class="h-20 w-20 object-contain" />
+    <div class="eyebrow">Companion project</div>
+    <h1 class="slide-heading" style="text-wrap:balance;font-size:2.55rem;line-height:1.05">
+      Metaxy — perfecting<br/>the art of doing nothing
+    </h1>
+    <p class="lead" style="font-size:1.35rem;line-height:1.35;max-width:28rem">
+      dagster-slurm makes HPC usable. Metaxy makes HPC spending <em>optional</em> — by skipping work whose inputs have not changed.
+    </p>
+  </div>
+  <div class="flex-1 space-y-5">
+    <div class="border-t border-b border-neutral-300 py-5">
+      <div class="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">Pairs with dagster-slurm</div>
+      <h2 class="j-serif mt-3 text-2xl text-neutral-950">Scope first, then schedule</h2>
+      <p class="mt-2 text-lg leading-snug text-neutral-600">
+        Metaxy answers <em>what is stale</em>. dagster-slurm answers <em>where to run it</em>.
+      </p>
+    </div>
+    <div class="border-b border-neutral-300 pb-5">
+      <div class="text-xs font-semibold uppercase tracking-[0.28em] text-teal-700">Full deep-dive → virtual poster</div>
+      <h2 class="j-serif mt-3 text-2xl text-neutral-950">See you at the poster session</h2>
+      <p class="mt-2 text-lg leading-snug text-neutral-600">
+        <a href="https://docs.metaxy.io/latest/" class="underline decoration-teal-700/40 underline-offset-[0.18em]">docs.metaxy.io</a>
+        · <a href="https://georgheiler.com/2026/02/22/metaxy-dagster-slurm-multimodal/" class="underline decoration-teal-700/40 underline-offset-[0.18em]">Metaxy + dagster-slurm blog</a>
+      </p>
+    </div>
   </div>
 </div>
 
@@ -821,7 +854,7 @@ layout: dark
      BACKUP: A CALL TO THE ROOM  (statement · dark)
 ────────────────────────────────────────────────────── -->
 <div class="relative z-10 h-full max-w-6xl mx-auto px-16 py-16 flex flex-col justify-center items-center gap-8 text-center">
-  <div class="eyebrow-light">Backup · a call to the room</div>
+  <div class="eyebrow-light">A call to the room</div>
   <h1 class="slide-title text-white" style="text-wrap:balance;font-size:4rem;line-height:1.05">
     Sovereign compute<br/>does not come out of nowhere.
   </h1>
