@@ -504,19 +504,21 @@ layout: light
       <h1 class="slide-heading" style="text-wrap:balance;font-size:2.3rem">Firm corpus</h1>
     </div>
   </div>
-  <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr;align-items:center">
-    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-white p-3">
-      <img src="/img/family_by_region.png" class="w-full h-auto object-contain" alt="Share of firms describing themselves as family-owned, by regional grouping." />
+  <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr;align-items:start">
+    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-neutral-950">
+      <img src="/img/europe_firm_density.png" class="w-full h-auto object-contain" alt="Density map of 5.57 million geocoded firms across Europe" />
+      <div class="px-3 py-1.5 text-xs text-neutral-300">5.57 M firms mapped across Europe</div>
     </div>
-    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-white p-3">
-      <img src="/img/eponymy.png" class="w-full h-auto object-contain" alt="Eponymy rate split by family-ownership self-description: 52% for family firms vs 32% for the rest." />
+    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-neutral-950">
+      <img src="/img/family_selfid_map.png" class="w-full h-auto object-contain" alt="Family self-identification rate across Europe." />
+      <div class="px-3 py-1.5 text-xs text-neutral-300">Family self-ID rate · Alpine &amp; Adriatic belt leads</div>
     </div>
   </div>
   <div class="teal-callout" style="padding:0.75rem 1rem">
     <div class="grid gap-4 text-sm leading-snug text-neutral-700" style="grid-template-columns:1fr 1fr 1fr">
-      <div><strong>5.3 M</strong> firm websites</div>
-      <div><strong>3.3 M</strong> with an ownership signal</div>
-      <div><strong>3.6%</strong> self-describe as family-owned</div>
+      <div><strong>23.0 M</strong> firm websites</div>
+      <div><strong>5.57 M</strong> geocoded across Europe</div>
+      <div><strong>2.85%</strong> self-identify as family-owned</div>
     </div>
   </div>
 </div>
