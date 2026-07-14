@@ -55,6 +55,9 @@ layout: dark
       <a href="https://pixi.sh/">
         <img src="/img/Paxton_Wand_FINAL-2.png" alt="pixi" class="h-14 w-auto object-contain" />
       </a>
+      <a href="https://docs.metaxy.io/latest/">
+        <img src="/img/metaxy.svg" alt="Metaxy" class="h-12 w-auto object-contain" />
+      </a>
     </div>
     <div class="mono-label text-right" style="color:rgba(94,234,212,0.78);font-size:1.05rem;line-height:1.45;letter-spacing:0.04em">
       <a href="https://georgheiler.com/" class="hover:text-teal-300">Georg Heiler</a>
@@ -542,7 +545,7 @@ layout: dark
       Numbers based on <code class="text-xs" style="color:rgba(94,234,212,0.85)">sacct</code>.
     </p>
   </div>
-  <div class="grid w-full gap-4" style="grid-template-columns:1fr 1fr 1fr 1fr">
+  <div class="grid w-full gap-3" style="grid-template-columns:1fr 1fr 1fr">
     <div class="rounded-lg border border-teal-400/30 bg-teal-900/15 p-4">
       <div class="j-serif text-4xl text-white">9,626</div>
       <div class="mt-1 text-xs leading-snug text-slate-300">Slurm jobs submitted · 79.5% completed</div>
@@ -554,10 +557,6 @@ layout: dark
     <div class="rounded-lg border border-slate-500/40 bg-slate-800/40 p-4">
       <div class="j-serif text-4xl text-white">118,914</div>
       <div class="mt-1 text-xs leading-snug text-slate-300">CPU core-hours · 5,746 node-hours</div>
-    </div>
-    <div class="rounded-lg border border-slate-500/40 bg-slate-800/40 p-4">
-      <div class="j-serif text-4xl text-white">~16 min</div>
-      <div class="mt-1 text-xs leading-snug text-slate-300">CI: build + unit + Slurm-on-Docker, per commit</div>
     </div>
   </div>
   <div class="dark-callout" style="padding:0.6rem 0.9rem">
