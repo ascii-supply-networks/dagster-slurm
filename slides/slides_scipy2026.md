@@ -504,14 +504,18 @@ layout: light
       <h1 class="slide-heading" style="text-wrap:balance;font-size:2.3rem">Firm corpus</h1>
     </div>
   </div>
-  <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr;align-items:start">
-    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-neutral-950">
-      <img src="/img/europe_firm_density.png" class="w-full h-auto object-contain" alt="Density map of 5.57 million geocoded firms across Europe" />
-      <div class="px-3 py-1.5 text-xs text-neutral-300">5.57 M firms mapped across Europe</div>
+  <div class="grid w-full gap-6" style="grid-template-columns:1fr 1fr;align-items:stretch">
+    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-white p-2 flex flex-col">
+      <div class="flex items-center justify-center bg-white" style="aspect-ratio:6/5">
+        <img src="/img/europe_firm_density.png" class="max-w-full max-h-full object-contain" alt="Density map of 5.57 million geocoded firms across Europe" />
+      </div>
+      <div class="px-1 pt-1.5 text-xs text-neutral-500">5.57 M firms mapped across Europe</div>
     </div>
-    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-neutral-950">
-      <img src="/img/family_selfid_map.png" class="w-full h-auto object-contain" alt="Family self-identification rate across Europe." />
-      <div class="px-3 py-1.5 text-xs text-neutral-300">Family self-ID rate · Alpine &amp; Adriatic belt leads</div>
+    <div class="rounded-lg overflow-hidden border border-neutral-200 bg-white p-2 flex flex-col">
+      <div class="flex items-center justify-center bg-white" style="aspect-ratio:6/5">
+        <img src="/img/family_selfid_map.png" class="max-w-full max-h-full object-contain" alt="Family self-identification rate across Europe." />
+      </div>
+      <div class="px-1 pt-1.5 text-xs text-neutral-500">Family self-ID rate · Alpine &amp; Adriatic belt leads</div>
     </div>
   </div>
   <div class="teal-callout" style="padding:0.75rem 1rem">
