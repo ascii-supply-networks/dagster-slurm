@@ -2,7 +2,10 @@
 name = "dagster-slurm-example"
 version = "1.0.0"
 description = "Example project how to use dagster with slurm"
-authors = [{ name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" }]
+authors = [
+  { name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" },
+  { name = "Hernan Picatto", email = "hernan.picatto@ascii.ac.at" },
+]
 requires-python = ">=3.12,<3.14"
 
 [tool.pixi.workspace]
@@ -23,11 +26,14 @@ requires = ["hatchling"]
 secops = { features = ["secops"], solve-group = "secops", no-default-feature = true }
 opstooling = { features = ["opstooling"], solve-group = "opstooling", no-default-feature = true }
 ci-basics = { features = ["ci-basics", "opstooling"], solve-group = "ci-basics" }
-dev = { features = ["my-infrastructure", "dagster-basics", "dagster-webserver", "submission", "cluster", "hpc-workload", "workload-document-processing", "cluster-dev", "ci-basics", "dagster-scaffolding"], solve-group = "dagster-slurm-example" }
+dev = { features = ["my-infrastructure", "dagster-basics", "dagster-webserver", "submission", "cluster", "hpc-workload", "workload-document-processing", "workload-topic-modeling", "cluster-dev", "ci-basics", "dagster-scaffolding"], solve-group = "dagster-slurm-example" }
 
 packaged-cluster = { features = ["submission", "cluster", "cluster-prod"], solve-group = "dagster-slurm-example-cluster-submission" }
 
 workload-document-processing = { features = ["submission", "cluster", "cluster-prod", "workload-document-processing"], solve-group = "dagster-slurm-example-workload-docling" }
+
+workload-topic-modeling = { features = ["submission", "cluster", "cluster-prod", "workload-topic-modeling"], solve-group = "dagster-slurm-example-workload-topics" }
+packaged-cluster-rapids = { features = ["submission", "cluster-rapids"], solve-group = "dagster-slurm-example-cluster-rapids" }
 
 [tool.pixi.feature.ci-basics.dependencies]
 dprint = ">=0.50.0,<1"
@@ -79,6 +85,28 @@ ibis-framework = ">=12.0.0,<13"
 duckdb = ">=1.4.4,<2"
 pyarrow-hotfix = ">=0.7,<1"
 
+[tool.pixi.feature.workload-topic-modeling.dependencies]
+
+[tool.pixi.feature.workload-topic-modeling.pypi-dependencies]
+gensim = ">=4.3,<5"
+
+[tool.pixi.feature.cluster-rapids.dependencies]
+python = "3.12.*"
+numpy = "<2.3"
+
+[tool.pixi.feature.cluster-rapids.pypi-dependencies]
+dagster-pipes = ">=1.13.0,<1.14"
+numpy = ">=2.0,<2.3"
+scipy = ">=1.13,<2"
+scikit-learn = ">=1.5,<2"
+pyarrow = ">=17,<22"
+umap-learn = ">=0.5,<1"
+hdbscan = ">=0.8,<1"
+matplotlib = ">=3.9,<4"
+
+[tool.pixi.feature.cluster-rapids.target.linux-64.pypi-dependencies]
+cuml-cu12 = { version = ">=25.10,<26", index = "https://pypi.nvidia.com" }
+
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
 dagster-slurm = { path = "../projects/dagster-slurm", editable = true }
@@ -97,7 +125,7 @@ age = "~=1.2.1"
 
 [tool.pixi.feature.opstooling.dependencies]
 git = "~=2.49"
-pixi-pack = ">=0.7.2,<1"
+pixi-pack = ">=0.7.8,<1"
 
 [tool.pixi.feature.dagster-scaffolding.dependencies]
 yarn = "~=4.9.2"
