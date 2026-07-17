@@ -103,6 +103,42 @@ def test_lda_config_rejects_invalid_topic_counts():
     assert LdaConfig().num_topics == 15
 
 
+def test_launchpad_slurm_overrides_replace_only_set_fields():
+    from dagster_slurm_example.defs.rapids_topics.topic_assets import (
+        HdbscanConfig,
+        _merged_slurm_opts,
+    )
+
+    defaults = {"nodes": 1, "cpus_per_task": 2, "mem": "4G", "gpus_per_node": 1}
+    untouched = _merged_slurm_opts(defaults, HdbscanConfig())
+    assert untouched == defaults
+
+    merged = _merged_slurm_opts(defaults, HdbscanConfig(mem="64G", gpus_per_node=0))
+    assert merged == {"nodes": 1, "cpus_per_task": 2, "mem": "64G", "gpus_per_node": 0}
+
+
+def test_pre_deployed_env_override_skipped_in_local_mode():
+    from types import SimpleNamespace
+    from typing import cast
+
+    from dagster_slurm import ComputeResource
+    from dagster_slurm.config.environment import ExecutionMode
+    from dagster_slurm_example.defs.rapids_topics.topic_assets import (
+        HdbscanConfig,
+        _run_overrides,
+    )
+
+    cfg = HdbscanConfig(pre_deployed_env_path="/home/user/env")
+    slurm = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.SLURM))
+    local = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.LOCAL))
+
+    assert _run_overrides(cfg, slurm) == {
+        "pre_deployed_env_path_override": "/home/user/env"
+    }
+    assert _run_overrides(cfg, local) == {}
+    assert _run_overrides(HdbscanConfig(), slurm) == {}
+
+
 def test_lda_partitions_cover_month_seed_grid():
     from dagster_slurm_example.defs.rapids_topics.topic_assets import (
         MONTHS,

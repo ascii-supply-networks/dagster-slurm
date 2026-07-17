@@ -17,14 +17,13 @@ scale (5 populated Reuters months x 3 seeds = 15 jobs).
 
 import os
 from importlib.resources import files
+from typing import Optional
 
 import dagster as dg
 from dagster_slurm import ComputeResource, SlurmRunConfig
+from dagster_slurm.config.environment import ExecutionMode
 from pydantic import Field
 
-# Only the Reuters-21578 months with usable (dated, non-empty body)
-# documents. May/Jul/Aug/Sep are empty in the corpus, so including them
-# would create partitions that always skip. March holds ~55% of the docs.
 MONTHS = ["1987-02", "1987-03", "1987-04", "1987-06", "1987-10"]
 SEEDS = ["0", "1", "2"]
 
@@ -36,6 +35,12 @@ lda_partitions = dg.MultiPartitionsDefinition(
 )
 
 GROUP = "rapids_topics"
+
+# Opt-in shortcut for iterating on payload code
+# RAPIDS_TOPICS_CPU_ENV=$HOME/rapids_topics_env_cpu  (corpus/LDA/agg)
+# RAPIDS_TOPICS_GPU_ENV=$HOME/rapids_topics_env_gpu  (UMAP/HDBSCAN/map)
+_CPU_ENV_PATH = os.getenv("RAPIDS_TOPICS_CPU_ENV", "").strip()
+_GPU_ENV_PATH = os.getenv("RAPIDS_TOPICS_GPU_ENV", "").strip()
 
 _CPU_PACK_METADATA = {
     "slurm_pack_cmd": [
@@ -49,7 +54,8 @@ _CPU_PACK_METADATA = {
         "--env",
         "workload-topic-modeling",
         "--build-missing",
-    ]
+    ],
+    **({"slurm_pre_deployed_env_path": _CPU_ENV_PATH} if _CPU_ENV_PATH else {}),
 }
 
 _RAPIDS_PACK_METADATA = {
@@ -64,7 +70,8 @@ _RAPIDS_PACK_METADATA = {
         "--env",
         "packaged-cluster-rapids",
         "--build-missing",
-    ]
+    ],
+    **({"slurm_pre_deployed_env_path": _GPU_ENV_PATH} if _GPU_ENV_PATH else {}),
 }
 
 
@@ -111,7 +118,60 @@ def _gpu_slurm_opts() -> dict:
     return {"nodes": 1, "cpus_per_task": 2, "mem": "4G", "gpus_per_node": 0}
 
 
-class CorpusConfig(SlurmRunConfig):
+class TopicSlurmConfig(SlurmRunConfig):
+    """Slurm sizing + environment knobs, editable per run in the launchpad.
+
+    Every field defaults to None, meaning "use the asset's deployment-aware
+    default" (see ``_cpu_slurm_opts`` / ``_gpu_slurm_opts``). Overrides only
+    apply in Slurm modes; local mode ignores them.
+    """
+
+    cpus_per_task: Optional[int] = Field(
+        default=None, gt=0, description="Override CPUs for this run"
+    )
+    mem: Optional[str] = Field(
+        default=None, description="Override memory request, e.g. '64G'"
+    )
+    time_limit: Optional[str] = Field(
+        default=None, description="Override wall time, e.g. '00:30:00'"
+    )
+    gpus_per_node: Optional[int] = Field(
+        default=None, ge=0, description="Override GPU count for this run"
+    )
+    pre_deployed_env_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Skip env packing and use this already-extracted environment on "
+            "the cluster (dir with activate.sh and env/bin/python). If the "
+            "RAPIDS_TOPICS_*_ENV variable is also set, the variable (asset "
+            "metadata) takes precedence; unset it to control this from the "
+            "launchpad."
+        ),
+    )
+
+
+def _merged_slurm_opts(defaults: dict, config: TopicSlurmConfig) -> dict:
+    """Deployment-aware defaults, overridden by launchpad-set fields."""
+    opts = dict(defaults)
+    for field in ("cpus_per_task", "mem", "time_limit", "gpus_per_node"):
+        value = getattr(config, field)
+        if value is not None:
+            opts[field] = value
+    return opts
+
+
+def _run_overrides(config: TopicSlurmConfig, compute: ComputeResource) -> dict:
+    """Extra compute.run kwargs; only emitted when set.
+
+    Dropped in local mode: LocalPipesClient does not accept the
+    override kwarg, and there is no packed env to skip locally anyway.
+    """
+    if config.pre_deployed_env_path and compute.mode != ExecutionMode.LOCAL:
+        return {"pre_deployed_env_path_override": config.pre_deployed_env_path}
+    return {}
+
+
+class CorpusConfig(TopicSlurmConfig):
     """Configuration for Reuters corpus preparation."""
 
     dict_keep_n: int = Field(
@@ -121,7 +181,7 @@ class CorpusConfig(SlurmRunConfig):
     )
 
 
-class LdaConfig(SlurmRunConfig):
+class LdaConfig(TopicSlurmConfig):
     """Configuration for per-partition LDA training."""
 
     num_topics: int = Field(default=15, gt=0, le=500)
@@ -134,7 +194,7 @@ class LdaConfig(SlurmRunConfig):
     )
 
 
-class UmapConfig(SlurmRunConfig):
+class UmapConfig(TopicSlurmConfig):
     """Configuration for UMAP reduction of topic-term vectors."""
 
     n_components: int = Field(default=2, gt=1, le=100)
@@ -153,7 +213,7 @@ class UmapConfig(SlurmRunConfig):
     )
 
 
-class HdbscanConfig(SlurmRunConfig):
+class HdbscanConfig(TopicSlurmConfig):
     """Configuration for HDBSCAN meta-topic clustering."""
 
     min_cluster_size: int = Field(default=3, gt=1)
@@ -175,7 +235,8 @@ def reuters_corpus(
         payload_path=_payload("prepare_corpus.py"),
         config=config,
         extra_env={"DICT_KEEP_N": str(config.dict_keep_n), **_base_env()},
-        extra_slurm_opts=_cpu_slurm_opts(),
+        extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -208,7 +269,8 @@ def lda_models(
             "MIN_DOCS": str(config.min_docs),
             **_base_env(),
         },
-        extra_slurm_opts=_cpu_slurm_opts(),
+        extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -221,14 +283,15 @@ def lda_models(
 def topic_term_matrix(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
-    config: SlurmRunConfig,
+    config: TopicSlurmConfig,
 ):
     return compute.run(
         context=context,
         payload_path=_payload("aggregate_topics.py"),
         config=config,
         extra_env=_base_env(),
-        extra_slurm_opts=_cpu_slurm_opts(),
+        extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -259,7 +322,8 @@ def umap_embedding(
             "UMAP_BUILD_ALGO": config.build_algo,
             **_base_env(),
         },
-        extra_slurm_opts=_gpu_slurm_opts(),
+        extra_slurm_opts=_merged_slurm_opts(_gpu_slurm_opts(), config),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -286,7 +350,8 @@ def hdbscan_meta_topics(
             "MIN_SAMPLES": str(config.min_samples),
             **_base_env(),
         },
-        extra_slurm_opts=_gpu_slurm_opts(),
+        extra_slurm_opts=_merged_slurm_opts(_gpu_slurm_opts(), config),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -299,12 +364,13 @@ def hdbscan_meta_topics(
 def topic_map(
     context: dg.AssetExecutionContext,
     compute: ComputeResource,
-    config: SlurmRunConfig,
+    config: TopicSlurmConfig,
 ):
     return compute.run(
         context=context,
         payload_path=_payload("topic_map.py"),
         config=config,
         extra_env=_base_env(),
-        extra_slurm_opts=_cpu_slurm_opts(),
+        extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
+        **_run_overrides(config, compute),
     ).get_results()
