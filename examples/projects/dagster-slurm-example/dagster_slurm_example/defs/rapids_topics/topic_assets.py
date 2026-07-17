@@ -156,8 +156,8 @@ class UmapConfig(SlurmRunConfig):
 class HdbscanConfig(SlurmRunConfig):
     """Configuration for HDBSCAN meta-topic clustering."""
 
-    min_cluster_size: int = Field(default=5, gt=1)
-    min_samples: int = Field(default=5, gt=0)
+    min_cluster_size: int = Field(default=3, gt=1)
+    min_samples: int = Field(default=1, gt=0)
 
 
 @dg.asset(

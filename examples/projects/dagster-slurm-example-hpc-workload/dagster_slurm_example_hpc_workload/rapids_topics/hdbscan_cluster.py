@@ -6,8 +6,8 @@ HDBSCAN noise (topics that don't recur).
 
 Environment:
     RAPIDS_TOPICS_BASE  base dir (default: $HOME/rapids_topics)
-    MIN_CLUSTER_SIZE    HDBSCAN min_cluster_size (default: 5)
-    MIN_SAMPLES         HDBSCAN min_samples (default: 5)
+    MIN_CLUSTER_SIZE    HDBSCAN min_cluster_size (default: 3)
+    MIN_SAMPLES         HDBSCAN min_samples (default: 1)
 """
 
 import os
@@ -68,8 +68,8 @@ def main():
     context.log.info(f"HDBSCAN via {backend}: {embedding.shape[0]} points")
 
     clusterer = make_hdbscan(
-        min_cluster_size=int(os.environ.get("MIN_CLUSTER_SIZE", "5")),
-        min_samples=int(os.environ.get("MIN_SAMPLES", "5")),
+        min_cluster_size=int(os.environ.get("MIN_CLUSTER_SIZE", "3")),
+        min_samples=int(os.environ.get("MIN_SAMPLES", "1")),
     )
     labels = np.asarray(clusterer.fit_predict(embedding), dtype=np.int32)
 
