@@ -75,6 +75,23 @@ def test_factories_fall_back_to_cpu_without_cuml():
     assert isinstance(clusterer, hdbscan_lib.HDBSCAN)
 
 
+def test_inline_plot_embeds_small_pngs_and_skips_large_ones():
+    import base64
+
+    from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import (
+        MAX_INLINE_PLOT_BYTES,
+        inline_plot_metadata,
+    )
+
+    png_bytes = b"\x89PNG-fake-bytes"
+    embedded = inline_plot_metadata(png_bytes)
+    assert embedded is not None and embedded["type"] == "md"
+    assert base64.b64encode(png_bytes).decode("ascii") in embedded["raw_value"]
+    assert embedded["raw_value"].startswith("![topic map](data:image/png;base64,")
+
+    assert inline_plot_metadata(b"x" * (MAX_INLINE_PLOT_BYTES + 1)) is None
+
+
 def test_cluster_labels_use_most_frequent_terms_and_skip_noise():
     labels = cluster_labels(
         clusters=[0, 0, 0, -1, 1],

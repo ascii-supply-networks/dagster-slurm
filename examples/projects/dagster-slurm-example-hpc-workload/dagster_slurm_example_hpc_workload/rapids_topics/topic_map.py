@@ -3,19 +3,35 @@
 Each point is one topic from one (month, seed) LDA model; clusters are
 meta-topics recurring across models. Cluster labels are the most
 frequent top-terms among member topics. Writes a PNG plus a JSON
-summary of the meta-topics.
+summary of the meta-topics on the cluster filesystem, and streams both
+back through Dagster Pipes.
 
 Environment:
     RAPIDS_TOPICS_BASE  base dir (default: $HOME/rapids_topics)
     LABEL_TERMS         terms per cluster label (default: 3)
 """
 
+import base64
 import json
 import os
 from collections import Counter
 from pathlib import Path
+from typing import Optional
 
 from dagster_pipes import PipesContext, open_dagster_pipes
+
+MAX_INLINE_PLOT_BYTES = 750_000
+
+
+def inline_plot_metadata(png_bytes: bytes) -> Optional[dict]:
+    """Markdown metadata embedding the PNG, or None when it is too large."""
+    if len(png_bytes) > MAX_INLINE_PLOT_BYTES:
+        return None
+    encoded = base64.b64encode(png_bytes).decode("ascii")
+    return {
+        "raw_value": f"![topic map](data:image/png;base64,{encoded})",
+        "type": "md",
+    }
 
 
 def cluster_labels(
@@ -93,14 +109,22 @@ def main():
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
-    context.report_asset_materialization(
-        metadata={
-            "n_meta_topics": len(labels),
-            "n_noise_topics": int(noise.sum()),
-            "plot_path": str(png_path),
-            "summary_path": str(out_dir / "summary.json"),
-        }
-    )
+    metadata = {
+        "n_meta_topics": len(labels),
+        "n_noise_topics": int(noise.sum()),
+        "plot_path": {"raw_value": str(png_path), "type": "path"},
+        "summary_path": {"raw_value": str(out_dir / "summary.json"), "type": "path"},
+        "meta_topics": {"raw_value": summary, "type": "json"},
+    }
+    plot_preview = inline_plot_metadata(png_path.read_bytes())
+    if plot_preview is not None:
+        metadata["topic_map_preview"] = plot_preview
+    else:
+        context.log.warning(
+            f"topic_map.png exceeds {MAX_INLINE_PLOT_BYTES} bytes; "
+            "reporting the remote path only."
+        )
+    context.report_asset_materialization(metadata=metadata)
 
 
 if __name__ == "__main__":
