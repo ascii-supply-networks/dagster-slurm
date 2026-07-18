@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.2 (2026-07-18)
+
+### Bug Fixes
+
+- **deps**: Native and pixi named platforms
+  ([#155](https://github.com/ascii-supply-networks/dagster-slurm/pull/155),
+  [`23805a2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/23805a203b10930538bfe7fdaa7d589c9ca595a8))
+
+
 ## v1.14.0-rc.1 (2026-07-18)
 
 ### Continuous Integration
