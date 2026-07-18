@@ -89,8 +89,6 @@ duckdb = ">=1.4.4,<2"
 pyarrow-hotfix = ">=0.7,<1"
 
 [tool.pixi.feature.workload-topic-modeling.dependencies]
-
-[tool.pixi.feature.workload-topic-modeling.pypi-dependencies]
 gensim = ">=4.3,<5"
 
 [tool.pixi.feature.cluster-rapids]
