@@ -68,7 +68,7 @@ Depending on your Dagster configuration, you can also log and visualize addition
 
 ![Screenshot comparing multiple Dagster runs](../static/img/process_data_asset_view.png)
 
-## 3. Validating with a Docker as your Cluster
+## 2. Validating with a Docker as your Cluster
 
 You can run the full Slurm code without touching a real supercomputer by setting up a docker environment. This repository ships a Docker Compose stack for that. Create a `.env` file in `examples/` with the Docker cluster's default credentials:
 
@@ -89,11 +89,10 @@ pixi run start-staging
 
 Navigate to [http://localhost:3000](http://localhost:3000) again. You can also SSH to your running docker container, and check the Slurm queue with `squeue -u submitter` and `sacct -u submitter`.
 
-## 4. Point to your own HPC cluster
+## 3. Point to your own HPC cluster
 
 1. Update the SSH and Slurm configuration in
-   [`examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py`](https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py)
-   (or your own equivalent module).
+   [`examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py`](https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py), or create the `.env` file in `examples/` with the connection details for your cluster as we did for the docker example (or use any of your own equivalent module).
 2. Provide the connection details via environment variables—`dagster-slurm` reads them at runtime so you can keep secrets out of the repository.
 
 **Required environment variables**
@@ -115,8 +114,6 @@ Navigate to [http://localhost:3000](http://localhost:3000) again. You can also S
 | `DAGSTER_DEPLOYMENT`                                                     | Selects the resource preset (`development`, `staging_docker`, `production_supercomputer`, …). | See `Environment` enum in the example project.                                                       |
 | `CI_DEPLOYED_ENVIRONMENT_PATH` (production only)                         | Path to a pre-built environment bundle on the cluster.                                        | Required when using `production_supercomputer`.                                                      |
 | `DAGSTER_SLURM_SSH_CONTROL_DIR` (optional)                               | Directory for SSH ControlMaster sockets.                                                      | Override when `/tmp` is not writable; defaults to `~/.ssh/dagster-slurm`.                            |
-
-Set the variables in a `.env` file or your orchestrator’s secret store. Passwords are shown below for completeness, but most HPC centres require SSH keys or Kerberos tickets instead.
 
 > **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically switches to one-off SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your security policy restricts where control sockets can live.
 
