@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.3 (2026-07-18)
+
+### Bug Fixes
+
+- Load native libraries from package
+  ([#156](https://github.com/ascii-supply-networks/dagster-slurm/pull/156),
+  [`d02ba1d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d02ba1d88a2f6c75e983f7eaab260fedbd75da55))
+
+
 ## v1.14.0-rc.2 (2026-07-18)
 
 ### Bug Fixes
