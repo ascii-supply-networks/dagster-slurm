@@ -27,6 +27,26 @@ def test_bash_launcher_basic():
     assert any("python3" in line for line in plan.payload)
 
 
+def test_bash_launcher_prefers_packed_native_libraries():
+    """Load native libraries from the packed environment."""
+    launcher = BashLauncher()
+
+    plan = launcher.prepare_execution(
+        payload_path="/remote/script.py",
+        python_executable="/remote/env/bin/python",
+        working_dir="/remote/run",
+        activation_script="/remote/activate.sh",
+        pipes_context={},
+    )
+
+    script = "\n".join(plan.payload)
+    assert "source /remote/activate.sh" in script
+    assert "export LD_LIBRARY_PATH=/remote/env/lib:${LD_LIBRARY_PATH:-}" in script
+    assert script.index("source /remote/activate.sh") < script.index(
+        "export LD_LIBRARY_PATH=/remote/env/lib:${LD_LIBRARY_PATH:-}"
+    )
+
+
 # TODO: Implement session mode, HET job
 # def test_bash_launcher_with_allocation():
 #     """Test bash launcher with allocation context."""
@@ -59,7 +79,7 @@ def test_ray_launcher_local_mode():
 
     plan = launcher.prepare_execution(
         payload_path="/path/to/script.py",
-        python_executable="python3",
+        python_executable="/remote/env/bin/python",
         working_dir="/tmp/test",
         activation_script="env/activate.sh",
         pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
@@ -71,6 +91,25 @@ def test_ray_launcher_local_mode():
     assert "--dashboard-port=$dash_port" in script
     assert "trap - EXIT SIGINT SIGTERM" in script
     assert 'exit "$exit_code"' in script
+    assert "export LD_LIBRARY_PATH=/remote/env/lib:${LD_LIBRARY_PATH:-}" in script
+
+
+def test_ray_launcher_existing_cluster_prefers_packed_native_libraries():
+    """Load native libraries from the packed environment."""
+    launcher = RayLauncher(ray_address="ray://head:10001")
+
+    plan = launcher.prepare_execution(
+        payload_path="/remote/script.py",
+        python_executable="/remote/env/bin/python",
+        working_dir="/remote/run",
+        activation_script="/remote/activate.sh",
+        pipes_context={},
+    )
+
+    script = "\n".join(plan.payload)
+    assert script.index("source /remote/activate.sh") < script.index(
+        "export LD_LIBRARY_PATH=/remote/env/lib:${LD_LIBRARY_PATH:-}"
+    )
 
 
 def test_ray_launcher_seeded_local_ports_use_high_range():
@@ -100,7 +139,7 @@ def test_ray_launcher_cluster_standalone_mode():
 
     plan = launcher.prepare_execution(
         payload_path="/path/to/script.py",
-        python_executable="python3",
+        python_executable="/remote/env/bin/python",
         working_dir="/tmp/test",
         pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
         activation_script="env/activate.sh",
@@ -132,15 +171,21 @@ def test_ray_launcher_cluster_standalone_mode():
     assert "ray start --head" in driver_script
     assert "--node-ip-address=$head_bind_addr" in driver_script
     assert 'srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
-    assert "python3 /path/to/script.py" in driver_script
+    assert "/remote/env/bin/python /path/to/script.py" in driver_script
     assert "trap - EXIT SIGINT SIGTERM" in driver_script
     assert 'exit "$exit_code"' in driver_script
+    assert (
+        "export LD_LIBRARY_PATH=/remote/env/lib:${LD_LIBRARY_PATH:-}" in driver_script
+    )
 
     assert "--address=$ip_head" in worker_script
     assert "--num-gpus=2" in worker_script
     assert "--node-ip-address" not in worker_script
     assert "trap - EXIT INT TERM" in worker_script
     assert 'exit "$exit_code"' in worker_script
+    assert (
+        "export LD_LIBRARY_PATH=/remote/env/lib:${LD_LIBRARY_PATH:-}" in worker_script
+    )
 
 
 # TODO: Implement session mode, HET job
