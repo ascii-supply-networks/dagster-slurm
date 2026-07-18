@@ -23,7 +23,6 @@ git submodule update --remote .agent-skills/dagster-skills
 Dagster skills are under:
 
 - `.agent-skills/dagster-skills/skills/dagster-expert`
-- `.agent-skills/dagster-skills/skills/dagster-integrations`
 - `.agent-skills/dagster-skills/skills/dignified-python`
 
 This keeps a single shared copy inside the repo; no global installation is required by this repository setup itself.

@@ -1,6 +1,9 @@
 import os
+import re
 import subprocess
+from types import SimpleNamespace
 
+from dagster_slurm.helpers import ssh_pool as ssh_pool_module
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.ssh import SSHConnectionResource
 
@@ -167,3 +170,56 @@ def test_control_master_key_auth_commands_keep_noninteractive_opts(
         assert "IdentitiesOnly=yes" in cmd
         assert "BatchMode=yes" in cmd
         assert "Compression=yes" in cmd
+
+
+def test_write_file_preserves_single_quotes(monkeypatch):
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        port=22,
+        user="testuser",
+        password="secret",
+    )
+    pool = SSHConnectionPool(ssh_resource)
+    commands: list[str] = []
+
+    def fake_run(cmd, *_, **__):
+        commands.append(cmd)
+        return ""
+
+    monkeypatch.setattr(pool, "run", fake_run)
+
+    pool.write_file("awk '{print $1}'\necho 'done'", "/tmp/script.sh")
+
+    assert len(commands) == 1
+    assert "awk '{print $1}'" in commands[0]
+    assert "echo 'done'" in commands[0]
+    assert "'\\''" not in commands[0]
+
+
+def test_write_file_uses_unique_heredoc_delimiter(monkeypatch):
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        port=22,
+        user="testuser",
+        password="secret",
+    )
+    pool = SSHConnectionPool(ssh_resource)
+    commands: list[str] = []
+    uuid_hexes = iter(["collision", "safe"])
+
+    def fake_run(cmd, *_, **__):
+        commands.append(cmd)
+        return ""
+
+    monkeypatch.setattr(pool, "run", fake_run)
+    monkeypatch.setattr(
+        ssh_pool_module.uuid,
+        "uuid4",
+        lambda: SimpleNamespace(hex=next(uuid_hexes)),
+    )
+
+    pool.write_file("DAGSTER_EOF_collision\npayload", "/tmp/script.sh")
+
+    assert len(commands) == 1
+    assert "<<'DAGSTER_EOF_safe'" in commands[0]
+    assert re.search(r"^DAGSTER_EOF_safe$", commands[0], re.MULTILINE)

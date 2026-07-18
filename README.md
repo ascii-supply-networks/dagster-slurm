@@ -17,7 +17,7 @@ maybe this project can support making HPC systems more accessible**.
 
 See the [docs](https://dagster-slurm.geoheil.com/) for instructions.
 
-> **Status:** Local execution and one-job-per-asset Slurm runs are production-ready today. Session-based cluster reuse and heterogeneous jobs are actively being developed and will land in a future release.
+> **Status:** Local execution and one-job-per-asset Slurm runs are production-ready today. Ray workloads can also opt into a run-scoped Slurm allocation when several compatible assets should share one Ray cluster. Heterogeneous jobs remain experimental.
 
 <img referrerpolicy="no-referrer-when-downgrade" src="https://telemetry.dagster-slurm.geoheil.com/a.png?x-pxid=994a20b8-4be7-4297-9f42-657b0d1f1a07&page=README.md" />
 
@@ -28,7 +28,7 @@ Hydrating supercomputers with Dagster and Slurm to enhance developer experience.
 ![](docs/static/img/featured.png)
 
 - **Unified API**: Same asset code works in dev (local) for rapid prototyping but just as well on a massive HPC system via SLURM.
-- **Job launch**: One Slurm submission per Dagster asset keeps behaviour predictable. Operator-fusion/session reuse is on the roadmap (feedback welcome in [#22](https://github.com/ascii-supply-networks/dagster-slurm/issues/22)).
+- **Job launch**: One Slurm submission per Dagster asset keeps behaviour predictable by default. Ray assets can explicitly opt into one Slurm allocation per Dagster run when the selected assets share one allocation shape.
 - **Pluggable Launchers**: Bash, Ray, Spark (WIP) - easy to add more
 - **Environment Packaging**: Automatic `pixi`-based environment packaging for remote execution via `pixi-pack`
 - **Connection Pooling**: SSH ControlMaster for efficient remote operations

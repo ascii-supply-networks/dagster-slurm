@@ -49,6 +49,8 @@ compute = ComputeResource(
 | `pre_deployed_env_path`       | `None`  | Path to pre-deployed environment on cluster. When set, skips packing entirely.                                       |
 | `default_skip_payload_upload` | `False` | When `True`, skip uploading payload scripts. Remote path is derived as `{pre_deployed_env_path}/scripts/{filename}`. |
 | `cache_inject_globs`          | `None`  | Glob patterns for inject files that affect cache key. If not set, all inject files are hashed.                       |
+| `pack_on_remote`              | `False` | When `True`, run packaging on the Slurm edge node on cache misses and upload only small pack inputs.                 |
+| `remote_pack_timeout`         | `600`   | Timeout in seconds for remote packaging and extraction.                                                              |
 | `auto_detect_platform`        | `False` | Auto-detect target platform from edge node architecture.                                                             |
 | `pack_platform`               | `None`  | Explicit target platform (e.g., `linux-64`).                                                                         |
 | `debug_mode`                  | `False` | Keep build artefacts for inspection.                                                                                 |
@@ -95,6 +97,41 @@ With this configuration:
 | `process.py` (payload script)    | N/A                | Always uploaded fresh    |
 
 If `cache_inject_globs` is not set, **all** `--inject` files from the pack command are hashed (safe default).
+
+## Remote packing on the edge node
+
+Set `pack_on_remote=True` to avoid uploading large packed environments from your workstation.
+On an environment cache miss, `dagster-slurm` stages only small pack inputs on the edge node, runs `pixi-pack` there, and extracts the result into the same remote env cache directory.
+For the built-in pack tasks, remote packing uses the cache-stable `pack-only` task and expects the injected base artifacts to exist locally so they can be staged.
+The cache key stays based on `pixi.lock`, the pack command, platform overrides, and `cache_inject_globs`.
+
+```python
+compute = ComputeResource(
+    mode="slurm",
+    slurm=slurm_resource,
+    default_launcher=BashLauncher(),
+    pack_on_remote=True,
+    remote_pack_timeout=1200,
+    cache_inject_globs=[
+        "../projects/dagster-slurm/dagster_slurm/**/*.py",
+        "../projects/dagster-slurm/pyproject.toml",
+    ],
+)
+```
+
+This does **not** change per-run payload behavior:
+
+| File type                           | How it moves                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| Base environment dependencies       | Packed on the edge node and cached under `{remote_base}/env-cache/{key}`. |
+| Payload scripts                     | Uploaded fresh for each run unless `skip_payload_upload=True`.            |
+| `extra_files` such as `metaxy.toml` | Uploaded fresh alongside the payload, as before.                          |
+| Large conda/PyPI libraries          | Downloaded/packed by the edge node when it has internet access.           |
+
+Remote packing assumes `pixi` and `pixi-pack` are available on the edge node and that the edge node can reach the required conda/PyPI repositories.
+If the remote pack step fails, `dagster-slurm` falls back to local packaging and uploads the packed environment, which is the safer path for air-gapped clusters such as Leonardo.
+For the example supercomputer configuration, `SLURM_PACK_ON_REMOTE` defaults to enabled and can be disabled with `SLURM_PACK_ON_REMOTE=false`.
+Use `SLURM_REMOTE_PACK_TIMEOUT` to tune the remote timeout.
 
 ## Runtime configuration with SlurmRunConfig
 

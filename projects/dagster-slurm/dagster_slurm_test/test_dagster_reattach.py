@@ -10,6 +10,9 @@ SIGTERM handling is fully exercised.
 """
 
 import threading
+from contextlib import contextmanager
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from dagster import (
@@ -375,6 +378,123 @@ def test_sigterm_during_env_prep_allows_submission():
 # ---------------------------------------------------------------------------
 # Test: Tags are stored after sbatch
 # ---------------------------------------------------------------------------
+
+
+def test_multi_asset_run_uses_step_scoped_message_files():
+    """Each SLURM-backed step in one Dagster run gets its own Pipes channel."""
+
+    compute = _make_slurm_compute()
+    captured_message_paths: list[str] = []
+
+    @asset
+    def first_asset(context: AssetExecutionContext, compute: ComputeResource):
+        compute.run(
+            context=context,
+            payload_path="script.py",
+        )
+
+    @asset
+    def second_asset(context: AssetExecutionContext, compute: ComputeResource):
+        compute.run(
+            context=context,
+            payload_path="script.py",
+        )
+
+    @contextmanager
+    def fake_open_pipes_session(*args, **kwargs):
+        message_reader = kwargs["message_reader"]
+        captured_message_paths.append(message_reader.remote_path)
+        mock_session = MagicMock()
+        mock_session.get_bootstrap_env_vars.return_value = {}
+        yield mock_session
+
+    with DagsterInstance.ephemeral() as instance:
+        mock_pool = _mock_ssh_pool()
+        mock_pool.run.return_value = ""
+
+        with (
+            patch(
+                "dagster_slurm.pipes_clients.slurm_pipes_client.SSHConnectionPool",
+                return_value=mock_pool,
+            ),
+            patch.object(
+                SlurmPipesClient,
+                "_prepare_environment",
+                return_value=("/activate.sh", "/usr/bin/python"),
+            ),
+            patch.object(
+                SlurmPipesClient,
+                "_find_reattachable_job",
+                return_value=None,
+            ),
+            patch.object(
+                SlurmPipesClient,
+                "_execute_standalone",
+                return_value=42,
+            ),
+            patch.object(SlurmPipesClient, "_maybe_emit_final_logs"),
+            patch.object(SlurmPipesClient, "_validate_final_slurm_outcome"),
+            patch.object(SlurmPipesClient, "_collect_and_emit_metrics"),
+            patch.object(SlurmPipesClient, "_schedule_async_cleanup"),
+            patch(
+                "dagster_slurm.pipes_clients.slurm_pipes_client.open_pipes_session",
+                side_effect=fake_open_pipes_session,
+            ),
+        ):
+            result = materialize(
+                [first_asset, second_asset],
+                resources={"compute": compute},
+                instance=instance,
+                raise_on_error=False,
+            )
+
+    assert result.success, _failure_events(result)
+    expected_prefix = f"/tmp/dagster_test/runs/{result.run_id}/"
+    assert len(captured_message_paths) == 2
+    assert len(set(captured_message_paths)) == 2
+    assert all(path.startswith(expected_prefix) for path in captured_message_paths)
+    assert all(path.endswith("/messages.jsonl") for path in captured_message_paths)
+    assert f"{expected_prefix}first_asset/messages.jsonl" in captured_message_paths
+    assert f"{expected_prefix}second_asset/messages.jsonl" in captured_message_paths
+
+
+def test_same_asset_backfill_partitions_use_distinct_message_files():
+    """Parallel partition instances of one asset must not share a Pipes channel."""
+
+    compute = _make_slurm_compute()
+    assert compute.slurm is not None
+    client = SlurmPipesClient(
+        slurm_resource=compute.slurm,
+        launcher=BashLauncher(),
+    )
+
+    first_partition_context = SimpleNamespace(
+        step_key="partitioned_asset",
+        has_partition_key=True,
+        partition_key="2026-05-01",
+    )
+    second_partition_context = SimpleNamespace(
+        step_key="partitioned_asset",
+        has_partition_key=True,
+        partition_key="2026-05-02",
+    )
+
+    first_run_dir = client._get_remote_run_dir(
+        "/tmp/dagster_test", "same-run", cast(Any, first_partition_context)
+    )
+    second_run_dir = client._get_remote_run_dir(
+        "/tmp/dagster_test", "same-run", cast(Any, second_partition_context)
+    )
+
+    assert first_run_dir != second_run_dir
+    assert (
+        first_run_dir
+        == "/tmp/dagster_test/runs/same-run/partitioned_asset__partition=2026-05-01"
+    )
+    assert (
+        second_run_dir
+        == "/tmp/dagster_test/runs/same-run/partitioned_asset__partition=2026-05-02"
+    )
 
 
 def test_tags_stored_after_sbatch():

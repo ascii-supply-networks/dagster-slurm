@@ -4,6 +4,7 @@ Run Dagster assets on Slurm clusters with support for:
 
 - Local dev mode (no SSH/Slurm)
 - Per-asset Slurm submission (staging)
+- Run-scoped Slurm Ray allocation (opt-in)
 - Session mode with operator fusion (production)
 - Multiple launchers (Bash, Ray, Spark—WIP)
 """
@@ -23,9 +24,15 @@ from dagster_slurm.launchers.base import ComputeLauncher
 from .pipes_clients.local_pipes_client import LocalPipesClient
 from .pipes_clients.slurm_pipes_client import SlurmPipesClient
 from .resources.compute import ComputeResource
-from .resources.session import SlurmAllocation, SlurmSessionResource
+from .resources.session import (
+    SlurmAllocation,
+    SlurmAllocationScope,
+    SlurmRunAllocationConfig,
+    SlurmSessionResource,
+)
 from .resources.slurm import SlurmQueueConfig, SlurmResource
 from .resources.ssh import SSHConnectionResource
+from .sensors import build_slurm_orphan_reconcile_sensor, reconcile_orphaned_slurm_runs
 
 __all__ = [
     # Main facade (most users only need this)
@@ -38,6 +45,8 @@ __all__ = [
     "SSHConnectionResource",
     "SlurmSessionResource",
     "SlurmAllocation",
+    "SlurmAllocationScope",
+    "SlurmRunAllocationConfig",
     # Launchers
     "BashLauncher",
     "RayLauncher",
@@ -46,4 +55,7 @@ __all__ = [
     # Advanced: Direct client access
     "LocalPipesClient",
     "SlurmPipesClient",
+    # Sensors / reconciliation helpers
+    "build_slurm_orphan_reconcile_sensor",
+    "reconcile_orphaned_slurm_runs",
 ]

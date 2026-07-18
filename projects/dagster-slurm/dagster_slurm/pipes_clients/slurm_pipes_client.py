@@ -1,15 +1,20 @@
 """Slurm Pipes client for remote execution."""
 
+import glob
+import hashlib
 import os
+import posixpath
 import platform
-import shlex
 import re
+import shlex
 import signal
 import subprocess
 import sys
 import threading
 import time
+import tomllib
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -19,6 +24,7 @@ from dagster import (
     OpExecutionContext,
     PipesClient,
     PipesEnvContextInjector,
+    RunsFilter,
     get_dagster_logger,
     open_pipes_session,
 )
@@ -32,12 +38,49 @@ from ..helpers.metrics import SlurmMetricsCollector
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
-from ..resources.session import SlurmSessionResource
+from ..launchers.ray import RayLauncher
+from ..resources.session import SlurmSessionResource, SlurmStepExecutionResult
 from ..resources.slurm import SlurmResource
 
 _TAG_JOB_ID = "dagster_slurm/job_id"
 _TAG_RUN_DIR = "dagster_slurm/run_dir"
 _TAG_ASSET_KEY = "dagster_slurm/asset_key"
+_TAG_LAST_SUPERVISOR_HEARTBEAT = "dagster_slurm/last_supervisor_heartbeat"
+_TAG_ORPHAN_RECONCILED_AT = "dagster_slurm/orphan_reconciled_at"
+_TAG_ORPHAN_RETRY_OF = "dagster_slurm/orphan_retry_of"
+_HEARTBEAT_INTERVAL_SECONDS = 30.0
+
+
+def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
+    """Join a remote path and keep it inside the remote pack workspace root."""
+    if posixpath.isabs(relative_path):
+        raise ValueError(
+            f"Remote pack input path must be relative, got: {relative_path}"
+        )
+
+    root_norm = posixpath.normpath(root)
+    path_norm = posixpath.normpath(posixpath.join(base, relative_path))
+    if path_norm != root_norm and not path_norm.startswith(f"{root_norm}/"):
+        raise ValueError(
+            "Remote pack input path escapes staging workspace: "
+            f"{relative_path} -> {path_norm}"
+        )
+    return path_norm
+
+
+def _local_pack_workspace_root(project_dir: Path) -> Path:
+    """Return the local root from which remote pack inputs may be staged."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=project_dir,
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        return Path(result.stdout.strip()).resolve()
+    except (OSError, subprocess.CalledProcessError):
+        return project_dir.resolve()
 
 
 class SlurmPipesClient(PipesClient):
@@ -66,6 +109,9 @@ class SlurmPipesClient(PipesClient):
         pack_platform: Optional[str] = None,
         pre_deployed_env_path: Optional[str] = None,
         cache_inject_globs: Optional[list[str]] = None,
+        pack_on_remote: bool = False,
+        remote_pack_timeout: int = 600,
+        run_allocation_scope: bool = False,
     ):
         """Args:
         slurm_resource: Slurm cluster configuration
@@ -79,6 +125,9 @@ class SlurmPipesClient(PipesClient):
             should affect the environment cache key. If None, all --inject patterns
             from the pack command are hashed. Use this to exclude workload-specific
             packages from cache invalidation (e.g., only include base libraries).
+        pack_on_remote: If True, stage small pack inputs on the edge node and run
+            pixi-pack there instead of uploading the self-extracting environment.
+        remote_pack_timeout: Timeout in seconds for the remote pack and extract step.
 
         """
         super().__init__()
@@ -96,8 +145,12 @@ class SlurmPipesClient(PipesClient):
         self._ssh_pool = None
         self._cancellation_requested = False
         self._sigterm_received = False
+        self._last_heartbeat_at = 0.0
         self.pre_deployed_env_path = pre_deployed_env_path
         self.cache_inject_globs = cache_inject_globs
+        self.pack_on_remote = pack_on_remote
+        self.remote_pack_timeout = remote_pack_timeout
+        self.run_allocation_scope = run_allocation_scope
 
     def run(  # ty: ignore[invalid-method-override]  # Dagster PipesClient is designed for extension
         self,
@@ -155,6 +208,11 @@ class SlurmPipesClient(PipesClient):
         skip_payload_upload = (
             bool(skip_payload_upload) if skip_payload_upload is not None else False
         )
+        if self.run_allocation_scope and not use_session:
+            raise ValueError(
+                "run_allocation_scope=True requires use_session=True so the payload "
+                "runs inside the run-owned Slurm allocation."
+            )
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
@@ -190,8 +248,9 @@ class SlurmPipesClient(PipesClient):
                 self._control_path = ssh_pool.control_path
 
                 remote_base = self._get_remote_base(run_id, ssh_pool)
+                op_ctx = context.op_execution_context
 
-                run_dir = f"{remote_base}/runs/{run_id}"
+                run_dir = self._get_remote_run_dir(remote_base, run_id, op_ctx)
                 messages_path = f"{run_dir}/messages.jsonl"
                 self.logger.debug(f"Creating remote run directory: {run_dir}")
                 ssh_pool.run(f"mkdir -p {run_dir}")
@@ -203,7 +262,6 @@ class SlurmPipesClient(PipesClient):
                 #   1. Job still running → reattach and monitor
                 #   2. Job already COMPLETED → collect metrics, skip submission
                 #   3. Job failed / not found → fall through to normal path
-                op_ctx = context.op_execution_context
                 asset_key_str = self._get_asset_key_string(op_ctx)
                 reattach_info = self._find_reattachable_job(
                     op_ctx, ssh_pool, asset_key_str
@@ -224,6 +282,7 @@ class SlurmPipesClient(PipesClient):
                         job_id = old_job_id
                         run_dir = old_run_dir
                         self._store_job_tags(op_ctx, old_job_id, run_dir, asset_key_str)
+                        self._store_supervisor_heartbeat(op_ctx, force=True)
 
                         message_reader = SSHMessageReader(
                             remote_path=f"{run_dir}/messages.jsonl",
@@ -297,6 +356,7 @@ class SlurmPipesClient(PipesClient):
                         self._current_job_id = old_job_id
                         job_id = old_job_id
                         run_dir = old_run_dir
+                        self._store_supervisor_heartbeat(op_ctx, force=True)
 
                         context_injector = PipesEnvContextInjector()
                         message_reader = SSHMessageReader(
@@ -436,7 +496,36 @@ class SlurmPipesClient(PipesClient):
                                 "slurm_job_id": allocation.slurm_job_id,
                             }
 
-                    execution_plan = self.launcher.prepare_execution(
+                    effective_launcher = self.launcher
+                    if self.run_allocation_scope:
+                        if not isinstance(effective_launcher, RayLauncher):
+                            raise ValueError(
+                                "Run-scoped Slurm allocation currently supports "
+                                "RayLauncher workloads only."
+                            )
+                        if not self.session or not self.session._allocation:
+                            raise RuntimeError(
+                                "Run-scoped Slurm allocation was requested but no "
+                                "allocation is initialized."
+                            )
+                        ray_address = self.session._allocation.ensure_ray_cluster(
+                            ssh_pool=ssh_pool,
+                            launcher=effective_launcher,
+                            activation_script=activation_script,
+                            startup_timeout=effective_launcher.head_startup_timeout,
+                        )
+                        effective_launcher = effective_launcher.model_copy(
+                            update={"ray_address": ray_address}
+                        )
+                        extra_env = {
+                            **(extra_env or {}),
+                            "RAY_ADDRESS": ray_address,
+                            "SLURM_RUN_ALLOCATION_JOB_ID": str(
+                                self.session._allocation.slurm_job_id
+                            ),
+                        }
+
+                    execution_plan = effective_launcher.prepare_execution(
                         payload_path=remote_payload,
                         python_executable=python_executable,
                         working_dir=run_dir,
@@ -455,14 +544,16 @@ class SlurmPipesClient(PipesClient):
                         raise RuntimeError("Execution cancelled before job submission")
 
                     # Execute with real-time log streaming
+                    step_result: SlurmStepExecutionResult | None = None
                     if use_session and self.session:
                         self.logger.info("Executing in Slurm session")
-                        job_id = self._execute_in_session(
+                        step_result = self._execute_in_session(
                             execution_plan=execution_plan,
                             context=context,
                             run_dir=run_dir,
                             ssh_pool=ssh_pool,
                         )
+                        job_id = step_result.job_id
                     else:
                         self.logger.info("Executing as standalone Slurm job")
                         job_id = self._execute_standalone(
@@ -480,24 +571,39 @@ class SlurmPipesClient(PipesClient):
                         ssh_pool=ssh_pool,
                         run_dir=run_dir,
                         job_id=job_id,
+                        stdout_path=step_result.stdout_path
+                        if step_result is not None
+                        else None,
+                        stderr_path=step_result.stderr_path
+                        if step_result is not None
+                        else None,
                     )
 
-                    final_metrics = self._validate_final_slurm_outcome(
-                        job_id,
-                        ssh_pool,
-                    )
-                    self.logger.info(f"Job {job_id} completed successfully")
+                    if use_session and self.session:
+                        self.logger.info(
+                            f"Slurm allocation step completed in allocation {job_id}"
+                        )
+                        if step_result is not None:
+                            self._emit_session_metadata(step_result, context)
+                    else:
+                        final_metrics = self._validate_final_slurm_outcome(
+                            job_id,
+                            ssh_pool,
+                        )
+                        self.logger.info(f"Job {job_id} completed successfully")
 
-                    self._collect_and_emit_metrics(
-                        job_id,
-                        ssh_pool,
-                        context,
-                        metrics=final_metrics,
-                    )
+                        self._collect_and_emit_metrics(
+                            job_id,
+                            ssh_pool,
+                            context,
+                            metrics=final_metrics,
+                        )
 
-                    # Clear reattach tags so stale tags don't trigger
-                    # false reattach on a future run.
-                    self._store_job_tags(context.op_execution_context, job_id, "", "")
+                        # Clear reattach tags so stale tags don't trigger
+                        # false reattach on a future run.
+                        self._store_job_tags(
+                            context.op_execution_context, job_id, "", ""
+                        )
 
                 self._current_job_id = None
                 self._raise_if_pipes_process_failed(
@@ -612,6 +718,139 @@ class SlurmPipesClient(PipesClient):
             f"process reported an exception: {exc_name}: {exc_message}"
         )
 
+    def _get_remote_run_dir(
+        self,
+        remote_base: str,
+        run_id: str,
+        op_context: Optional[OpExecutionContext],
+    ) -> str:
+        """Return the remote work directory for one Dagster step invocation."""
+        execution_key = self._get_execution_key_string(op_context)
+        step_dir_name = self._sanitize_remote_path_component(execution_key)
+        return f"{remote_base}/runs/{run_id}/{step_dir_name}"
+
+    def _get_execution_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> str:
+        """Return a stable identity for one step, partition, and mapping instance."""
+        parts = [self._get_step_key_string(op_context)]
+
+        partition_key = self._get_partition_key_string(op_context)
+        if partition_key:
+            parts.append(f"partition={partition_key}")
+
+        mapping_key = self._get_mapping_key_string(op_context)
+        if mapping_key:
+            parts.append(f"mapping={mapping_key}")
+
+        return "__".join(parts)
+
+    def _get_step_key_string(self, op_context: Optional[OpExecutionContext]) -> str:
+        """Best-effort extraction of a stable Dagster step key."""
+        if op_context is None:
+            return "step"
+
+        step_key = self._safe_context_attr(op_context, "step_key")
+        if isinstance(step_key, str) and step_key.strip():
+            return step_key
+
+        op_def = self._safe_context_attr(op_context, "op_def")
+        op_name = self._safe_context_attr(op_def, "name") if op_def else None
+        if isinstance(op_name, str) and op_name.strip():
+            return op_name
+
+        asset_key = self._get_asset_key_string(op_context)
+        if asset_key:
+            return asset_key
+
+        return "step"
+
+    def _get_partition_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> Optional[str]:
+        """Best-effort extraction of the partition identity for this invocation."""
+        if op_context is None:
+            return None
+
+        has_partition_key = self._safe_context_attr(op_context, "has_partition_key")
+        if has_partition_key:
+            partition_key = self._safe_context_attr(op_context, "partition_key")
+            if partition_key:
+                return str(partition_key)
+
+        has_partition_key_range = self._safe_context_attr(
+            op_context, "has_partition_key_range"
+        )
+        if has_partition_key_range:
+            key_range = self._safe_context_attr(op_context, "partition_key_range")
+            if key_range:
+                start = self._safe_context_attr(key_range, "start")
+                end = self._safe_context_attr(key_range, "end")
+                if start and end:
+                    return f"{start}..{end}"
+
+        has_partitions = self._safe_context_attr(op_context, "has_partitions")
+        if has_partitions:
+            partition_keys = self._safe_context_attr(op_context, "partition_keys")
+            if isinstance(partition_keys, list) and partition_keys:
+                if len(partition_keys) == 1:
+                    return str(partition_keys[0])
+                return (
+                    f"{partition_keys[0]}..{partition_keys[-1]}"
+                    f"__count={len(partition_keys)}"
+                )
+
+        run_tags = self._safe_context_attr(op_context, "run_tags")
+        if isinstance(run_tags, dict):
+            partition_tag = run_tags.get("dagster/partition")
+            if partition_tag:
+                return str(partition_tag)
+
+        return None
+
+    def _get_mapping_key_string(
+        self, op_context: Optional[OpExecutionContext]
+    ) -> Optional[str]:
+        """Best-effort extraction of a dynamic mapping key, when present."""
+        if op_context is None:
+            return None
+
+        get_mapping_key = self._safe_context_attr(op_context, "get_mapping_key")
+        if callable(get_mapping_key):
+            try:
+                mapping_key = get_mapping_key()
+            except Exception:
+                return None
+            if mapping_key:
+                return str(mapping_key)
+
+        mapping_key = self._safe_context_attr(op_context, "mapping_key")
+        if mapping_key:
+            return str(mapping_key)
+
+        return None
+
+    @staticmethod
+    def _safe_context_attr(obj: Any, name: str) -> Any:
+        try:
+            return getattr(obj, name, None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _sanitize_remote_path_component(raw: str) -> str:
+        """Convert a Dagster step key into a safe remote path segment."""
+        value = raw.strip() or "step"
+        sanitized = re.sub(r"[^A-Za-z0-9_.=-]+", "_", value).strip("._-")
+        if not sanitized:
+            return "step"
+        if sanitized == value and len(sanitized) <= 100:
+            return sanitized
+
+        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+        trimmed = sanitized[:100].rstrip("._-") or "step"
+        return f"{trimmed}-{digest}"
+
     def _get_asset_key_string(
         self, op_context: Optional[OpExecutionContext]
     ) -> Optional[str]:
@@ -655,6 +894,33 @@ class SlurmPipesClient(PipesClient):
         except Exception as exc:
             self.logger.debug(f"Could not store reattach tags: {exc}")
 
+    def _store_supervisor_heartbeat(
+        self,
+        op_context: Optional[OpExecutionContext],
+        *,
+        now: float | None = None,
+        force: bool = False,
+    ) -> None:
+        """Stamp the run so an external sensor can detect dead supervisors."""
+        if op_context is None:
+            return
+
+        timestamp = time.time() if now is None else now
+        if (
+            not force
+            and timestamp - self._last_heartbeat_at < _HEARTBEAT_INTERVAL_SECONDS
+        ):
+            return
+
+        self._last_heartbeat_at = timestamp
+        try:
+            op_context.instance.add_run_tags(
+                op_context.run_id,
+                {_TAG_LAST_SUPERVISOR_HEARTBEAT: str(int(timestamp))},
+            )
+        except Exception as exc:
+            self.logger.debug(f"Could not store Slurm supervisor heartbeat: {exc}")
+
     def _find_reattachable_job(
         self,
         op_context: Optional[OpExecutionContext],
@@ -675,28 +941,44 @@ class SlurmPipesClient(PipesClient):
 
         candidates: list[Dict[str, Any]] = []
 
+        def add_tag_candidate(tags: Any, *, allow_completed: bool) -> None:
+            if not isinstance(tags, Mapping):
+                return
+
+            job_id = tags.get(_TAG_JOB_ID)
+            run_dir = tags.get(_TAG_RUN_DIR)
+            if not job_id or not run_dir:
+                return
+
+            candidates.append(
+                {
+                    "job_id": job_id,
+                    "run_dir": run_dir,
+                    "allow_completed": allow_completed,
+                }
+            )
+
+        # Strategy 0: orphan-reconcile sensor path. The sensor launches a new
+        # run request carrying the original Slurm job tags directly.
+        try:
+            current_tags = getattr(op_context.dagster_run, "tags", {}) or {}
+            add_tag_candidate(current_tags, allow_completed=True)
+        except Exception as exc:
+            self.logger.debug(f"Could not check current run tags: {exc}")
+
         # Strategy 1: Retry path – check parent run's tags
         try:
             parent_run_id = getattr(op_context.dagster_run, "parent_run_id", None)
             if parent_run_id:
                 parent_run = op_context.instance.get_run_by_id(parent_run_id)
-                if parent_run and parent_run.tags.get(_TAG_JOB_ID):
-                    candidates.append(
-                        {
-                            "job_id": parent_run.tags[_TAG_JOB_ID],
-                            "run_dir": parent_run.tags.get(_TAG_RUN_DIR, ""),
-                            "allow_completed": True,
-                        }
-                    )
+                if parent_run:
+                    add_tag_candidate(parent_run.tags, allow_completed=True)
         except Exception as exc:
             self.logger.debug(f"Could not check parent run tags: {exc}")
 
         # Strategy 2: Re-materialize path – query recent FAILURE runs
         if not candidates and asset_key:
             try:
-                from dagster import DagsterRunStatus
-                from dagster._core.storage.dagster_run import RunsFilter
-
                 failed_runs = op_context.instance.get_runs(
                     filters=RunsFilter(
                         tags={_TAG_ASSET_KEY: asset_key},
@@ -705,11 +987,7 @@ class SlurmPipesClient(PipesClient):
                     limit=5,
                 )
                 for run in failed_runs:
-                    jid = run.tags.get(_TAG_JOB_ID)
-                    rdir = run.tags.get(_TAG_RUN_DIR)
-                    if jid and rdir:
-                        candidates.append({"job_id": jid, "run_dir": rdir})
-                        candidates[-1]["allow_completed"] = False
+                    add_tag_candidate(run.tags, allow_completed=False)
             except Exception as exc:
                 self.logger.debug(f"Could not query failed runs: {exc}")
 
@@ -820,6 +1098,44 @@ class SlurmPipesClient(PipesClient):
                     add_output_metadata(metadata, output_name=output_name)
         except Exception as e:
             self.logger.warning(f"Failed to collect metrics: {e}")
+
+    def _emit_session_metadata(
+        self, step_result: SlurmStepExecutionResult, context: Any
+    ) -> None:
+        """Attach allocation metadata for a step executed inside a shared allocation."""
+        add_output_metadata = getattr(context, "add_output_metadata", None)
+        if not callable(add_output_metadata):
+            return
+
+        metadata = {
+            "slurm_job_id": step_result.job_id,
+            "slurm_allocation_job_id": step_result.job_id,
+            "slurm_step_stdout_path": step_result.stdout_path,
+            "slurm_step_stderr_path": step_result.stderr_path,
+        }
+
+        output_names: list[str] = []
+        if getattr(context, "op_execution_context", None):
+            nested = getattr(
+                context.op_execution_context,
+                "selected_output_names",
+                None,
+            )
+            if nested:
+                output_names = [name for name in nested if name]
+
+        if not output_names:
+            selected = getattr(context, "selected_output_names", None)
+            if selected:
+                output_names = [name for name in selected if name]
+
+        if not output_names:
+            add_output_metadata(metadata)
+        elif len(output_names) == 1:
+            add_output_metadata(metadata, output_name=output_names[0])
+        else:
+            for output_name in output_names:
+                add_output_metadata(metadata, output_name=output_name)
 
     @staticmethod
     def _parse_slurm_exit_code(exit_code: str) -> tuple[int, int]:
@@ -1160,6 +1476,256 @@ class SlurmPipesClient(PipesClient):
             self.logger.debug(f"Could not compute environment cache key: {exc}")
             return None
 
+    def _extract_inject_patterns_from_command(self, pack_cmd: list[str]) -> list[str]:
+        """Extract pixi-pack --inject values from a shell command."""
+        patterns: list[str] = []
+        i = 0
+        while i < len(pack_cmd):
+            arg = pack_cmd[i]
+            if arg == "--inject" and i + 1 < len(pack_cmd):
+                patterns.append(pack_cmd[i + 1])
+                i += 2
+            elif arg.startswith("--inject="):
+                patterns.append(arg[len("--inject=") :])
+                i += 1
+            else:
+                i += 1
+        return patterns
+
+    def _extract_pixi_task_names(self, pack_cmd: list[str]) -> list[str]:
+        """Return pixi task names invoked by commands like ``pixi run pack``."""
+        if (
+            len(pack_cmd) < 3
+            or Path(pack_cmd[0]).name != "pixi"
+            or pack_cmd[1] != "run"
+        ):
+            return []
+
+        task_names: list[str] = []
+        i = 2
+        options_with_values = {"-e", "--environment", "--manifest-path"}
+        while i < len(pack_cmd):
+            arg = pack_cmd[i]
+            if arg == "--":
+                if i + 1 < len(pack_cmd):
+                    task_names.append(pack_cmd[i + 1])
+                break
+            if arg in options_with_values:
+                i += 2
+                continue
+            if arg.startswith("-"):
+                i += 1
+                continue
+            task_names.append(arg)
+            break
+        return task_names
+
+    def _load_pixi_task_command(
+        self, task_name: str, project_dir: Path
+    ) -> Optional[list[str]]:
+        """Load a task command from the local pixi/pyproject manifest if present."""
+        manifest = project_dir / "pixi.toml"
+        if not manifest.exists():
+            manifest = project_dir / "pyproject.toml"
+        if not manifest.exists():
+            return None
+
+        try:
+            data = tomllib.loads(manifest.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            self.logger.debug(f"Could not read pixi task {task_name!r}: {exc}")
+            return None
+
+        tasks = data.get("tasks")
+        if tasks is None:
+            tasks = data.get("tool", {}).get("pixi", {}).get("tasks", {})
+        task = tasks.get(task_name) if isinstance(tasks, dict) else None
+        if task is None:
+            return None
+        if isinstance(task, str):
+            return shlex.split(task)
+        if isinstance(task, dict) and isinstance(task.get("cmd"), str):
+            return shlex.split(task["cmd"])
+        return None
+
+    def _remote_pack_input_files(
+        self, pack_cmds: list[list[str]], project_dir: Path
+    ) -> list[tuple[Path, str]]:
+        """Return local files to stage for remote packing.
+
+        The staged set is intentionally small: manifests, lockfiles, pack helper
+        scripts, selected cache source globs, and already-built inject artifacts.
+        Payload scripts and per-run extra files are handled by the normal ad hoc
+        upload path, so script/config edits do not require re-shipping the env.
+        """
+        files: dict[str, Path] = {}
+        workspace_root = _local_pack_workspace_root(project_dir)
+
+        def add_file(path: Path) -> None:
+            if not path.is_file():
+                return
+            resolved = path.resolve()
+            try:
+                resolved.relative_to(workspace_root)
+            except ValueError as exc:
+                raise ValueError(
+                    "Remote packing input file is outside the local workspace "
+                    f"root {workspace_root}: {resolved}"
+                ) from exc
+
+            try:
+                relative = resolved.relative_to(project_dir.resolve())
+            except ValueError:
+                relative = Path(os.path.relpath(resolved, project_dir.resolve()))
+            files[relative.as_posix()] = resolved
+
+        for name in ("pyproject.toml", "pixi.toml", "pixi.lock"):
+            add_file(project_dir / name)
+
+        patterns: list[str] = []
+        for pack_cmd in pack_cmds:
+            patterns.extend(self._extract_inject_patterns_from_command(pack_cmd))
+            for task_name in self._extract_pixi_task_names(pack_cmd):
+                if task_cmd := self._load_pixi_task_command(
+                    task_name, project_dir=project_dir
+                ):
+                    patterns.extend(
+                        self._extract_inject_patterns_from_command(task_cmd)
+                    )
+            for arg in pack_cmd:
+                if arg.endswith("scripts/pack_environment.py"):
+                    add_file(project_dir / arg)
+
+        if self.cache_inject_globs:
+            patterns.extend(self.cache_inject_globs)
+
+        missing_patterns: list[str] = []
+        for pattern in patterns:
+            matches = [
+                Path(match)
+                for match in glob.glob(str(project_dir / pattern), recursive=True)
+                if Path(match).is_file()
+            ]
+            if not matches:
+                missing_patterns.append(pattern)
+                continue
+            for match in matches:
+                add_file(Path(match))
+
+        if missing_patterns:
+            missing = ", ".join(sorted(set(missing_patterns)))
+            raise FileNotFoundError(
+                "Remote packing input pattern(s) did not match any files: "
+                f"{missing}. Build the inject artifacts first or update the "
+                "pack/cache_inject_globs configuration."
+            )
+
+        return sorted((path, relative) for relative, path in files.items())
+
+    def _stage_remote_pack_workspace(
+        self,
+        ssh_pool: SSHConnectionPool,
+        remote_project_dir: str,
+        pack_cmds: list[list[str]],
+    ) -> None:
+        """Upload the small set of files needed to run pixi-pack remotely."""
+        project_dir = Path.cwd()
+        files = self._remote_pack_input_files(pack_cmds, project_dir=project_dir)
+        if not files:
+            raise RuntimeError("Remote packing could not find any local pack inputs")
+        remote_pack_root = posixpath.dirname(remote_project_dir)
+
+        self.logger.info(
+            "Staging %s small pack input file(s) on the Slurm edge node", len(files)
+        )
+        ssh_pool.run(f"mkdir -p {shlex.quote(remote_project_dir)}")
+        for local_path, relative_path in files:
+            remote_path = _remote_join_under_root(
+                root=remote_pack_root,
+                base=remote_project_dir,
+                relative_path=relative_path,
+            )
+            ssh_pool.run(f"mkdir -p {shlex.quote(posixpath.dirname(remote_path))}")
+            ssh_pool.upload_file(str(local_path), remote_path)
+
+    def _pack_environment_on_remote(
+        self,
+        ssh_pool: SSHConnectionPool,
+        env_base_dir: str,
+        env_dir: str,
+        pack_cmd: list[str],
+        env_overrides: dict[str, str],
+    ) -> str:
+        """Run pixi-pack on the edge node and extract into the shared env cache."""
+        token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        remote_project_dir = f"{env_base_dir}/pack-work/{token}/project"
+        self._stage_remote_pack_workspace(
+            ssh_pool=ssh_pool,
+            remote_project_dir=remote_project_dir,
+            pack_cmds=[pack_cmd],
+        )
+
+        activation_script = f"{env_base_dir}/activate.sh"
+        python_bin = f"{env_dir}/bin/python"
+        lock_file = f"{env_base_dir}/.remote-pack.lock"
+        env_prefix = " ".join(
+            f"{key}={shlex.quote(value)}"
+            for key, value in sorted(env_overrides.items())
+        )
+        command = f"{env_prefix} {shlex.join(pack_cmd)}".strip()
+        project_dir_quoted = shlex.quote(remote_project_dir)
+        env_base_quoted = shlex.quote(env_base_dir)
+        env_dir_quoted = shlex.quote(env_dir)
+        activation_quoted = shlex.quote(activation_script)
+        python_quoted = shlex.quote(python_bin)
+        pack_script_quoted = f"{project_dir_quoted}/$pack_file"
+
+        inner = f"""
+set -euo pipefail
+if [ -f {activation_quoted} ] && [ -x {python_quoted} ]; then
+  rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
+  exit 0
+fi
+mkdir -p {env_dir_quoted}
+cd {project_dir_quoted}
+{command}
+pack_file="$(ls -t environment.sh environment-*.sh *.tar.bz2 2>/dev/null | head -n 1 || true)"
+if [ -z "$pack_file" ]; then
+  echo "Remote pixi-pack completed but no environment.sh/environment-*.sh/*.tar.bz2 was found" >&2
+  exit 1
+fi
+case "$pack_file" in
+  *.sh)
+    chmod +x "$pack_file"
+    cd {env_base_quoted}
+    {pack_script_quoted}
+    ;;
+  *)
+    echo "Remote pack produced $pack_file; only self-extracting .sh packs are supported by dagster-slurm" >&2
+    exit 1
+    ;;
+esac
+rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
+"""
+        pack_cmd_remote = (
+            f"mkdir -p {env_base_quoted} && "
+            f"flock {shlex.quote(lock_file)} bash -c {shlex.quote(inner)}"
+        )
+        self.logger.info("Packing environment on Slurm edge node with pixi...")
+        try:
+            output = ssh_pool.run(pack_cmd_remote, timeout=self.remote_pack_timeout)
+            self.logger.debug(f"Remote pack output:\n{output}")
+        except Exception as exc:
+            raise RuntimeError(
+                "Remote environment packing failed. Ensure pixi/pixi-pack are "
+                "available on the edge node and the staged inject artifacts exist."
+            ) from exc
+
+        verify_cmd = f"test -f {activation_quoted} && test -x {python_quoted}"
+        ssh_pool.run(verify_cmd)
+        self.logger.info("Remote-packed environment is ready")
+        return activation_script
+
     def _cached_env_ready(
         self,
         ssh_pool: SSHConnectionPool,
@@ -1168,7 +1734,9 @@ class SlurmPipesClient(PipesClient):
     ) -> bool:
         """Check if a cached environment is already present on the remote host."""
         try:
-            ssh_pool.run(f"test -f {activation_script} && test -f {python_executable}")
+            activation_quoted = shlex.quote(activation_script)
+            python_quoted = shlex.quote(python_executable)
+            ssh_pool.run(f"test -f {activation_quoted} && test -x {python_quoted}")
             return True
         except Exception:
             return False
@@ -1254,6 +1822,31 @@ class SlurmPipesClient(PipesClient):
             self.logger.info("No cache key available, packing environment...")
         else:
             self.logger.info(f"Cache miss for {cache_key}, packing environment...")
+
+        if self.pack_on_remote:
+            self.logger.info(
+                "Remote pack mode enabled: packaging base environment on the edge node"
+            )
+            self.logger.debug(f"Preparing remote environment directory: {env_dir}")
+            ssh_pool.run(f"mkdir -p {shlex.quote(env_dir)}")
+            try:
+                activation_script = self._pack_environment_on_remote(
+                    ssh_pool=ssh_pool,
+                    env_base_dir=env_base_dir,
+                    env_dir=env_dir,
+                    pack_cmd=pack_cmd_for_cache,
+                    env_overrides=pack_env_overrides,
+                )
+                return activation_script, python_executable
+            except Exception as exc:
+                self.logger.warning(
+                    "Remote environment packing failed; falling back to local "
+                    "packaging and upload. Remote packing requires pixi, pixi-pack, "
+                    "and access to the required package repositories on the edge "
+                    "node. Disable pack_on_remote for air-gapped clusters. Error: %s",
+                    exc,
+                )
+
         self.logger.info("Packing environment with pixi...")
         pack_file = pack_environment_with_pixi(
             pack_cmd=pack_cmd,
@@ -1348,7 +1941,10 @@ class SlurmPipesClient(PipesClient):
 
         # Verify extraction
         activation_script = f"{run_dir}/activate.sh"
-        verify_cmd = f"test -f {activation_script} && test -f {extract_dir}/bin/python"
+        verify_cmd = (
+            f"test -f {shlex.quote(activation_script)} && "
+            f"test -x {shlex.quote(f'{extract_dir}/bin/python')}"
+        )
 
         try:
             ssh_pool.run(verify_cmd)
@@ -1382,17 +1978,15 @@ class SlurmPipesClient(PipesClient):
         context: AssetExecutionContext,
         run_dir: str,
         ssh_pool: SSHConnectionPool,
-    ) -> int:
+    ) -> SlurmStepExecutionResult:
         """Execute in shared Slurm allocation with log streaming."""
         if not self.session:
             raise RuntimeError("Session resource not provided")
         if not self.session._initialized:
             raise RuntimeError("Session not initialized")
 
-        # For session mode, we use srun which doesn't create separate log files
-        # Logs go directly to the session allocation's output
-        # The session resource handles execution
-        # Handle multi-assets: use selected_asset_keys joined, or single asset_key
+        # Handle multi-assets: use selected_asset_keys joined, or single asset_key.
+        # The session resource keeps stdout/stderr files distinct per srun step.
         selected_keys = context.selected_asset_keys
         asset_key_str = (
             "/".join(str(k) for k in sorted(selected_keys))
@@ -1402,6 +1996,7 @@ class SlurmPipesClient(PipesClient):
         return self.session.execute_in_session(
             execution_plan=execution_plan,
             asset_key=asset_key_str,
+            run_dir=run_dir,
         )
 
     def _execute_standalone(
@@ -1578,6 +2173,7 @@ class SlurmPipesClient(PipesClient):
         # Store reattach tags so a future run can find this job
         asset_key_str = self._get_asset_key_string(op_context)
         self._store_job_tags(op_context, job_id, run_dir, asset_key_str)
+        self._store_supervisor_heartbeat(op_context, force=True)
 
         # Query estimated start time for pending jobs
         self._log_estimated_start_time(job_id, ssh_pool)
@@ -1600,6 +2196,8 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         run_dir: str,
         job_id: int,
+        stdout_path: str | None = None,
+        stderr_path: str | None = None,
     ) -> None:
         """Emit stdout/stderr once if Pipes streaming produced no messages."""
 
@@ -1614,13 +2212,13 @@ class SlurmPipesClient(PipesClient):
             streamed_lines = {}
 
         log_paths = [
-            (f"{run_dir}/slurm-{job_id}.out", sys.stdout, "stdout"),
-            (f"{run_dir}/slurm-{job_id}.err", sys.stderr, "stderr"),
+            (stdout_path or f"{run_dir}/slurm-{job_id}.out", sys.stdout, "stdout"),
+            (stderr_path or f"{run_dir}/slurm-{job_id}.err", sys.stderr, "stderr"),
         ]
 
         for path, stream, label in log_paths:
             try:
-                content = ssh_pool.run(f"cat {path} 2>/dev/null || true")
+                content = ssh_pool.run(f"cat {shlex.quote(path)} 2>/dev/null || true")
                 if content.strip():
                     lines = content.splitlines()
                     forwarded = forwarded_lines.get(label, 0)
@@ -1923,6 +2521,8 @@ class SlurmPipesClient(PipesClient):
         try:
             while True:
                 try:
+                    self._store_supervisor_heartbeat(op_context)
+
                     # Check for overall timeout
                     if time.time() - start_time > poll_timeout:
                         raise RuntimeError(

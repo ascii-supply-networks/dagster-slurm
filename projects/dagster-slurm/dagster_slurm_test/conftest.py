@@ -26,6 +26,60 @@ from typing import Any, Dict
 import platform
 from loguru import logger
 
+DOCKER_SLURM_DEPLOYMENT_BASE_PATH = "/home/submitter/pipelines/deployments"
+DOCKER_SLURM_TEST_REMOTE_BASE = "/home/submitter/dagster_ci_runs"
+
+
+def _docker_slurm_env(key_path: Path | None = None) -> Dict[str, str]:
+    """Return a hermetic Slurm Docker environment for subprocess-based tests."""
+    env = {
+        "SLURM_EDGE_NODE_HOST": "127.0.0.1",
+        "SLURM_EDGE_NODE_PORT": "2223",
+        "SLURM_EDGE_NODE_USER": "submitter",
+        "SLURM_EDGE_NODE_PASSWORD": "submitter",
+        "SLURM_EDGE_NODE_KEY_PATH": "",
+        "SLURM_EDGE_NODE_JUMP_HOST": "",
+        "SLURM_EDGE_NODE_JUMP_USER": "",
+        "SLURM_EDGE_NODE_JUMP_PASSWORD": "",
+        "SLURM_EDGE_NODE_JUMP_KEY": "",
+        "SLURM_EDGE_NODE_OPTS_EXTRA": "",
+        "SLURM_DEPLOYMENT_BASE_PATH": DOCKER_SLURM_DEPLOYMENT_BASE_PATH,
+        "SLURM_SUPERCOMPUTER_SITE": "",
+        "SLURM_SUPERCOMPUTER_PARTITION": "",
+        "SLURM_SUPERCOMPUTER_QOS": "",
+        "SLURM_SUPERCOMPUTER_RESERVATION": "",
+        "SLURM_PACK_PLATFORM": "",
+        "PYTHON_DOTENV_DISABLED": "1",
+    }
+    if key_path is not None:
+        env["SLURM_EDGE_NODE_KEY_PATH"] = str(key_path)
+        env["SLURM_EDGE_NODE_PASSWORD"] = ""
+    return env
+
+
+def _prepare_docker_slurm_paths():
+    """Ensure shared Docker paths are writable by the submitter user."""
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "slurmctld",
+            "bash",
+            "-lc",
+            (
+                f"mkdir -p {DOCKER_SLURM_TEST_REMOTE_BASE} "
+                f"{DOCKER_SLURM_TEST_REMOTE_BASE}/runs "
+                f"{DOCKER_SLURM_TEST_REMOTE_BASE}/run_scope_markers "
+                f"{DOCKER_SLURM_DEPLOYMENT_BASE_PATH} && "
+                f"chown -R submitter:submitter {DOCKER_SLURM_TEST_REMOTE_BASE} "
+                f"{DOCKER_SLURM_DEPLOYMENT_BASE_PATH}"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
 
 @pytest.fixture
 def temp_dir():
@@ -115,7 +169,7 @@ def slurm_resource_for_testing() -> SlurmResource:
     return SlurmResource(
         ssh=ssh,
         queue=SlurmQueueConfig(partition="batch"),
-        remote_base="/home/submitter/dagster_ci_runs",
+        remote_base=DOCKER_SLURM_TEST_REMOTE_BASE,
     )
 
 
@@ -180,6 +234,7 @@ def slurm_cluster_ready():
             )
 
             if result.returncode == 0 and "idle" in result.stdout:
+                _prepare_docker_slurm_paths()
                 print("✅ SLURM cluster is ready!")
                 print(result.stdout)
                 return True
@@ -315,6 +370,12 @@ def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
     return key_path
 
 
+@pytest.fixture(scope="module")
+def docker_slurm_env(docker_ssh_key: Path) -> Dict[str, str]:
+    """Environment overrides that force example subprocesses onto Docker Slurm."""
+    return _docker_slurm_env(key_path=docker_ssh_key)
+
+
 @pytest.fixture(scope="session")
 def deployment_metadata_file(example_project_dir: Path) -> Path:
     """Get path to deployment metadata file."""
@@ -354,10 +415,9 @@ def _ensure_remote_deployment(
     deployment_path: str,
     example_project_dir: Path,
     prep_cmd: list[str],
+    prep_env: dict[str, str],
 ) -> str:
     """Verify the remote environment exists; recreate it if missing."""
-
-    pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
 
     def _check(path: str) -> bool:
         check_cmd = [
@@ -384,7 +444,7 @@ def _ensure_remote_deployment(
         cwd=example_project_dir,
         check=True,
         capture_output=True,
-        env=pixi_env,
+        env=prep_env,
     )
 
     with open(metadata_file) as f:
@@ -402,12 +462,16 @@ def _ensure_remote_deployment(
 
 
 @pytest.fixture
-def deployment_metadata(example_project_dir: Path) -> Dict[str, Any]:
+def deployment_metadata(
+    example_project_dir: Path,
+    docker_ssh_key: Path,
+) -> Dict[str, Any]:
     """Read deployment metadata for PRODUCTION_DOCKER mode."""
 
     metadata_file = example_project_dir / "deployment_metadata.json"
     prep_cmd = _detect_deploy_command(example_project_dir)
     pixi_env = {k: v for k, v in os.environ.items() if k != "PIXI_PROJECT_MANIFEST"}
+    pixi_env.update(_docker_slurm_env(key_path=docker_ssh_key))
 
     if not metadata_file.exists():
         subprocess.run(
@@ -424,7 +488,11 @@ def deployment_metadata(example_project_dir: Path) -> Dict[str, Any]:
     deployment_path = metadata.get("deployment_path")
     if deployment_path:
         new_path = _ensure_remote_deployment(
-            metadata_file, deployment_path, example_project_dir, prep_cmd
+            metadata_file,
+            deployment_path,
+            example_project_dir,
+            prep_cmd,
+            pixi_env,
         )
         if new_path != deployment_path:
             with open(metadata_file) as f:

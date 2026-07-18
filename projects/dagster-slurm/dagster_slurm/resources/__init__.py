@@ -1,6 +1,11 @@
 """Dagster resources for Slurm integration."""
 
-from .session import SlurmAllocation, SlurmSessionResource
+from .session import (
+    SlurmAllocation,
+    SlurmAllocationScope,
+    SlurmRunAllocationConfig,
+    SlurmSessionResource,
+)
 from .slurm import SlurmQueueConfig, SlurmResource
 from .ssh import SSHConnectionResource
 
@@ -11,4 +16,6 @@ __all__ = [
     "SlurmQueueConfig",
     "SlurmSessionResource",
     "SlurmAllocation",
+    "SlurmAllocationScope",
+    "SlurmRunAllocationConfig",
 ]

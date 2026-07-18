@@ -73,6 +73,24 @@ def test_ray_launcher_local_mode():
     assert 'exit "$exit_code"' in script
 
 
+def test_ray_launcher_seeded_local_ports_use_high_range():
+    """RAY_PORT_SEED should avoid low Ray default ports on shared CI hosts."""
+    launcher = RayLauncher(num_gpus_per_node=0, dashboard_port=8265)
+
+    plan = launcher.prepare_execution(
+        payload_path="/path/to/script.py",
+        python_executable="python3",
+        working_dir="/tmp/test",
+        activation_script="env/activate.sh",
+        pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
+    )
+
+    script = "\n".join(plan.payload)
+    assert "port=$(( 20000 + off ))" in script
+    assert "dash_port=$(( 40000 + off ))" in script
+    assert "port=$(( 6379 + off ))" in script
+
+
 def test_ray_launcher_cluster_standalone_mode():
     """
     Tests the RayLauncher's ability to generate a script for a standalone,

@@ -13,24 +13,6 @@ import pytest
 from .test_utils import run_dg_command, assert_materialization_success
 
 
-@pytest.fixture(scope="module")
-def docker_slurm_env(docker_ssh_key: Path) -> Dict[str, str]:
-    return {
-        "SLURM_EDGE_NODE_HOST": os.environ.get("SLURM_EDGE_NODE_HOST", "127.0.0.1"),
-        "SLURM_EDGE_NODE_PORT": os.environ.get("SLURM_EDGE_NODE_PORT", "2223"),
-        "SLURM_EDGE_NODE_USER": os.environ.get("SLURM_EDGE_NODE_USER", "submitter"),
-        "SLURM_EDGE_NODE_PASSWORD": os.environ.get(
-            "SLURM_EDGE_NODE_PASSWORD", "submitter"
-        ),
-        "SLURM_EDGE_NODE_KEY_PATH": str(docker_ssh_key),
-        "SLURM_EDGE_NODE_JUMP_HOST": os.environ.get("SLURM_EDGE_NODE_JUMP_HOST", ""),
-        "SLURM_EDGE_NODE_JUMP_USER": os.environ.get("SLURM_EDGE_NODE_JUMP_USER", ""),
-        "SLURM_EDGE_NODE_JUMP_PASSWORD": os.environ.get(
-            "SLURM_EDGE_NODE_JUMP_PASSWORD", ""
-        ),
-    }
-
-
 pytestmark = pytest.mark.needs_slurm_docker
 
 LIST_DEFS_TIMEOUT = 120
@@ -54,7 +36,7 @@ class TestDevelopmentMode:
                 "dev",
                 "dg",
                 "--target-path",
-                "examples",
+                ".",
                 "list",
                 "defs",
             ],
@@ -85,13 +67,20 @@ class TestDevelopmentMode:
         # Check for local execution indicators
         assert "LocalPipesClient" in result.stderr or "local" in result.stderr.lower()
 
+    @pytest.mark.slow
     def test_ray_assets_development(self, example_project_dir: Path):
-        """Test Ray assets in local mode (single-node)."""
+        """Test Ray assets in host-local mode (single-node)."""
         result = run_dg_command(
             example_project_dir,
             deployment="development",
             assets="distributed_training,distributed_inference",
-            timeout=180,
+            # The Docker integration job publishes 6379-6479 and 8265-8365
+            # from the Slurm containers. Keep local-mode Ray outside those
+            # host ranges even when CI sets a global RAY_PORT_SEED.
+            env_overrides={"RAY_PORT_SEED": "500"},
+            # Local Ray startup/teardown is slow on macOS under the Docker
+            # integration load; keep this above the normal ~100s runtime.
+            timeout=300,
         )
 
         assert_materialization_success(
@@ -139,7 +128,7 @@ class TestStagingDockerMode:
                 "dev",
                 "dg",
                 "--target-path",
-                "examples",
+                ".",
                 "list",
                 "defs",
             ],

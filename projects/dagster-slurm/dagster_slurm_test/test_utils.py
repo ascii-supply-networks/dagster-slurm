@@ -1,14 +1,37 @@
 import os
+import signal
 import subprocess
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate a subprocess and any grandchildren it spawned."""
+    if process.poll() is not None:
+        return
+
+    try:
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=10)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait(timeout=10)
 
 
 def run_dg_command(
     example_project_dir: Path,
     deployment: str,
     assets: str,
-    env_overrides: Dict[str, str] = {},
+    env_overrides: Optional[Dict[str, str]] = None,
     timeout: int = 300,
 ) -> subprocess.CompletedProcess:
     """Run a `dg launch` command with specified deployment mode.
@@ -26,7 +49,7 @@ def run_dg_command(
     env = os.environ.copy()
     env["DAGSTER_DEPLOYMENT"] = deployment
 
-    if env_overrides:
+    if env_overrides is not None:
         env.update(env_overrides)
 
     cmd = [
@@ -36,7 +59,7 @@ def run_dg_command(
         "dev",
         "dg",
         "--target-path",
-        "examples",
+        ".",
         "launch",
         "--assets",
         assets,
@@ -46,13 +69,37 @@ def run_dg_command(
     print(f"   Deployment: {deployment}")
     print(f"   Assets: {assets}")
 
-    result = subprocess.run(
+    process = subprocess.Popen(
         cmd,
         cwd=example_project_dir,
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process)
+        stdout, stderr = process.communicate()
+        print("\n--- STDOUT (timeout) ---")
+        print(stdout)
+        if stderr:
+            print("\n--- STDERR (timeout) ---")
+            print(stderr)
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+
+    result = subprocess.CompletedProcess(
+        args=cmd,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
 
     print("\n--- STDOUT ---")

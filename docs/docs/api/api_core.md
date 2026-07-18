@@ -166,7 +166,11 @@ Get appropriate Pipes client for this mode.
 
 #### pack_platform *: `Optional`[`str`]*
 
+#### pack_on_remote *: `bool`*
+
 #### pre_deployed_env_path *: `Optional`[`str`]*
+
+#### remote_pack_timeout *: `int`*
 
 #### register_cluster(cluster_address, framework, cpus, gpus, memory_gb)
 
@@ -616,7 +620,7 @@ Check if allocation and nodes are healthy.
 - **Return type:**
   `bool`
 
-### *class* dagster_slurm.SlurmPipesClient(slurm_resource, launcher, session_resource=None, cleanup_on_failure=True, debug_mode=False, auto_detect_platform=True, pack_platform=None, pre_deployed_env_path=None, cache_inject_globs=None)
+### *class* dagster_slurm.SlurmPipesClient(slurm_resource, launcher, session_resource=None, cleanup_on_failure=True, debug_mode=False, auto_detect_platform=True, pack_platform=None, pre_deployed_env_path=None, cache_inject_globs=None, pack_on_remote=False, remote_pack_timeout=600)
 
 Bases: `PipesClient`
 
@@ -645,6 +649,8 @@ Works in two modes:
   - **pack_platform** (`Optional`[`str`])
   - **pre_deployed_env_path** (`Optional`[`str`])
   - **cache_inject_globs** (`Optional`[`list`[`str`]])
+  - **pack_on_remote** (`bool`)
+  - **remote_pack_timeout** (`int`)
 
 #### run(, context, payload_path, extra_env=None, extras=None, use_session=False, extra_slurm_opts=None, force_env_push=None, skip_payload_upload=None, remote_payload_path=None, pack_cmd_override=None, pre_deployed_env_path_override=None, extra_files=None, poll_timeout=3600, \*\*kwargs)
 
