@@ -9,12 +9,26 @@
     if builtins.isAttrs staxPackageVersion && (staxPackageVersion.workspace or false)
     then staxCargoToml.workspace.package.version
     else staxPackageVersion;
+  pythonVersionEnv = builtins.getEnv "DEVENV_PYTHON_VERSION";
+  pythonVersion =
+    if pythonVersionEnv == ""
+    then "3.10"
+    else pythonVersionEnv;
+  pythonPackages = {
+    "3.10" = inputs.nixpkgs-python.packages.${pkgs.stdenv.hostPlatform.system}."3.10";
+    "3.11" = pkgs.python311;
+    "3.12" = pkgs.python312;
+    "3.13" = pkgs.python313;
+    "3.14" = pkgs.python314;
+  };
+  selectedPython = pythonPackages.${pythonVersion} or (throw "Unsupported Python version: ${pythonVersion}");
+
   pixi = pkgs.callPackage ./nix/pixi-0_73_0.nix {};
   bun = pkgs.callPackage ./nix/bun-1_3_14.nix {};
 in {
   languages.python = {
     enable = true;
-    package = pkgs.python312;
+    package = selectedPython;
   };
 
   dotenv.enable = true;

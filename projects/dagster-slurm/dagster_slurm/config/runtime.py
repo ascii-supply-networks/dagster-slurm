@@ -1,11 +1,11 @@
-from enum import StrEnum
+from enum import Enum
 from typing import List, Optional
 
 import dagster as dg
 from pydantic import Field
 
 
-class RuntimeVariant(StrEnum):
+class RuntimeVariant(str, Enum):
     """Defines the runtime."""
 
     SHELL = "shell_script"
