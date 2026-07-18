@@ -61,21 +61,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7.0.0
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: "0.11.29"
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.0
 
-      - uses: prefix-dev/setup-pixi@v0.10.0
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v17
         with:
-          pixi-version: v0.73.0
-          cache: true
-          frozen: true
+          name: devenv
 
-      - run: pixi install -e build && pixi run -e build --frozen lint
+      - name: Install devenv
+        run: nix profile install github:cachix/devenv/v2.1.2
+
+      - run: devenv shell -- pixi install -e build --frozen
+
+      - run: devenv shell -- pixi run -e build --frozen lint
 
       - name: Run unit tests without real SLURM
-        run: pixi run -e build --frozen testpixi
+        run: devenv shell -- pixi run -e build --frozen testpixi
 
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v4.4.0
@@ -195,17 +197,16 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          cd examples
-          if ! pixi run deploy-prod-docker; then
+          if ! devenv shell -- bash -lc 'cd examples && pixi run deploy-prod-docker'; then
             echo "Deploy failed; dumping pack debug output..."
-            pixi run -e opstooling --frozen python scripts/pack_environment.py --env packaged-cluster --platform auto --build-missing --debug || true
+            devenv shell -- bash -lc 'cd examples && pixi run -e opstooling --frozen python scripts/pack_environment.py --env packaged-cluster --platform auto --build-missing --debug' || true
             echo "Listing examples/ and dist/ for context..."
-            ls -la
+            ls -la examples
+            ls -la examples/dist || true
+            ls -la examples/projects || true
+            ls -la examples/projects/*/dist || true
+            ls -la examples/projects/*/dist/*.conda || true
             ls -la dist || true
-            ls -la projects || true
-            ls -la projects/*/dist || true
-            ls -la projects/*/dist/*.conda || true
-            ls -la ../dist || true
             exit 1
           fi
 
@@ -221,7 +222,7 @@ jobs:
           # (IP resolution, temp dirs, multi-node detection) that break local-mode tests.
           # Incorporates run_attempt so re-runs get different ports.
           RAY_PORT_SEED: ${{ github.run_id }}${{ github.run_attempt }}
-        run: pixi run -e build --frozen testpixi-integration
+        run: devenv shell -- pixi run -e build --frozen testpixi-integration
 
       - name: Stop SLURM Cluster and Clean Up
         if: always()
@@ -230,7 +231,7 @@ jobs:
           docker compose logs
           docker compose down -v
 
-      - run: pixi run -e build --frozen build-lib
+      - run: devenv shell -- pixi run -e build --frozen build-lib
 
   prerelease:
     name: Create pre-release
@@ -257,18 +258,18 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.generate_token.outputs.token }}
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: "0.11.29"
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.0
 
-      - uses: prefix-dev/setup-pixi@v0.10.0
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v17
         with:
-          pixi-version: v0.73.0
-          cache: true
-          frozen: true
+          name: devenv
 
-      - run: pixi run -e build --frozen sync
+      - name: Install devenv
+        run: nix profile install github:cachix/devenv/v2.1.2
+
+      - run: devenv shell -- pixi run -e build --frozen sync
 
       - name: Configure Git
         run: |
@@ -282,7 +283,7 @@ jobs:
           set -e
 
           # Create pre-release version
-          uv run semantic-release version --prerelease
+          devenv shell -- uv run semantic-release version --prerelease
 
           if ! git diff --staged --quiet; then
             git commit -m "chore: additional changes [skip ci]"
@@ -293,7 +294,7 @@ jobs:
           git push --tags
 
           # Create GitHub pre-release
-          uv run semantic-release publish
+          devenv shell -- uv run semantic-release publish
 
       - name: Publish pre-release to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@v1.14.0
@@ -364,18 +365,18 @@ jobs:
             exit 1
           fi
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: "0.11.29"
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.0
 
-      - uses: prefix-dev/setup-pixi@v0.10.0
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v17
         with:
-          pixi-version: v0.73.0
-          cache: true
-          frozen: true
+          name: devenv
 
-      - run: pixi run -e build --frozen sync
+      - name: Install devenv
+        run: nix profile install github:cachix/devenv/v2.1.2
+
+      - run: devenv shell -- pixi run -e build --frozen sync
 
       - name: Configure Git
         run: |
@@ -388,7 +389,7 @@ jobs:
         run: |
           set -e
 
-          uv run semantic-release version
+          devenv shell -- uv run semantic-release version
 
           if ! git diff --staged --quiet; then
             git commit -m "chore: additional changes [skip ci]"
@@ -396,7 +397,7 @@ jobs:
 
           git push origin main
           git push --tags
-          uv run semantic-release publish
+          devenv shell -- uv run semantic-release publish
 
       - name: Publish to PyPI (Trusted Publishing)
         if: github.event.inputs.release_type != 'prerelease'

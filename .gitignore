@@ -1271,3 +1271,4 @@ docs/static/slides-multimodal/
 slides/dist-multimodal/
 slides/dist-scipy2026/
 docs/static/slides-scipy2026/
+.devenv/
