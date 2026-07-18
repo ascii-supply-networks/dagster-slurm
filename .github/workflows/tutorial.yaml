@@ -41,16 +41,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7.0.0
 
-      - uses: prefix-dev/setup-pixi@v0.10.0
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31.11.0
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v17
         with:
-          pixi-version: v0.73.0
-          cache: true
-          frozen: true
-      - run: cd examples && pixi run -e dev --frozen lint
+          name: devenv
 
-      - run: cd examples && pixi run -e dev --frozen test
+      - name: Install devenv
+        run: nix profile install github:cachix/devenv/v2.1.2
 
-      - run: cd examples && pixi run pack
+      - run: devenv shell -- bash -lc 'cd examples && pixi run -e dev --frozen lint'
+
+      - run: devenv shell -- bash -lc 'cd examples && pixi run -e dev --frozen test'
+
+      - run: devenv shell -- bash -lc 'cd examples && pixi run pack'
 
       - name: Store Packed Environment as Artifact
         if: github.ref == 'refs/heads/main'

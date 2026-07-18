@@ -1,0 +1,64 @@
+{
+  "nodes": {
+    "devenv": {
+      "locked": {
+        "dir": "src/modules",
+        "lastModified": 1778705847,
+        "narHash": "sha256-EQnZCy7r4VMO6KDoytxHBa0mFbM1D9g1kaDfs/s0YZA=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "ea3d94ac9d6bf6a1313773170122ca4e2ef5a0be",
+        "type": "github"
+      },
+      "original": {
+        "dir": "src/modules",
+        "owner": "cachix",
+        "ref": "v2.1.2",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1784282293,
+        "narHash": "sha256-IpX7tmVJi9seHg5M4Wuexy78bQDlbntVk1HcT9kFts4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a47c123a609287a012dfc44d281de2dd4ed13394",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "devenv": "devenv",
+        "nixpkgs": "nixpkgs",
+        "stax-src": "stax-src"
+      }
+    },
+    "stax-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784216819,
+        "narHash": "sha256-P1pKNDwErHQHyggzwWNxFu2Op7jRkTvHXaSdF2/b2Wo=",
+        "owner": "cesarferreira",
+        "repo": "stax",
+        "rev": "40aacb0d7135b7fb3864b8fdc24b7b7ea14efe2e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cesarferreira",
+        "ref": "v0.96.7",
+        "repo": "stax",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
