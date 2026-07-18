@@ -13,6 +13,7 @@ from dagster_slurm_example.defs.rapids_topics.topic_assets import (
     _merged_slurm_opts,
     _run_overrides,
 )
+from dagster_slurm_example_hpc_workload.rapids_topics import prepare_corpus
 from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
     parse_sgml_docs,
     verify_sha256,
@@ -22,6 +23,8 @@ from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import (
     cluster_labels,
     inline_plot_metadata,
 )
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.feature_extraction.text import CountVectorizer
 
 SGML_FIXTURE = """
 <REUTERS TOPICS="YES" NEWID="1">
@@ -54,6 +57,42 @@ def test_parser_keeps_only_dated_docs_with_bodies():
     assert "&#3;" not in docs[0]["body"]
     # Untitled stories survive with an empty title, not a crash.
     assert docs[1]["title"] == ""
+
+
+def test_sklearn_lda_produces_normalized_topic_vectors():
+    vectorizer = CountVectorizer()
+    document_term_matrix = vectorizer.fit_transform(
+        ["oil market", "oil price", "wheat market"]
+    )
+    model = LatentDirichletAllocation(n_components=2, max_iter=1, random_state=0).fit(
+        document_term_matrix
+    )
+    topic_term = model.components_.astype("float32")
+    topic_term /= topic_term.sum(axis=1, keepdims=True)
+
+    assert topic_term.shape == (2, 4)
+    assert all(abs(float(row.sum()) - 1.0) < 1e-6 for row in topic_term)
+
+
+def test_prepare_corpus_serializes_pruned_vocabulary(monkeypatch, tmp_path):
+    docs = [
+        {"month": "1987-01", "title": "", "body": f"common topic{i % 3}"}
+        for i in range(15)
+    ]
+    context = SimpleNamespace(
+        log=SimpleNamespace(info=lambda _message: None),
+        report_asset_materialization=lambda **_kwargs: None,
+    )
+    monkeypatch.setenv("RAPIDS_TOPICS_BASE", str(tmp_path))
+    monkeypatch.setattr(prepare_corpus.PipesContext, "get", lambda: context)
+    monkeypatch.setattr(prepare_corpus, "_fetch_tarball", lambda *_args: tmp_path)
+    monkeypatch.setattr(prepare_corpus, "_load_docs", lambda *_args: docs)
+
+    prepare_corpus.main()
+
+    assert (tmp_path / "corpus" / "vocabulary.json").read_text(
+        encoding="utf-8"
+    ) == '{"topic0": 0, "topic1": 1, "topic2": 2}'
 
 
 def test_sha256_verification_accepts_match_and_rejects_mismatch(tmp_path):
