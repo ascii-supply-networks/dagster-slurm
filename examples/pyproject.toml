@@ -6,7 +6,7 @@ authors = [
   { name = "Georg Heiler", email = "georg.heiler@ascii.ac.at" },
   { name = "Hernan Picatto", email = "hernan.picatto@ascii.ac.at" },
 ]
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.10,<3.15"
 
 [tool.pixi.workspace]
 # not supported  "win-64", due to pip ray
@@ -36,6 +36,7 @@ workload-topic-modeling = { features = ["submission", "cluster", "cluster-prod",
 packaged-cluster-rapids = { features = ["submission", "cluster-rapids"], solve-group = "dagster-slurm-example-cluster-rapids" }
 
 [tool.pixi.feature.ci-basics.dependencies]
+python = "3.10.*"
 dprint = ">=0.50.0,<1"
 pytest = ">=8.3.4,<9"
 pytest-mock = ">=3.14.0,<4"
@@ -125,12 +126,9 @@ age = "~=1.2.1"
 
 [tool.pixi.feature.opstooling.dependencies]
 git = "~=2.49"
-pixi-pack = ">=0.7.8,<1"
-# The per-asset ``slurm_pack_cmd`` metadata runs
-# ``pixi run -e opstooling ... python scripts/pack_environment.py``;
-# without a python here that only works when the parent process happens
-# to have one on PATH (e.g. dagster launched from the dev env).
-python = "3.12.*"
+pixi-pack = ">=0.7.2,<1"
+uv = ">=0.11.29,<1"
+python = ">=3.10"
 
 [tool.pixi.feature.dagster-scaffolding.dependencies]
 yarn = "~=4.9.2"

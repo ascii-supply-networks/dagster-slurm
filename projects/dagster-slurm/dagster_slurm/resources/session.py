@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from typing import Any, List, Literal, Optional, Set
 import uuid
 
@@ -136,7 +136,7 @@ def _tail_remote_file_for_error(
     return output.rstrip() or "<empty>"
 
 
-class SlurmAllocationScope(StrEnum):
+class SlurmAllocationScope(str, Enum):
     """Controls how Slurm allocations are scoped for ``mode="slurm"``."""
 
     ASSET = "asset"

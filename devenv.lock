@@ -1,0 +1,102 @@
+{
+  "nodes": {
+    "devenv": {
+      "locked": {
+        "dir": "src/modules",
+        "lastModified": 1778705847,
+        "narHash": "sha256-EQnZCy7r4VMO6KDoytxHBa0mFbM1D9g1kaDfs/s0YZA=",
+        "owner": "cachix",
+        "repo": "devenv",
+        "rev": "ea3d94ac9d6bf6a1313773170122ca4e2ef5a0be",
+        "type": "github"
+      },
+      "original": {
+        "dir": "src/modules",
+        "owner": "cachix",
+        "ref": "v2.1.2",
+        "repo": "devenv",
+        "type": "github"
+      }
+    },
+    "flake-compat": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1784282293,
+        "narHash": "sha256-IpX7tmVJi9seHg5M4Wuexy78bQDlbntVk1HcT9kFts4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a47c123a609287a012dfc44d281de2dd4ed13394",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-python": {
+      "inputs": {
+        "flake-compat": "flake-compat",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1782825674,
+        "narHash": "sha256-e6yzmOYb7N64k5g4bvIvA21TIzhUHjGKaWbKQxBt8bg=",
+        "owner": "cachix",
+        "repo": "nixpkgs-python",
+        "rev": "2731df9c2ce7a05e079416f3580bacf1a2bade09",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cachix",
+        "repo": "nixpkgs-python",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "devenv": "devenv",
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-python": "nixpkgs-python",
+        "stax-src": "stax-src"
+      }
+    },
+    "stax-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784348811,
+        "narHash": "sha256-0GNc1CJ/WCTNjaY1bXXxFJRT4j+0SbBFms6w7n8y7L0=",
+        "owner": "geoHeil",
+        "repo": "stax",
+        "rev": "90372b44939831911de551dc30cd9610854b3fef",
+        "type": "github"
+      },
+      "original": {
+        "owner": "geoHeil",
+        "repo": "stax",
+        "rev": "90372b44939831911de551dc30cd9610854b3fef",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

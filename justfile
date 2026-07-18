@@ -17,9 +17,9 @@ prek-install:
 
 # Update lockfiles in root/examples and refresh uv dependencies in the root project
 update:
-    pixi update
-    cd examples && pixi update
-    uv sync --all-packages --upgrade
+    pixi update --no-install
+    cd examples && pixi update --no-install
+    uv sync --all-packages --all-groups --upgrade
 
 # Delete local branches merged into main, with remote-gone branches, and prune remotes.
 # Safe mode: `just clean-branches`

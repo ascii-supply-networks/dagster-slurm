@@ -1,0 +1,39 @@
+name: Setup CI tools
+description: Install Nix, enable binary caches, and install pinned CI tools.
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31.11.0
+
+    - name: Enable Cachix
+      uses: cachix/cachix-action@v17
+      with:
+        name: devenv
+
+    - name: Setup Magic Nix Cache
+      uses: DeterminateSystems/magic-nix-cache-action@v14
+
+    - name: Cache uv downloads
+      uses: actions/cache@v6.1.0
+      with:
+        path: |
+          ~/.cache/uv
+          ~/.local/share/uv/python
+        key: uv-${{ runner.os }}-${{ env.DEVENV_PYTHON_VERSION }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'projects/**/pyproject.toml') }}
+        restore-keys: |
+          uv-${{ runner.os }}-${{ env.DEVENV_PYTHON_VERSION }}-
+          uv-${{ runner.os }}-
+
+    - name: Install CI tools
+      shell: bash
+      run: |
+        nixpkgs_rev="$(jq -r '.nodes.nixpkgs.locked.rev' devenv.lock)"
+        nix profile install \
+          "github:NixOS/nixpkgs/${nixpkgs_rev}#bun" \
+          "github:NixOS/nixpkgs/${nixpkgs_rev}#git" \
+          "github:NixOS/nixpkgs/${nixpkgs_rev}#just" \
+          "github:NixOS/nixpkgs/${nixpkgs_rev}#pixi" \
+          "github:NixOS/nixpkgs/${nixpkgs_rev}#uv"
+
+        uv --version

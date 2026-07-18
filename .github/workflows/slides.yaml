@@ -4,10 +4,20 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "slides/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "slides/**"
   workflow_dispatch:
 
@@ -17,8 +27,6 @@ concurrency:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   build:
@@ -26,13 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
 
-      - uses: prefix-dev/setup-pixi@v0.9.5
-        with:
-          pixi-version: v0.67.2
-          cache: true
-          frozen: true
+      - name: Setup CI tools
+        uses: ./.github/actions/setup-devenv
+
       # - run: pixi run -e docs --frozen slides-build
       - run: pixi run -e docs --frozen slides-export-pdf
       - run: pixi run -e docs --frozen slides-export-pdf-multimodal

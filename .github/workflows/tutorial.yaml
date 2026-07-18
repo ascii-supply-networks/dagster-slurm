@@ -4,12 +4,22 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
       - "examples/**"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "projects/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
       - "examples/**"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "projects/**"
   workflow_dispatch:
 
@@ -39,18 +49,16 @@ jobs:
     #       --health-retries 5
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
 
-      - uses: prefix-dev/setup-pixi@v0.9.4
-        with:
-          pixi-version: v0.72.1
-          cache: true
-          frozen: true
-      - run: cd examples && pixi run -e dev --frozen lint
+      - name: Setup CI tools
+        uses: ./.github/actions/setup-devenv
 
-      - run: cd examples && pixi run -e dev --frozen test
+      - run: bash -lc 'cd examples && pixi run -e dev --frozen lint'
 
-      - run: cd examples && pixi run pack
+      - run: bash -lc 'cd examples && pixi run -e dev --frozen test'
+
+      - run: bash -lc 'cd examples && pixi run pack'
 
       - name: Store Packed Environment as Artifact
         if: github.ref == 'refs/heads/main'
