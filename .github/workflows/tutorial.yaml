@@ -4,12 +4,22 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
       - "examples/**"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "projects/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
       - "examples/**"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "projects/**"
   workflow_dispatch:
 
@@ -41,22 +51,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7.0.0
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31.11.0
+      - name: Setup CI tools
+        uses: ./.github/actions/setup-devenv
 
-      - name: Enable Cachix
-        uses: cachix/cachix-action@v17
-        with:
-          name: devenv
+      - run: bash -lc 'cd examples && pixi run -e dev --frozen lint'
 
-      - name: Install devenv
-        run: nix profile install github:cachix/devenv/v2.1.2
+      - run: bash -lc 'cd examples && pixi run -e dev --frozen test'
 
-      - run: devenv shell -- bash -lc 'cd examples && pixi run -e dev --frozen lint'
-
-      - run: devenv shell -- bash -lc 'cd examples && pixi run -e dev --frozen test'
-
-      - run: devenv shell -- bash -lc 'cd examples && pixi run pack'
+      - run: bash -lc 'cd examples && pixi run pack'
 
       - name: Store Packed Environment as Artifact
         if: github.ref == 'refs/heads/main'

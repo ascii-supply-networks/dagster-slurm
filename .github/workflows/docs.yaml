@@ -4,13 +4,23 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
       - "docs/**"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "projects/**"
       - "slides/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/actions/setup-devenv/**"
+      - "devenv.*"
       - "docs/**"
+      - "nix/**"
+      - "pixi.lock"
+      - "pyproject.toml"
       - "projects/**"
       - "slides/**"
   workflow_dispatch:
@@ -21,8 +31,6 @@ concurrency:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   build:
@@ -32,11 +40,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7.0.0
 
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          pixi-version: v0.73.0
-          cache: true
-          frozen: true
+      - name: Setup CI tools
+        uses: ./.github/actions/setup-devenv
+
       - run: pixi run -e docs --frozen docs-build
 
       - name: Setup Pages
@@ -48,6 +54,9 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

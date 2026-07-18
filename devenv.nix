@@ -22,6 +22,17 @@
     "3.14" = pkgs.python314;
   };
   selectedPython = pythonPackages.${pythonVersion} or (throw "Unsupported Python version: ${pythonVersion}");
+  ghStack = pkgs.gh-stack.overrideAttrs (old: {
+    version = "0.0.8";
+    src = pkgs.fetchFromGitHub {
+      owner = "github";
+      repo = "gh-stack";
+      tag = "v0.0.8";
+      hash = "sha256-N0S/zQ+JsFAKzC780m3lwiZgsCoCjtcWgDB/MJy6jYU=";
+    };
+    vendorHash = "sha256-CxsHRC5AbApxcsavyaBmoPtTUHy5jlaQ7BLvgE6mJJ4=";
+    nativeCheckInputs = (old.nativeCheckInputs or []) ++ [pkgs.gitMinimal];
+  });
 
   pixi = pkgs.callPackage ./nix/pixi-0_73_0.nix {};
   bun = pkgs.callPackage ./nix/bun-1_3_14.nix {};
@@ -73,6 +84,7 @@ in {
     dprint
     fd
     gh
+    ghStack
     git
     just
     pixi
@@ -88,6 +100,7 @@ in {
     echo "Bun: $(bun --version)"
     echo "uv: $(uv --version)"
     echo "Just: $(just --version)"
+    echo "gh-stack: $(gh-stack --version)"
     echo "Stax: $(stax --version)"
     echo "Dprint: $(dprint --version)"
     echo "rg: $(rg --version | head -n 1)"
@@ -99,6 +112,7 @@ in {
     bun --version
     uv --version
     just --version
+    gh-stack --version
     stax --version
     dprint --version
     rg --version
