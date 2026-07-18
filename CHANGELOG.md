@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.4 (2026-07-18)
+
+### Bug Fixes
+
+- Address topic modeling review comments
+  ([#153](https://github.com/ascii-supply-networks/dagster-slurm/pull/153),
+  [`2bd8df3`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2bd8df395693c64c88d6c65fd0cdc6775e03dea5))
+
+- Load native libraries from package
+  ([#153](https://github.com/ascii-supply-networks/dagster-slurm/pull/153),
+  [`2bd8df3`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2bd8df395693c64c88d6c65fd0cdc6775e03dea5))
+
+- Reuse existing environment cache
+  ([#153](https://github.com/ascii-supply-networks/dagster-slurm/pull/153),
+  [`2bd8df3`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2bd8df395693c64c88d6c65fd0cdc6775e03dea5))
+
+### Features
+
+- Rapids topic modeling example
+  ([#153](https://github.com/ascii-supply-networks/dagster-slurm/pull/153),
+  [`2bd8df3`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2bd8df395693c64c88d6c65fd0cdc6775e03dea5))
+
+
 ## v1.14.0-rc.3 (2026-07-18)
 
 ### Bug Fixes
