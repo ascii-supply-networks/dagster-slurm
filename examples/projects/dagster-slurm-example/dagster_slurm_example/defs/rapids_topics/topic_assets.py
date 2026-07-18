@@ -39,9 +39,6 @@ _CPU_ENV_PIN = os.getenv("RAPIDS_TOPICS_CPU_ENV", "").strip()
 _GPU_ENV_PIN = os.getenv("RAPIDS_TOPICS_GPU_ENV", "").strip()
 _NO_REUSE = os.getenv("RAPIDS_TOPICS_NO_ENV_REUSE", "").strip() == "1"
 
-_CPU_REUSE_ENV = _CPU_ENV_PIN or "$HOME/rapids_topics_env_cpu"
-_GPU_REUSE_ENV = _GPU_ENV_PIN or "$HOME/rapids_topics_env_gpu"
-
 _CPU_PACK_CMD = [
     "pixi",
     "run",
@@ -68,7 +65,8 @@ _RAPIDS_PACK_CMD = [
     "--build-missing",
 ]
 
-# Family heads: pack (unless the whole family is pinned to an env).
+# Pack metadata for all assets; the optional env-var pin rides here
+# because asset metadata takes precedence over per-run overrides.
 _CPU_PACK_METADATA = {
     "slurm_pack_cmd": _CPU_PACK_CMD,
     **({"slurm_pre_deployed_env_path": _CPU_ENV_PIN} if _CPU_ENV_PIN else {}),
@@ -78,15 +76,23 @@ _RAPIDS_PACK_METADATA = {
     **({"slurm_pre_deployed_env_path": _GPU_ENV_PIN} if _GPU_ENV_PIN else {}),
 }
 
-# Downstream assets: reuse the published env by default.
-_CPU_REUSE_METADATA = {
-    "slurm_pack_cmd": _CPU_PACK_CMD,
-    **({} if _NO_REUSE else {"slurm_pre_deployed_env_path": _CPU_REUSE_ENV}),
-}
-_RAPIDS_REUSE_METADATA = {
-    "slurm_pack_cmd": _RAPIDS_PACK_CMD,
-    **({} if _NO_REUSE else {"slurm_pre_deployed_env_path": _GPU_REUSE_ENV}),
-}
+
+def _published_env_path(
+    context: dg.AssetExecutionContext, head_asset: str
+) -> Optional[str]:
+    """Env path the family-head payload published, or None.
+
+    Read from the head asset's latest materialization metadata; None
+    until the head has run once (the downstream asset then packs on its
+    own) or when reuse is disabled.
+    """
+    if _NO_REUSE:
+        return None
+    event = context.instance.get_latest_materialization_event(dg.AssetKey(head_asset))
+    if event is None or event.asset_materialization is None:
+        return None
+    value = event.asset_materialization.metadata.get("published_env_path")
+    return value.value if isinstance(value, dg.TextMetadataValue) else None
 
 
 def _payload(name: str) -> str:
@@ -174,14 +180,23 @@ def _merged_slurm_opts(defaults: dict, config: TopicSlurmConfig) -> dict:
     return opts
 
 
-def _run_overrides(config: TopicSlurmConfig, compute: ComputeResource) -> dict:
-    """Extra compute.run kwargs; only emitted when set.
+def _run_overrides(
+    config: TopicSlurmConfig,
+    compute: ComputeResource,
+    published_path: Optional[str] = None,
+) -> dict:
+    """Extra compute.run kwargs; only emitted when a path is known.
 
-    Dropped in local mode: LocalPipesClient does not accept the
-    override kwarg, and there is no packed env to skip locally anyway.
+    Launchpad config wins over the published path (env-var pins ride in
+    asset metadata, which the client prefers over this kwarg). Dropped
+    in local mode: LocalPipesClient does not accept the override kwarg,
+    and there is no packed env to skip locally anyway.
     """
-    if config.pre_deployed_env_path and compute.mode != ExecutionMode.LOCAL:
-        return {"pre_deployed_env_path_override": config.pre_deployed_env_path}
+    if compute.mode == ExecutionMode.LOCAL:
+        return {}
+    path = config.pre_deployed_env_path or published_path
+    if path:
+        return {"pre_deployed_env_path_override": path}
     return {}
 
 
@@ -262,7 +277,7 @@ def reuters_corpus(
         "One gensim LDA model per (month, seed) partition: one Slurm job "
         "each, the fan-out stage of the pipeline"
     ),
-    metadata=_CPU_REUSE_METADATA,
+    metadata=_CPU_PACK_METADATA,
 )
 def lda_models(
     context: dg.AssetExecutionContext,
@@ -284,7 +299,9 @@ def lda_models(
             **_base_env(),
         },
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
-        **_run_overrides(config, compute),
+        **_run_overrides(
+            config, compute, _published_env_path(context, "reuters_corpus")
+        ),
     ).get_results()
 
 
@@ -292,7 +309,7 @@ def lda_models(
     group_name=GROUP,
     deps=[lda_models],
     description="Stack topic-term vectors from all LDA models",
-    metadata=_CPU_REUSE_METADATA,
+    metadata=_CPU_PACK_METADATA,
 )
 def topic_term_matrix(
     context: dg.AssetExecutionContext,
@@ -305,7 +322,9 @@ def topic_term_matrix(
         config=config,
         extra_env=_base_env(),
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
-        **_run_overrides(config, compute),
+        **_run_overrides(
+            config, compute, _published_env_path(context, "reuters_corpus")
+        ),
     ).get_results()
 
 
@@ -348,7 +367,7 @@ def umap_embedding(
         "HDBSCAN meta-topic clustering: cuML on GPU nodes, contrib "
         "hdbscan fallback on CPU"
     ),
-    metadata=_RAPIDS_REUSE_METADATA,
+    metadata=_RAPIDS_PACK_METADATA,
 )
 def hdbscan_meta_topics(
     context: dg.AssetExecutionContext,
@@ -365,7 +384,9 @@ def hdbscan_meta_topics(
             **_base_env(),
         },
         extra_slurm_opts=_merged_slurm_opts(_gpu_slurm_opts(), config),
-        **_run_overrides(config, compute),
+        **_run_overrides(
+            config, compute, _published_env_path(context, "umap_embedding")
+        ),
     ).get_results()
 
 
@@ -373,7 +394,7 @@ def hdbscan_meta_topics(
     group_name=GROUP,
     deps=[hdbscan_meta_topics],
     description="Labeled meta-topic scatter plot + JSON summary",
-    metadata=_RAPIDS_REUSE_METADATA,
+    metadata=_RAPIDS_PACK_METADATA,
 )
 def topic_map(
     context: dg.AssetExecutionContext,
@@ -386,5 +407,7 @@ def topic_map(
         config=config,
         extra_env=_base_env(),
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
-        **_run_overrides(config, compute),
+        **_run_overrides(
+            config, compute, _published_env_path(context, "umap_embedding")
+        ),
     ).get_results()

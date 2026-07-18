@@ -1756,27 +1756,6 @@ rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
             pre_deployed_env_path_override or self.pre_deployed_env_path
         )
         if pre_deployed_env_path:
-            # The job script single-quotes the activation path, so a
-            # literal $HOME would never be expanded by the shell.
-            # Resolve it here, same as _get_remote_base does.
-            if "$HOME" in pre_deployed_env_path:
-                home_raw = ssh_pool.run("echo $HOME").strip()
-                home_dir = next(
-                    (
-                        line.strip()
-                        for line in reversed(home_raw.splitlines())
-                        if line.strip()
-                    ),
-                    None,
-                )
-                if not home_dir:
-                    raise RuntimeError(
-                        f"Could not resolve $HOME in pre-deployed env path "
-                        f"{pre_deployed_env_path!r}: remote returned {home_raw!r}"
-                    )
-                pre_deployed_env_path = pre_deployed_env_path.replace(
-                    "$HOME", home_dir
-                )
             self.logger.info(
                 f"PROD mode: Using pre-deployed environment at: {pre_deployed_env_path}"
             )

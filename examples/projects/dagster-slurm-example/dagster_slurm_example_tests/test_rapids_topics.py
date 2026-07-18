@@ -130,32 +130,40 @@ def test_env_publish_creates_and_retargets_symlink(tmp_path):
     assert not other.exists()
 
 
-def test_first_asset_packs_and_downstream_reuse_published_env():
+def test_no_asset_hardcodes_an_env_path_without_pins():
+    # With no RAPIDS_TOPICS_*_ENV pins set, metadata carries only the
+    # pack command; env reuse flows through the head's published path.
     from dagster_slurm_example.defs.rapids_topics import topic_assets as ta
 
-    def meta(asset):
-        return asset.metadata_by_key[next(iter(asset.keys))]
-
-    # Family heads pack; downstream assets carry the stable env path.
-    for head in (ta.reuters_corpus, ta.umap_embedding):
-        assert "slurm_pre_deployed_env_path" not in meta(head)
-    for follower, link in (
-        (ta.lda_models, "$HOME/rapids_topics_env_cpu"),
-        (ta.topic_term_matrix, "$HOME/rapids_topics_env_cpu"),
-        (ta.hdbscan_meta_topics, "$HOME/rapids_topics_env_gpu"),
-        (ta.topic_map, "$HOME/rapids_topics_env_gpu"),
+    for asset in (
+        ta.reuters_corpus,
+        ta.lda_models,
+        ta.topic_term_matrix,
+        ta.umap_embedding,
+        ta.hdbscan_meta_topics,
+        ta.topic_map,
     ):
-        assert meta(follower)["slurm_pre_deployed_env_path"] == link
+        metadata = asset.metadata_by_key[next(iter(asset.keys))]
+        assert "slurm_pack_cmd" in metadata
+        assert "slurm_pre_deployed_env_path" not in metadata
 
 
-def test_pre_deployed_env_override_skipped_in_local_mode():
+def test_run_override_precedence_launchpad_then_published():
     # LocalPipesClient.run() has no **kwargs: forwarding the override in
     # local mode raises TypeError, so it must be dropped there.
     cfg = HdbscanConfig(pre_deployed_env_path="/home/user/env")
     slurm = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.SLURM))
     local = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.LOCAL))
 
-    assert _run_overrides(cfg, slurm) == {
+    # Launchpad value wins over the published path.
+    assert _run_overrides(cfg, slurm, "/published/env") == {
         "pre_deployed_env_path_override": "/home/user/env"
     }
-    assert _run_overrides(cfg, local) == {}
+    # Published path applies when the launchpad is silent.
+    assert _run_overrides(HdbscanConfig(), slurm, "/published/env") == {
+        "pre_deployed_env_path_override": "/published/env"
+    }
+    # No path known: normal pack flow.
+    assert _run_overrides(HdbscanConfig(), slurm) == {}
+    # Local mode drops everything.
+    assert _run_overrides(cfg, local, "/published/env") == {}

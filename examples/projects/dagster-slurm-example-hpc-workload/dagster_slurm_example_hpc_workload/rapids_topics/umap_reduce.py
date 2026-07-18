@@ -144,11 +144,12 @@ def main():
     )
     pq.write_table(out, out_dir / "embedding.parquet")
 
+    published = None
     try:
-        if publish_env_for_reuse(Path(sys.prefix), Path.home() / ENV_REUSE_LINK):
-            context.log.info(
-                f"Published env for downstream reuse: ~/{ENV_REUSE_LINK}"
-            )
+        link = Path.home() / ENV_REUSE_LINK
+        if publish_env_for_reuse(Path(sys.prefix), link):
+            published = str(link)
+            context.log.info(f"Published env for downstream reuse: {published}")
     except OSError as exc:
         context.log.warning(f"Could not publish env symlink: {exc}")
 
@@ -161,6 +162,7 @@ def main():
             "n_neighbors": n_neighbors,
             "build_algo": build_algo if _HAS_CUML else "n/a (CPU)",
             "output_path": str(out_dir / "embedding.parquet"),
+            **({"published_env_path": published} if published else {}),
         }
     )
 

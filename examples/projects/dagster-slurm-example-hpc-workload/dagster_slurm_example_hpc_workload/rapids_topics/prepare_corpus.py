@@ -48,6 +48,7 @@ def publish_env_for_reuse(env_prefix: Path, link: Path) -> bool:
     tmp.replace(link)  # atomic swap so readers never see a missing link
     return True
 
+
 DEFAULT_REUTERS_URL = (
     "https://kdd.ics.uci.edu/databases/reuters21578/reuters21578.tar.gz"
 )
@@ -66,6 +67,7 @@ def verify_sha256(path: Path, expected: str) -> None:
             "The download may be corrupt or the mirror changed; set "
             "REUTERS_SHA256 to override or '' to disable."
         )
+
 
 _MONTHS = {
     "JAN": "01",
@@ -202,11 +204,12 @@ def main():
         pq.write_table(table, out / "docs.parquet")
         context.log.info(f"  {month}: {len(month_docs)} docs")
 
+    published = None
     try:
-        if publish_env_for_reuse(Path(sys.prefix), Path.home() / ENV_REUSE_LINK):
-            context.log.info(
-                f"Published env for downstream reuse: ~/{ENV_REUSE_LINK}"
-            )
+        link = Path.home() / ENV_REUSE_LINK
+        if publish_env_for_reuse(Path(sys.prefix), link):
+            published = str(link)
+            context.log.info(f"Published env for downstream reuse: {published}")
     except OSError as exc:
         context.log.warning(f"Could not publish env symlink: {exc}")
 
@@ -217,6 +220,7 @@ def main():
             "vocab_size": len(dictionary),
             "months": ", ".join(f"{m}:{c}" for m, c in sorted(month_counts.items())),
             "output_dir": str(corpus_dir),
+            **({"published_env_path": published} if published else {}),
         }
     )
 
