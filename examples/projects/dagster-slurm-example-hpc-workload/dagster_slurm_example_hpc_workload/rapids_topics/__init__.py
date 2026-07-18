@@ -3,8 +3,8 @@
 LDA -> UMAP -> HDBSCAN topic-modeling chain over the Reuters-21578
 corpus, mirroring a production Common Crawl pipeline at toy scale:
 
-1. ``prepare_corpus.py``  - download + parse Reuters, shared dictionary
-2. ``lda_train.py``       - one gensim LDA per (month, seed) partition
+1. ``prepare_corpus.py``  - download + parse Reuters, shared vocabulary
+2. ``lda_train.py``       - one scikit-learn LDA per (month, seed) partition
 3. ``aggregate_topics.py``- stack topic-term vectors from all models
 4. ``umap_reduce.py``     - cuML UMAP (CPU umap-learn fallback)
 5. ``hdbscan_cluster.py`` - cuML HDBSCAN (CPU hdbscan fallback)

@@ -2,8 +2,8 @@
 
 Downloads the tarball (unless ``REUTERS_LOCAL_PATH`` points at an
 existing copy), parses the SGML files with a small regex parser,
-tokenizes with gensim, builds one shared dictionary over the whole
-corpus and writes one parquet per month. The shared dictionary is what
+builds one shared vocabulary over the whole corpus and writes one
+parquet per month. The shared vocabulary is what
 makes topic-term vectors comparable across the per-(month, seed) LDA
 models trained downstream.
 
@@ -12,7 +12,7 @@ Environment:
     REUTERS_URL          tarball URL (default: UCI KDD mirror)
     REUTERS_LOCAL_PATH   optional pre-downloaded reuters21578.tar.gz
     REUTERS_SHA256       expected tarball digest; "" disables the check
-    DICT_KEEP_N          dictionary size cap (default: 20000)
+    MAX_FEATURES         vocabulary size cap (default: 20000)
 """
 
 import hashlib
@@ -136,10 +136,11 @@ def _load_docs(context: PipesContext, tarball: Path) -> list[dict]:
 
 
 def main():
+    import json
+
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from gensim.corpora import Dictionary
-    from gensim.utils import simple_preprocess
+    from sklearn.feature_extraction.text import CountVectorizer
 
     context = PipesContext.get()
     base = Path(
@@ -152,17 +153,21 @@ def main():
 
     for i, doc in enumerate(docs):
         doc["doc_id"] = i
-        doc["tokens"] = simple_preprocess(doc["body"], deacc=True)
-    docs = [d for d in docs if len(d["tokens"]) >= 20]
-    context.log.info(f"{len(docs)} documents after >=20-token filter")
 
-    dictionary = Dictionary(d["tokens"] for d in docs)
-    keep_n = int(os.environ.get("DICT_KEEP_N", "20000"))
-    dictionary.filter_extremes(no_below=5, no_above=0.5, keep_n=keep_n)
-    dictionary.compactify()
-    dict_path = corpus_dir / "dictionary.dict"
-    dictionary.save(str(dict_path))
-    context.log.info(f"Dictionary: {len(dictionary)} terms -> {dict_path}")
+    max_features = int(os.environ.get("MAX_FEATURES", "20000"))
+    vectorizer = CountVectorizer(
+        min_df=5,
+        max_df=0.5,
+        max_features=max_features,
+    )
+    vectorizer.fit(d["body"] for d in docs)
+    vocabulary_path = corpus_dir / "vocabulary.json"
+    vocabulary_path.write_text(
+        json.dumps(vectorizer.vocabulary_, sort_keys=True), encoding="utf-8"
+    )
+    context.log.info(
+        f"Vocabulary: {len(vectorizer.vocabulary_)} terms -> {vocabulary_path}"
+    )
 
     month_counts: Counter[str] = Counter(d["month"] for d in docs)
     for month in sorted(month_counts):
@@ -172,7 +177,7 @@ def main():
                 "doc_id": [d["doc_id"] for d in month_docs],
                 "month": [d["month"] for d in month_docs],
                 "title": [d["title"] for d in month_docs],
-                "tokens": [d["tokens"] for d in month_docs],
+                "body": [d["body"] for d in month_docs],
             }
         )
         out = corpus_dir / f"month={month}"
@@ -184,7 +189,7 @@ def main():
         metadata={
             "n_docs": len(docs),
             "n_months": len(month_counts),
-            "vocab_size": len(dictionary),
+            "vocab_size": len(vectorizer.vocabulary_),
             "months": ", ".join(f"{m}:{c}" for m, c in sorted(month_counts.items())),
             "output_dir": str(corpus_dir),
         }

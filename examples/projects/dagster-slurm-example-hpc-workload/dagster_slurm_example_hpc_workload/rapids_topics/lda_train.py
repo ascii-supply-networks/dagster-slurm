@@ -1,9 +1,9 @@
-"""Train one gensim LDA model for a (month, seed) partition.
+"""Train one scikit-learn LDA model for a (month, seed) partition.
 
-Loads the shared dictionary built by ``prepare_corpus.py``, trains an
+Loads the shared vocabulary built by ``prepare_corpus.py``, trains an
 LDA model on the month's documents with ``random_state=seed`` and
-writes the model's topic-term vectors (rows of ``get_topics()``, one
-row per topic over the shared vocabulary) plus top terms to parquet.
+writes the model's normalized topic-term vectors (one row per topic
+over the shared vocabulary) plus top terms to parquet.
 The downstream UMAP/HDBSCAN stages cluster these rows across all
 (month, seed) models into meta-topics, mirroring the multi-model
 aggregation of the production pipeline.
@@ -17,12 +17,11 @@ Environment:
     MONTH               partition month, e.g. "1987-03"
     SEED                integer random seed
     NUM_TOPICS          topics per model (default: 15)
-    PASSES              gensim passes (default: 5)
+    MAX_ITER            maximum training iterations (default: 5)
     TOP_TERMS           top terms to store per topic (default: 10)
     MIN_DOCS            skip threshold (default: 50)
 """
 
-import logging
 import os
 from pathlib import Path
 
@@ -30,14 +29,14 @@ from dagster_pipes import PipesContext, open_dagster_pipes
 
 
 def main():
-    import numpy as np
+    import json
+
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from gensim.corpora import Dictionary
-    from gensim.models import LdaModel
+    from sklearn.decomposition import LatentDirichletAllocation
+    from sklearn.feature_extraction.text import CountVectorizer
 
     context = PipesContext.get()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     base = Path(
         os.path.expandvars(os.environ.get("RAPIDS_TOPICS_BASE", "$HOME/rapids_topics"))
@@ -45,7 +44,7 @@ def main():
     month = os.environ["MONTH"]
     seed = int(os.environ["SEED"])
     num_topics = int(os.environ.get("NUM_TOPICS", "15"))
-    passes = int(os.environ.get("PASSES", "5"))
+    max_iter = int(os.environ.get("MAX_ITER", "5"))
     top_terms = int(os.environ.get("TOP_TERMS", "10"))
     min_docs = int(os.environ.get("MIN_DOCS", "50"))
 
@@ -58,42 +57,44 @@ def main():
         return
 
     table = pq.read_table(month_path)
-    tokens = table.column("tokens").to_pylist()
-    if len(tokens) < min_docs:
+    documents = table.column("body").to_pylist()
+    if len(documents) < min_docs:
         context.log.warning(
-            f"{month}: {len(tokens)} docs < MIN_DOCS={min_docs}; skipping."
+            f"{month}: {len(documents)} docs < MIN_DOCS={min_docs}; skipping."
         )
         context.report_asset_materialization(
             metadata={
                 "month": month,
                 "seed": seed,
                 "skipped": True,
-                "n_docs": len(tokens),
+                "n_docs": len(documents),
             }
         )
         return
 
-    dictionary = Dictionary.load(str(base / "corpus" / "dictionary.dict"))
-    bow = [dictionary.doc2bow(doc) for doc in tokens]
+    vocabulary = json.loads(
+        (base / "corpus" / "vocabulary.json").read_text(encoding="utf-8")
+    )
+    vectorizer = CountVectorizer(vocabulary=vocabulary)
+    document_term_matrix = vectorizer.transform(documents)
     context.log.info(
-        f"Training LDA[{month}|seed={seed}]: {len(bow)} docs, "
-        f"{len(dictionary)} terms, k={num_topics}, passes={passes}"
+        f"Training LDA[{month}|seed={seed}]: {document_term_matrix.shape[0]} docs, "
+        f"{document_term_matrix.shape[1]} terms, k={num_topics}, "
+        f"max_iter={max_iter}"
     )
 
-    model = LdaModel(
-        corpus=bow,
-        id2word=dictionary,
-        num_topics=num_topics,
-        passes=passes,
+    model = LatentDirichletAllocation(
+        n_components=num_topics,
+        max_iter=max_iter,
         random_state=seed,
-        alpha="auto",
-        eta="auto",
-    )
+    ).fit(document_term_matrix)
 
-    topic_term = model.get_topics().astype(np.float32)
+    topic_term = model.components_.astype("float32")
+    topic_term /= topic_term.sum(axis=1, keepdims=True)
+    feature_names = vectorizer.get_feature_names_out()
     terms = [
-        [term for term, _ in model.show_topic(t, topn=top_terms)]
-        for t in range(num_topics)
+        feature_names[topic.argsort()[-top_terms:][::-1]].tolist()
+        for topic in topic_term
     ]
     out_dir = base / "lda" / f"month={month}" / f"seed={seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -110,13 +111,13 @@ def main():
         out_dir / "topic_terms.parquet",
     )
 
-    perplexity = float(np.exp2(-model.log_perplexity(bow)))
+    perplexity = float(model.perplexity(document_term_matrix))
     context.log.info(f"Done. perplexity={perplexity:.1f}")
     context.report_asset_materialization(
         metadata={
             "month": month,
             "seed": seed,
-            "n_docs": len(bow),
+            "n_docs": document_term_matrix.shape[0],
             "num_topics": num_topics,
             "perplexity": round(perplexity, 1),
             "sample_topic": ", ".join(terms[0]),
