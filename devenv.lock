@@ -82,17 +82,17 @@
     "stax-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784216819,
-        "narHash": "sha256-P1pKNDwErHQHyggzwWNxFu2Op7jRkTvHXaSdF2/b2Wo=",
-        "owner": "cesarferreira",
+        "lastModified": 1784348811,
+        "narHash": "sha256-0GNc1CJ/WCTNjaY1bXXxFJRT4j+0SbBFms6w7n8y7L0=",
+        "owner": "geoHeil",
         "repo": "stax",
-        "rev": "40aacb0d7135b7fb3864b8fdc24b7b7ea14efe2e",
+        "rev": "90372b44939831911de551dc30cd9610854b3fef",
         "type": "github"
       },
       "original": {
-        "owner": "cesarferreira",
-        "ref": "v0.96.7",
+        "owner": "geoHeil",
         "repo": "stax",
+        "rev": "90372b44939831911de551dc30cd9610854b3fef",
         "type": "github"
       }
     }
