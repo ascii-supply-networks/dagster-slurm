@@ -12,6 +12,11 @@ requires = ["hatchling"]
 
 [tool.pixi.workspace]
 preview = ["pixi-build"]
+platforms = [
+  { platform = "linux-64" },
+  { platform = "linux-aarch64" },
+  { name = "osx-arm64-macos-26-5-2", platform = "osx-arm64", macos = "26.5.2" },
+]
 channels = [
   "https://prefix.dev/conda-forge",
   "https://prefix.dev/pixi-build-backends",
