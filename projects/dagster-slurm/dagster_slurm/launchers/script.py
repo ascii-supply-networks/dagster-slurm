@@ -47,7 +47,6 @@ class BashLauncher(ComputeLauncher):
         # Quote paths for safety
         python_quoted = shlex.quote(python_executable)
         payload_quoted = shlex.quote(payload_path)
-        env_dir_quoted = shlex.quote(str(Path(python_executable).parent.parent))
 
         # Build header
         script = f"""#!/bin/bash
@@ -71,7 +70,6 @@ echo "[$({date_fmt})] ========================================="
             script += f"""# Activate pixi-packed environment
 echo "[$({date_fmt})] Activating environment from: {activation_script}"
 source {activation_quoted}
-export LD_LIBRARY_PATH={env_dir_quoted}/lib:${{LD_LIBRARY_PATH:-}}
 echo "[$({date_fmt})] Environment activated"
 echo "[$({date_fmt})] Python version: $(python --version 2>&1)"
 echo "[$({date_fmt})] Which python: $(which python)"
@@ -81,6 +79,8 @@ echo "[$({date_fmt})] Which python: $(which python)"
             # Fallback - shouldn't happen but be defensive
             logger = dg.get_dagster_logger()
             logger.warning("No activation script provided, using PATH fallback")
+            env_dir = str(Path(python_executable).parent.parent)
+            env_dir_quoted = shlex.quote(env_dir)
             script += f"""# WARNING: No activation script provided
 export PATH={env_dir_quoted}/bin:$PATH
 export LD_LIBRARY_PATH={env_dir_quoted}/lib:${{LD_LIBRARY_PATH:-}}

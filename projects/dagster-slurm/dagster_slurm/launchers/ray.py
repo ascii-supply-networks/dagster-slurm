@@ -1,7 +1,6 @@
 """Ray cluster launcher with robust startup/shutdown."""
 
 import shlex
-from pathlib import Path
 from typing import Any, Dict, Optional, Literal
 
 from pydantic import Field
@@ -90,11 +89,6 @@ class RayLauncher(ComputeLauncher):
             lines.append(command)
         return "\n    ".join(lines)
 
-    @staticmethod
-    def _library_path_export(python_executable: str) -> str:
-        env_lib = Path(python_executable).parent.parent / "lib"
-        return f"export LD_LIBRARY_PATH={shlex.quote(str(env_lib))}:${{LD_LIBRARY_PATH:-}}\n"
-
     def prepare_execution(
         self,
         payload_path: str,
@@ -135,7 +129,6 @@ class RayLauncher(ComputeLauncher):
     """
             if activation_script:
                 script += f"source {shlex.quote(activation_script)}\n"
-                script += self._library_path_export(python_executable)
             script += f"{python_command}\n"
 
         elif allocation_context:
@@ -184,7 +177,6 @@ class RayLauncher(ComputeLauncher):
                 date_fmt,
                 activation_script,
                 working_dir,  # working_dir used for log archival
-                python_executable,
             )
             script += local_lines
 
@@ -208,11 +200,7 @@ class RayLauncher(ComputeLauncher):
         )
 
     def _generate_local_template(
-        self,
-        date_fmt: str,
-        activation_script: Optional[str],
-        working_dir: str,
-        python_executable: str,
+        self, date_fmt: str, activation_script: Optional[str], working_dir: str
     ) -> str:
         """Generate Ray startup for local (single-node) mode."""
         override_block = self._render_override_block(date_fmt)
@@ -230,7 +218,6 @@ class RayLauncher(ComputeLauncher):
     # Activate environment for local Ray
     echo "[$({date_fmt})] Activating environment for local Ray..."
     source {shlex.quote(activation_script)}
-    {self._library_path_export(python_executable).strip()}
     echo "[$({date_fmt})] Environment activated."
     """
         # The rest of the function remains the same
@@ -504,7 +491,6 @@ class RayLauncher(ComputeLauncher):
 
         head_cmd_str = " \\\n    ".join(head_args)
         worker_cmd_str = " \\\n    ".join(worker_args)
-        library_path_export = self._library_path_export(python_executable).strip()
 
         # --- Worker Script ---
         ray_worker_script = f"""#!/bin/bash
@@ -514,7 +500,6 @@ class RayLauncher(ComputeLauncher):
     redis_password="$3"
     echo "Worker on $(hostname) activating environment: $activation_script"
     source "$activation_script"
-    {library_path_export}
     {self._render_override_block(date_fmt)}
     # Cross-platform timeout wrapper
     run_with_timeout() {{
@@ -621,7 +606,6 @@ class RayLauncher(ComputeLauncher):
     echo "Activating environment: $activation_script"
     echo "======================================="
     source "$activation_script"
-    {library_path_export}
     {self._render_override_block(date_fmt)}
     # Cross-platform timeout wrapper
     run_with_timeout() {{
