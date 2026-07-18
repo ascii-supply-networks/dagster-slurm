@@ -12,11 +12,6 @@ from dagster_slurm_example.defs.rapids_topics.topic_assets import (
     HdbscanConfig,
     _merged_slurm_opts,
     _run_overrides,
-    lda_partitions,
-)
-from dagster_slurm_example_hpc_workload.rapids_topics import (
-    hdbscan_cluster,
-    umap_reduce,
 )
 from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
     parse_sgml_docs,
