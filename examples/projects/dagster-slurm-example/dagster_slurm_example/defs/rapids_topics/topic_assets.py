@@ -9,7 +9,6 @@ pipeline. The chain demonstrates Slurm scheduling with dagster-slurm:
   ``packaged-cluster-rapids`` env with cuML, requesting one GPU on
   supercomputer deployments. On GPU-less machines (docker slurm, CI,
   local dev) the payloads fall back to umap-learn / hdbscan.
-
 ``lda_models`` is partitioned by (month, seed): one Slurm job per
 partition, the per-partition fan-out of the production pipeline at toy
 scale (5 populated Reuters months x 3 seeds = 15 jobs).

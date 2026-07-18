@@ -11,9 +11,11 @@ Environment:
     RAPIDS_TOPICS_BASE   output base dir (default: $HOME/rapids_topics)
     REUTERS_URL          tarball URL (default: UCI KDD mirror)
     REUTERS_LOCAL_PATH   optional pre-downloaded reuters21578.tar.gz
+    REUTERS_SHA256       expected tarball digest; "" disables the check
     DICT_KEEP_N          dictionary size cap (default: 20000)
 """
 
+import hashlib
 import os
 import re
 import tarfile
@@ -26,6 +28,21 @@ from dagster_pipes import PipesContext, open_dagster_pipes
 DEFAULT_REUTERS_URL = (
     "https://kdd.ics.uci.edu/databases/reuters21578/reuters21578.tar.gz"
 )
+
+DEFAULT_REUTERS_SHA256 = (
+    "3bae43c9b14e387f76a61b6d82bf98a4fb5d3ef99ef7e7075ff2ccbcf59f9d30"
+)
+
+
+def verify_sha256(path: Path, expected: str) -> None:
+    """Raise if the file's sha256 does not match ``expected``."""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected:
+        raise RuntimeError(
+            f"Checksum mismatch for {path}: expected {expected}, got {digest}. "
+            "The download may be corrupt or the mirror changed; set "
+            "REUTERS_SHA256 to override or '' to disable."
+        )
 
 _MONTHS = {
     "JAN": "01",
@@ -81,18 +98,25 @@ def parse_sgml_docs(sgml: str) -> list[dict]:
 
 
 def _fetch_tarball(context: PipesContext, work_dir: Path) -> Path:
+    expected_sha = os.environ.get("REUTERS_SHA256", DEFAULT_REUTERS_SHA256).strip()
+
     local = os.environ.get("REUTERS_LOCAL_PATH", "").strip()
     if local:
         context.log.info(f"Using local Reuters tarball: {local}")
-        return Path(local)
-    url = os.environ.get("REUTERS_URL", DEFAULT_REUTERS_URL)
-    target = work_dir / "reuters21578.tar.gz"
-    if target.exists():
-        context.log.info(f"Reusing cached tarball: {target}")
-        return target
-    context.log.info(f"Downloading {url} ...")
-    urllib.request.urlretrieve(url, target)
-    context.log.info(f"Downloaded {target.stat().st_size / 1e6:.1f} MB")
+        target = Path(local)
+    else:
+        url = os.environ.get("REUTERS_URL", DEFAULT_REUTERS_URL)
+        target = work_dir / "reuters21578.tar.gz"
+        if target.exists():
+            context.log.info(f"Reusing cached tarball: {target}")
+        else:
+            context.log.info(f"Downloading {url} ...")
+            urllib.request.urlretrieve(url, target)
+            context.log.info(f"Downloaded {target.stat().st_size / 1e6:.1f} MB")
+
+    if expected_sha:
+        verify_sha256(target, expected_sha)
+        context.log.info("Tarball sha256 verified")
     return target
 
 

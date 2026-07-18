@@ -41,6 +41,22 @@ def test_parse_sgml_extracts_dated_docs_with_bodies():
     assert "&" in docs[1]["body"] and "&amp;" not in docs[1]["body"]
 
 
+def test_sha256_verification_accepts_match_and_rejects_mismatch(tmp_path):
+    import hashlib
+
+    from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
+        verify_sha256,
+    )
+
+    blob = tmp_path / "reuters.tar.gz"
+    blob.write_bytes(b"not really a tarball")
+    good = hashlib.sha256(b"not really a tarball").hexdigest()
+
+    verify_sha256(blob, good)
+    with pytest.raises(RuntimeError, match="Checksum mismatch"):
+        verify_sha256(blob, "0" * 64)
+
+
 def test_min_samples_clamped_only_above_cuml_cap():
     assert hdbscan_cluster.clamped_min_samples(5) == 5
     assert hdbscan_cluster.clamped_min_samples(1023) == 1023

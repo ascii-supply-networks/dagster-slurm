@@ -126,6 +126,11 @@ age = "~=1.2.1"
 [tool.pixi.feature.opstooling.dependencies]
 git = "~=2.49"
 pixi-pack = ">=0.7.8,<1"
+# The per-asset ``slurm_pack_cmd`` metadata runs
+# ``pixi run -e opstooling ... python scripts/pack_environment.py``;
+# without a python here that only works when the parent process happens
+# to have one on PATH (e.g. dagster launched from the dev env).
+python = "3.12.*"
 
 [tool.pixi.feature.dagster-scaffolding.dependencies]
 yarn = "~=4.9.2"
