@@ -15,7 +15,6 @@ from dagster_slurm_example.defs.rapids_topics.topic_assets import (
 )
 from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
     parse_sgml_docs,
-    publish_env_for_reuse,
     verify_sha256,
 )
 from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import (
@@ -106,64 +105,14 @@ def test_launchpad_overrides_replace_only_set_fields():
     assert merged == {"nodes": 1, "cpus_per_task": 2, "mem": "64G", "gpus_per_node": 0}
 
 
-def test_env_publish_creates_and_retargets_symlink(tmp_path):
-    # Packed-env layout: <base>/activate.sh + <base>/env (sys.prefix).
-    def packed_env(name):
-        base = tmp_path / name
-        (base / "env").mkdir(parents=True)
-        (base / "activate.sh").touch()
-        return base / "env"
-
-    link = tmp_path / "stable_link"
-    assert publish_env_for_reuse(packed_env("cache-key-1"), link)
-    assert link.resolve() == (tmp_path / "cache-key-1").resolve()
-
-    # A newer pack must atomically retarget the existing link.
-    assert publish_env_for_reuse(packed_env("cache-key-2"), link)
-    assert link.resolve() == (tmp_path / "cache-key-2").resolve()
-
-    # Outside a packed env (local dev interpreter): no-op, no link.
-    plain = tmp_path / "venv" / "env"
-    plain.mkdir(parents=True)
-    other = tmp_path / "other_link"
-    assert not publish_env_for_reuse(plain, other)
-    assert not other.exists()
-
-
-def test_no_asset_hardcodes_an_env_path_without_pins():
-    # With no RAPIDS_TOPICS_*_ENV pins set, metadata carries only the
-    # pack command; env reuse flows through the head's published path.
-    from dagster_slurm_example.defs.rapids_topics import topic_assets as ta
-
-    for asset in (
-        ta.reuters_corpus,
-        ta.lda_models,
-        ta.topic_term_matrix,
-        ta.umap_embedding,
-        ta.hdbscan_meta_topics,
-        ta.topic_map,
-    ):
-        metadata = asset.metadata_by_key[next(iter(asset.keys))]
-        assert "slurm_pack_cmd" in metadata
-        assert "slurm_pre_deployed_env_path" not in metadata
-
-
-def test_run_override_precedence_launchpad_then_published():
+def test_pre_deployed_env_override_skipped_in_local_mode():
     # LocalPipesClient.run() has no **kwargs: forwarding the override in
     # local mode raises TypeError, so it must be dropped there.
     cfg = HdbscanConfig(pre_deployed_env_path="/home/user/env")
     slurm = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.SLURM))
     local = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.LOCAL))
 
-    # Launchpad value wins over the published path.
-    assert _run_overrides(cfg, slurm, "/published/env") == {
+    assert _run_overrides(cfg, slurm) == {
         "pre_deployed_env_path_override": "/home/user/env"
     }
-    # Published path applies when the launchpad is silent.
-    assert _run_overrides(HdbscanConfig(), slurm, "/published/env") == {
-        "pre_deployed_env_path_override": "/published/env"
-    }
-    # No path known: normal pack flow.
-    assert _run_overrides(HdbscanConfig(), slurm) == {}
-    # Local mode drops everything.
-    assert _run_overrides(cfg, local, "/published/env") == {}
+    assert _run_overrides(cfg, local) == {}

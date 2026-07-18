@@ -35,64 +35,39 @@ lda_partitions = dg.MultiPartitionsDefinition(
 
 GROUP = "rapids_topics"
 
-_CPU_ENV_PIN = os.getenv("RAPIDS_TOPICS_CPU_ENV", "").strip()
-_GPU_ENV_PIN = os.getenv("RAPIDS_TOPICS_GPU_ENV", "").strip()
-_NO_REUSE = os.getenv("RAPIDS_TOPICS_NO_ENV_REUSE", "").strip() == "1"
+_CPU_ENV_PATH = os.getenv("RAPIDS_TOPICS_CPU_ENV", "").strip()
+_GPU_ENV_PATH = os.getenv("RAPIDS_TOPICS_GPU_ENV", "").strip()
 
-_CPU_PACK_CMD = [
-    "pixi",
-    "run",
-    "-e",
-    "opstooling",
-    "--frozen",
-    "python",
-    "scripts/pack_environment.py",
-    "--env",
-    "workload-topic-modeling",
-    "--build-missing",
-]
-
-_RAPIDS_PACK_CMD = [
-    "pixi",
-    "run",
-    "-e",
-    "opstooling",
-    "--frozen",
-    "python",
-    "scripts/pack_environment.py",
-    "--env",
-    "packaged-cluster-rapids",
-    "--build-missing",
-]
-
-# Pack metadata for all assets; the optional env-var pin rides here
-# because asset metadata takes precedence over per-run overrides.
 _CPU_PACK_METADATA = {
-    "slurm_pack_cmd": _CPU_PACK_CMD,
-    **({"slurm_pre_deployed_env_path": _CPU_ENV_PIN} if _CPU_ENV_PIN else {}),
+    "slurm_pack_cmd": [
+        "pixi",
+        "run",
+        "-e",
+        "opstooling",
+        "--frozen",
+        "python",
+        "scripts/pack_environment.py",
+        "--env",
+        "workload-topic-modeling",
+        "--build-missing",
+    ],
+    **({"slurm_pre_deployed_env_path": _CPU_ENV_PATH} if _CPU_ENV_PATH else {}),
 }
 _RAPIDS_PACK_METADATA = {
-    "slurm_pack_cmd": _RAPIDS_PACK_CMD,
-    **({"slurm_pre_deployed_env_path": _GPU_ENV_PIN} if _GPU_ENV_PIN else {}),
+    "slurm_pack_cmd": [
+        "pixi",
+        "run",
+        "-e",
+        "opstooling",
+        "--frozen",
+        "python",
+        "scripts/pack_environment.py",
+        "--env",
+        "packaged-cluster-rapids",
+        "--build-missing",
+    ],
+    **({"slurm_pre_deployed_env_path": _GPU_ENV_PATH} if _GPU_ENV_PATH else {}),
 }
-
-
-def _published_env_path(
-    context: dg.AssetExecutionContext, head_asset: str
-) -> Optional[str]:
-    """Env path the family-head payload published, or None.
-
-    Read from the head asset's latest materialization metadata; None
-    until the head has run once (the downstream asset then packs on its
-    own) or when reuse is disabled.
-    """
-    if _NO_REUSE:
-        return None
-    event = context.instance.get_latest_materialization_event(dg.AssetKey(head_asset))
-    if event is None or event.asset_materialization is None:
-        return None
-    value = event.asset_materialization.metadata.get("published_env_path")
-    return value.value if isinstance(value, dg.TextMetadataValue) else None
 
 
 def _payload(name: str) -> str:
@@ -180,23 +155,14 @@ def _merged_slurm_opts(defaults: dict, config: TopicSlurmConfig) -> dict:
     return opts
 
 
-def _run_overrides(
-    config: TopicSlurmConfig,
-    compute: ComputeResource,
-    published_path: Optional[str] = None,
-) -> dict:
-    """Extra compute.run kwargs; only emitted when a path is known.
+def _run_overrides(config: TopicSlurmConfig, compute: ComputeResource) -> dict:
+    """Extra compute.run kwargs; only emitted when set.
 
-    Launchpad config wins over the published path (env-var pins ride in
-    asset metadata, which the client prefers over this kwarg). Dropped
-    in local mode: LocalPipesClient does not accept the override kwarg,
-    and there is no packed env to skip locally anyway.
+    Dropped in local mode: LocalPipesClient does not accept the
+    override kwarg, and there is no packed env to skip locally anyway.
     """
-    if compute.mode == ExecutionMode.LOCAL:
-        return {}
-    path = config.pre_deployed_env_path or published_path
-    if path:
-        return {"pre_deployed_env_path_override": path}
+    if config.pre_deployed_env_path and compute.mode != ExecutionMode.LOCAL:
+        return {"pre_deployed_env_path_override": config.pre_deployed_env_path}
     return {}
 
 
@@ -299,9 +265,7 @@ def lda_models(
             **_base_env(),
         },
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
-        **_run_overrides(
-            config, compute, _published_env_path(context, "reuters_corpus")
-        ),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -322,9 +286,7 @@ def topic_term_matrix(
         config=config,
         extra_env=_base_env(),
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
-        **_run_overrides(
-            config, compute, _published_env_path(context, "reuters_corpus")
-        ),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -384,9 +346,7 @@ def hdbscan_meta_topics(
             **_base_env(),
         },
         extra_slurm_opts=_merged_slurm_opts(_gpu_slurm_opts(), config),
-        **_run_overrides(
-            config, compute, _published_env_path(context, "umap_embedding")
-        ),
+        **_run_overrides(config, compute),
     ).get_results()
 
 
@@ -407,7 +367,5 @@ def topic_map(
         config=config,
         extra_env=_base_env(),
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
-        **_run_overrides(
-            config, compute, _published_env_path(context, "umap_embedding")
-        ),
+        **_run_overrides(config, compute),
     ).get_results()
