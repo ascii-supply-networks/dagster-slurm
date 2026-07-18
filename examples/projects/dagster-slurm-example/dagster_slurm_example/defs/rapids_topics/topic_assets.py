@@ -35,42 +35,57 @@ lda_partitions = dg.MultiPartitionsDefinition(
 
 GROUP = "rapids_topics"
 
-# Opt-in shortcut for iterating on payload code
-# RAPIDS_TOPICS_CPU_ENV=$HOME/rapids_topics_env_cpu  (corpus/LDA/agg)
-# RAPIDS_TOPICS_GPU_ENV=$HOME/rapids_topics_env_gpu  (UMAP/HDBSCAN/map)
-_CPU_ENV_PATH = os.getenv("RAPIDS_TOPICS_CPU_ENV", "").strip()
-_GPU_ENV_PATH = os.getenv("RAPIDS_TOPICS_GPU_ENV", "").strip()
+_CPU_ENV_PIN = os.getenv("RAPIDS_TOPICS_CPU_ENV", "").strip()
+_GPU_ENV_PIN = os.getenv("RAPIDS_TOPICS_GPU_ENV", "").strip()
+_NO_REUSE = os.getenv("RAPIDS_TOPICS_NO_ENV_REUSE", "").strip() == "1"
 
+_CPU_REUSE_ENV = _CPU_ENV_PIN or "$HOME/rapids_topics_env_cpu"
+_GPU_REUSE_ENV = _GPU_ENV_PIN or "$HOME/rapids_topics_env_gpu"
+
+_CPU_PACK_CMD = [
+    "pixi",
+    "run",
+    "-e",
+    "opstooling",
+    "--frozen",
+    "python",
+    "scripts/pack_environment.py",
+    "--env",
+    "workload-topic-modeling",
+    "--build-missing",
+]
+
+_RAPIDS_PACK_CMD = [
+    "pixi",
+    "run",
+    "-e",
+    "opstooling",
+    "--frozen",
+    "python",
+    "scripts/pack_environment.py",
+    "--env",
+    "packaged-cluster-rapids",
+    "--build-missing",
+]
+
+# Family heads: pack (unless the whole family is pinned to an env).
 _CPU_PACK_METADATA = {
-    "slurm_pack_cmd": [
-        "pixi",
-        "run",
-        "-e",
-        "opstooling",
-        "--frozen",
-        "python",
-        "scripts/pack_environment.py",
-        "--env",
-        "workload-topic-modeling",
-        "--build-missing",
-    ],
-    **({"slurm_pre_deployed_env_path": _CPU_ENV_PATH} if _CPU_ENV_PATH else {}),
+    "slurm_pack_cmd": _CPU_PACK_CMD,
+    **({"slurm_pre_deployed_env_path": _CPU_ENV_PIN} if _CPU_ENV_PIN else {}),
+}
+_RAPIDS_PACK_METADATA = {
+    "slurm_pack_cmd": _RAPIDS_PACK_CMD,
+    **({"slurm_pre_deployed_env_path": _GPU_ENV_PIN} if _GPU_ENV_PIN else {}),
 }
 
-_RAPIDS_PACK_METADATA = {
-    "slurm_pack_cmd": [
-        "pixi",
-        "run",
-        "-e",
-        "opstooling",
-        "--frozen",
-        "python",
-        "scripts/pack_environment.py",
-        "--env",
-        "packaged-cluster-rapids",
-        "--build-missing",
-    ],
-    **({"slurm_pre_deployed_env_path": _GPU_ENV_PATH} if _GPU_ENV_PATH else {}),
+# Downstream assets: reuse the published env by default.
+_CPU_REUSE_METADATA = {
+    "slurm_pack_cmd": _CPU_PACK_CMD,
+    **({} if _NO_REUSE else {"slurm_pre_deployed_env_path": _CPU_REUSE_ENV}),
+}
+_RAPIDS_REUSE_METADATA = {
+    "slurm_pack_cmd": _RAPIDS_PACK_CMD,
+    **({} if _NO_REUSE else {"slurm_pre_deployed_env_path": _GPU_REUSE_ENV}),
 }
 
 
@@ -247,7 +262,7 @@ def reuters_corpus(
         "One gensim LDA model per (month, seed) partition: one Slurm job "
         "each, the fan-out stage of the pipeline"
     ),
-    metadata=_CPU_PACK_METADATA,
+    metadata=_CPU_REUSE_METADATA,
 )
 def lda_models(
     context: dg.AssetExecutionContext,
@@ -277,7 +292,7 @@ def lda_models(
     group_name=GROUP,
     deps=[lda_models],
     description="Stack topic-term vectors from all LDA models",
-    metadata=_CPU_PACK_METADATA,
+    metadata=_CPU_REUSE_METADATA,
 )
 def topic_term_matrix(
     context: dg.AssetExecutionContext,
@@ -333,7 +348,7 @@ def umap_embedding(
         "HDBSCAN meta-topic clustering: cuML on GPU nodes, contrib "
         "hdbscan fallback on CPU"
     ),
-    metadata=_RAPIDS_PACK_METADATA,
+    metadata=_RAPIDS_REUSE_METADATA,
 )
 def hdbscan_meta_topics(
     context: dg.AssetExecutionContext,
@@ -358,7 +373,7 @@ def hdbscan_meta_topics(
     group_name=GROUP,
     deps=[hdbscan_meta_topics],
     description="Labeled meta-topic scatter plot + JSON summary",
-    metadata=_RAPIDS_PACK_METADATA,
+    metadata=_RAPIDS_REUSE_METADATA,
 )
 def topic_map(
     context: dg.AssetExecutionContext,

@@ -15,6 +15,7 @@ from dagster_slurm_example.defs.rapids_topics.topic_assets import (
 )
 from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
     parse_sgml_docs,
+    publish_env_for_reuse,
     verify_sha256,
 )
 from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import (
@@ -103,6 +104,48 @@ def test_launchpad_overrides_replace_only_set_fields():
     assert _merged_slurm_opts(defaults, HdbscanConfig()) == defaults
     merged = _merged_slurm_opts(defaults, HdbscanConfig(mem="64G", gpus_per_node=0))
     assert merged == {"nodes": 1, "cpus_per_task": 2, "mem": "64G", "gpus_per_node": 0}
+
+
+def test_env_publish_creates_and_retargets_symlink(tmp_path):
+    # Packed-env layout: <base>/activate.sh + <base>/env (sys.prefix).
+    def packed_env(name):
+        base = tmp_path / name
+        (base / "env").mkdir(parents=True)
+        (base / "activate.sh").touch()
+        return base / "env"
+
+    link = tmp_path / "stable_link"
+    assert publish_env_for_reuse(packed_env("cache-key-1"), link)
+    assert link.resolve() == (tmp_path / "cache-key-1").resolve()
+
+    # A newer pack must atomically retarget the existing link.
+    assert publish_env_for_reuse(packed_env("cache-key-2"), link)
+    assert link.resolve() == (tmp_path / "cache-key-2").resolve()
+
+    # Outside a packed env (local dev interpreter): no-op, no link.
+    plain = tmp_path / "venv" / "env"
+    plain.mkdir(parents=True)
+    other = tmp_path / "other_link"
+    assert not publish_env_for_reuse(plain, other)
+    assert not other.exists()
+
+
+def test_first_asset_packs_and_downstream_reuse_published_env():
+    from dagster_slurm_example.defs.rapids_topics import topic_assets as ta
+
+    def meta(asset):
+        return asset.metadata_by_key[next(iter(asset.keys))]
+
+    # Family heads pack; downstream assets carry the stable env path.
+    for head in (ta.reuters_corpus, ta.umap_embedding):
+        assert "slurm_pre_deployed_env_path" not in meta(head)
+    for follower, link in (
+        (ta.lda_models, "$HOME/rapids_topics_env_cpu"),
+        (ta.topic_term_matrix, "$HOME/rapids_topics_env_cpu"),
+        (ta.hdbscan_meta_topics, "$HOME/rapids_topics_env_gpu"),
+        (ta.topic_map, "$HOME/rapids_topics_env_gpu"),
+    ):
+        assert meta(follower)["slurm_pre_deployed_env_path"] == link
 
 
 def test_pre_deployed_env_override_skipped_in_local_mode():

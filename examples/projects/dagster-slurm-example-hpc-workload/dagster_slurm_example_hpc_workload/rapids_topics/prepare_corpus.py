@@ -18,12 +18,35 @@ Environment:
 import hashlib
 import os
 import re
+import sys
 import tarfile
 import urllib.request
 from collections import Counter
 from pathlib import Path
 
 from dagster_pipes import PipesContext, open_dagster_pipes
+
+ENV_REUSE_LINK = "rapids_topics_env_cpu"
+
+
+def publish_env_for_reuse(env_prefix: Path, link: Path) -> bool:
+    """Symlink ``link`` at the packed env this payload runs in.
+
+    The first asset of each env family packs and pushes its environment;
+    publishing it under a stable path lets the downstream assets point
+    ``slurm_pre_deployed_env_path`` here and skip packing. Returns False
+    when the interpreter is not inside a packed cluster env (local dev),
+    detected by the ``<base>/activate.sh`` + ``<base>/env`` layout.
+    """
+    base = env_prefix.parent
+    if env_prefix.name != "env" or not (base / "activate.sh").exists():
+        return False
+    tmp = link.with_name(link.name + ".tmp")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(base)
+    tmp.replace(link)  # atomic swap so readers never see a missing link
+    return True
 
 DEFAULT_REUTERS_URL = (
     "https://kdd.ics.uci.edu/databases/reuters21578/reuters21578.tar.gz"
@@ -178,6 +201,14 @@ def main():
         out.mkdir(parents=True, exist_ok=True)
         pq.write_table(table, out / "docs.parquet")
         context.log.info(f"  {month}: {len(month_docs)} docs")
+
+    try:
+        if publish_env_for_reuse(Path(sys.prefix), Path.home() / ENV_REUSE_LINK):
+            context.log.info(
+                f"Published env for downstream reuse: ~/{ENV_REUSE_LINK}"
+            )
+    except OSError as exc:
+        context.log.warning(f"Could not publish env symlink: {exc}")
 
     context.report_asset_materialization(
         metadata={
