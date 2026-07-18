@@ -32,13 +32,10 @@ Maybe this project can support making HPC systems more accessible.**
 ```bash
 git clone https://github.com/ascii-supply-networks/dagster-slurm.git
 cd dagster-slurm
-docker compose up
 cd examples
 ```
 
-The Docker compose stack starts a local Dagster control plane, a Slurm edge node, and a compute partition to mirror a typical HPC setup.
-
-## 1. Develop locally (no Slurm)
+## 1. Kickstart (locally--no Slurm)
 
 For rapid iteration, execute assets directly on your workstation:
 
@@ -48,7 +45,7 @@ pixi run start
 
 Navigate to [http://localhost:3000](http://localhost:3000) to view the Dagster UI with assets running in-process.
 
-## 2. Using Dagster
+### Using Dagster UI
 
 To understand the benefits of using **Dagster** with **Slurm**, open the **Dagster UI** and navigate to the **Assets** tab.
 Here, you’ll see the different assets that can be *materialized* (i.e., executed).
@@ -71,7 +68,28 @@ Depending on your Dagster configuration, you can also log and visualize addition
 
 ![Screenshot comparing multiple Dagster runs](../static/img/process_data_asset_view.png)
 
-## 3. Point to your own HPC cluster
+## 3. Validating with a Docker as your Cluster
+
+You can run the full Slurm code without touching a real supercomputer by setting up a docker environment. This repository ships a Docker Compose stack for that. Create a `.env` file in `examples/` with the Docker cluster's default credentials:
+
+```
+SLURM_EDGE_NODE_HOST=localhost
+SLURM_EDGE_NODE_PORT=2223
+SLURM_EDGE_NODE_USER=submitter
+SLURM_EDGE_NODE_PASSWORD=submitter
+SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
+```
+
+Then start the cluster and point Dagster at it:
+
+```bash
+docker compose up -d
+pixi run start-staging
+```
+
+Navigate to [http://localhost:3000](http://localhost:3000) again. You can also SSH to your running docker container, and check the Slurm queue with `squeue -u submitter` and `sacct -u submitter`.
+
+## 4. Point to your own HPC cluster
 
 1. Update the SSH and Slurm configuration in
    [`examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py`](https://github.com/ascii-supply-networks/dagster-slurm/blob/main/examples/projects/dagster-slurm-example/dagster_slurm_example/resources/__init__.py)
