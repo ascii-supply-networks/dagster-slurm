@@ -20,7 +20,7 @@ jobs:
     name: Paper Draft
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
       - name: TeX and PDF
         uses: docker://openjournals/paperdraft:latest
         with:
