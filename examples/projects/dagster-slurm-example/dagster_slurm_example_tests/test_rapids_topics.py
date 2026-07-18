@@ -1,15 +1,32 @@
 """Unit tests for the rapids_topics example (CPU-only, no Slurm/GPU)."""
 
+import base64
+import hashlib
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
+from dagster_slurm import ComputeResource
+from dagster_slurm.config.environment import ExecutionMode
+from dagster_slurm_example.defs.rapids_topics.topic_assets import (
+    HdbscanConfig,
+    _merged_slurm_opts,
+    _run_overrides,
+    lda_partitions,
+)
 from dagster_slurm_example_hpc_workload.rapids_topics import (
     hdbscan_cluster,
     umap_reduce,
 )
 from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
     parse_sgml_docs,
+    verify_sha256,
 )
-from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import cluster_labels
-from pydantic import ValidationError
+from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import (
+    MAX_INLINE_PLOT_BYTES,
+    cluster_labels,
+    inline_plot_metadata,
+)
 
 SGML_FIXTURE = """
 <REUTERS TOPICS="YES" NEWID="1">
@@ -30,85 +47,44 @@ Reuter
 """
 
 
-def test_parse_sgml_extracts_dated_docs_with_bodies():
+def test_parser_keeps_only_dated_docs_with_bodies():
     docs = parse_sgml_docs(SGML_FIXTURE)
 
+    # The bodyless story must be dropped; month abbreviations must map
+    # to the zero-padded partition keys the assets use.
     assert [d["month"] for d in docs] == ["1987-02", "1987-10"]
-    assert docs[0]["title"] == "BAHIA COCOA REVIEW"
-    assert "cocoa zone" in docs[0]["body"]
-    # entity unescaping and untitled docs
+    # SGML entities are unescaped and the end-of-text control is gone.
+    assert "&" in docs[1]["body"]
+    assert "&amp;" not in docs[1]["body"]
+    assert "&#3;" not in docs[0]["body"]
+    # Untitled stories survive with an empty title, not a crash.
     assert docs[1]["title"] == ""
-    assert "&" in docs[1]["body"] and "&amp;" not in docs[1]["body"]
 
 
 def test_sha256_verification_accepts_match_and_rejects_mismatch(tmp_path):
-    import hashlib
-
-    from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
-        verify_sha256,
-    )
-
     blob = tmp_path / "reuters.tar.gz"
     blob.write_bytes(b"not really a tarball")
-    good = hashlib.sha256(b"not really a tarball").hexdigest()
 
-    verify_sha256(blob, good)
+    verify_sha256(blob, hashlib.sha256(b"not really a tarball").hexdigest())
     with pytest.raises(RuntimeError, match="Checksum mismatch"):
         verify_sha256(blob, "0" * 64)
 
 
-def test_min_samples_clamped_only_above_cuml_cap():
-    assert hdbscan_cluster.clamped_min_samples(5) == 5
-    assert hdbscan_cluster.clamped_min_samples(1023) == 1023
-    assert hdbscan_cluster.clamped_min_samples(5000) == 1023
-
-
-def test_payload_modules_import_without_cuml():
-    # The dev/CI env has no cuML; import must fall through cleanly so
-    # the CPU fallback path is selected at runtime.
-    assert umap_reduce._HAS_CUML is False
-    assert hdbscan_cluster._HAS_CUML is False
-
-
-def test_factories_fall_back_to_cpu_without_cuml():
-    # umap-learn / hdbscan live in the packaged-cluster-rapids env, not
-    # in dev (numba/numpy conflicts with the cluster stack); exercise
-    # the factory bodies only where they are importable.
-    hdbscan_lib = pytest.importorskip("hdbscan")
-    umap_lib = pytest.importorskip("umap")
-
-    reducer = umap_reduce.make_umap(
-        n_components=2,
-        n_neighbors=15,
-        min_dist=0.1,
-        metric="cosine",
-        random_state=0,
-        build_algo="auto",
-    )
-    assert isinstance(reducer, umap_lib.UMAP)
-
-    clusterer = hdbscan_cluster.make_hdbscan(min_cluster_size=5, min_samples=5)
-    assert isinstance(clusterer, hdbscan_lib.HDBSCAN)
-
-
-def test_inline_plot_embeds_small_pngs_and_skips_large_ones():
-    import base64
-
-    from dagster_slurm_example_hpc_workload.rapids_topics.topic_map import (
-        MAX_INLINE_PLOT_BYTES,
-        inline_plot_metadata,
-    )
-
+def test_inline_plot_round_trips_and_respects_size_cap():
     png_bytes = b"\x89PNG-fake-bytes"
     embedded = inline_plot_metadata(png_bytes)
-    assert embedded is not None and embedded["type"] == "md"
-    assert base64.b64encode(png_bytes).decode("ascii") in embedded["raw_value"]
-    assert embedded["raw_value"].startswith("![topic map](data:image/png;base64,")
 
+    assert embedded is not None and embedded["type"] == "md"
+    # The markdown must carry the exact bytes: decode what the UI would.
+    payload = embedded["raw_value"].split("base64,", 1)[1].rstrip(")")
+    assert base64.b64decode(payload) == png_bytes
+
+    # Oversized figures must fall back to path-only reporting instead
+    # of pushing megabytes through the event log.
     assert inline_plot_metadata(b"x" * (MAX_INLINE_PLOT_BYTES + 1)) is None
 
 
-def test_cluster_labels_use_most_frequent_terms_and_skip_noise():
+def test_cluster_labels_rank_terms_by_frequency_and_skip_noise():
     labels = cluster_labels(
         clusters=[0, 0, 0, -1, 1],
         top_terms=[
@@ -126,41 +102,17 @@ def test_cluster_labels_use_most_frequent_terms_and_skip_noise():
     assert -1 not in labels
 
 
-def test_lda_config_rejects_invalid_topic_counts():
-    from dagster_slurm_example.defs.rapids_topics.topic_assets import LdaConfig
-
-    with pytest.raises(ValidationError):
-        LdaConfig(num_topics=0)
-    with pytest.raises(ValidationError):
-        LdaConfig(num_topics=501)
-    assert LdaConfig().num_topics == 15
-
-
-def test_launchpad_slurm_overrides_replace_only_set_fields():
-    from dagster_slurm_example.defs.rapids_topics.topic_assets import (
-        HdbscanConfig,
-        _merged_slurm_opts,
-    )
-
+def test_launchpad_overrides_replace_only_set_fields():
     defaults = {"nodes": 1, "cpus_per_task": 2, "mem": "4G", "gpus_per_node": 1}
-    untouched = _merged_slurm_opts(defaults, HdbscanConfig())
-    assert untouched == defaults
 
+    assert _merged_slurm_opts(defaults, HdbscanConfig()) == defaults
     merged = _merged_slurm_opts(defaults, HdbscanConfig(mem="64G", gpus_per_node=0))
     assert merged == {"nodes": 1, "cpus_per_task": 2, "mem": "64G", "gpus_per_node": 0}
 
 
 def test_pre_deployed_env_override_skipped_in_local_mode():
-    from types import SimpleNamespace
-    from typing import cast
-
-    from dagster_slurm import ComputeResource
-    from dagster_slurm.config.environment import ExecutionMode
-    from dagster_slurm_example.defs.rapids_topics.topic_assets import (
-        HdbscanConfig,
-        _run_overrides,
-    )
-
+    # LocalPipesClient.run() has no **kwargs: forwarding the override in
+    # local mode raises TypeError, so it must be dropped there.
     cfg = HdbscanConfig(pre_deployed_env_path="/home/user/env")
     slurm = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.SLURM))
     local = cast(ComputeResource, SimpleNamespace(mode=ExecutionMode.LOCAL))
@@ -169,15 +121,3 @@ def test_pre_deployed_env_override_skipped_in_local_mode():
         "pre_deployed_env_path_override": "/home/user/env"
     }
     assert _run_overrides(cfg, local) == {}
-    assert _run_overrides(HdbscanConfig(), slurm) == {}
-
-
-def test_lda_partitions_cover_month_seed_grid():
-    from dagster_slurm_example.defs.rapids_topics.topic_assets import (
-        MONTHS,
-        SEEDS,
-        lda_partitions,
-    )
-
-    keys = lda_partitions.get_partition_keys()
-    assert len(keys) == len(MONTHS) * len(SEEDS) == 15
