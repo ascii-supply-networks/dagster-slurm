@@ -48,7 +48,10 @@ build-backend = "uv_build"
 [tool.pixi.workspace]
 preview = ["pixi-build"]
 channels = ["conda-forge"]
-platforms = ["linux-64", "linux-aarch64"]
+platforms = [
+  { platform = "linux-64" },
+  { platform = "linux-aarch64" },
+]
 
 [tool.pixi.package]
 # include = ["dagster_slurm/**", "pyproject.toml", "README.md", "LICENSE"]
