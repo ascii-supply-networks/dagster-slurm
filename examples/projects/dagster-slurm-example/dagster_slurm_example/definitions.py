@@ -16,6 +16,7 @@ import metaxy.ext.dagster as mxd
 
 from . import defs as example_defs
 from .defs import metaxy as metaxy_defs
+from .defs import rapids_topics as rapids_topics_defs
 from .defs import ray as ray_defs
 from .defs import shell as shell_defs
 from .resources import get_resources
@@ -81,6 +82,10 @@ def defs():
                 automation_condition=dg.AutomationCondition.eager()
                 | dg.AutomationCondition.on_missing(),
             ),
+            # No automation condition: the rapids_topics chain is meant to
+            # be materialized explicitly (its LDA stage fans out one Slurm
+            # job per partition).
+            *dg.load_assets_from_package_module(rapids_topics_defs),
         ]
     )
 

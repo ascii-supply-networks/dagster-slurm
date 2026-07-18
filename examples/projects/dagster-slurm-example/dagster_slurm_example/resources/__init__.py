@@ -253,6 +253,10 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "user": "georg.heiler",
             "key_path": os.path.expanduser("~/.ssh/id_datalab"),
         },
+        "compute_config": {
+            "pack_on_remote": True,
+            "remote_pack_timeout": 1800,
+        },
         "slurm_queue_config": {
             "partition": "GPU-a100s",
             "time_limit": "00:10:00",
