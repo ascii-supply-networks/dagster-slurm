@@ -8,8 +8,11 @@ authors = [
 ]
 requires-python = ">=3.10,<3.15"
 [tool.pixi.workspace]
-# not supported  "win-64", due to pip ray
-platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
+platforms = [
+  { name = "linux-64-cuda-12", platform = "linux-64", cuda = "12" },
+  { platform = "linux-aarch64" },
+  { name = "osx-arm64-macos-26-5-2", platform = "osx-arm64", macos = "26.5.2" },
+]
 channels = ["conda-forge"]
 
 [tool.pixi.pypi-options]
@@ -92,9 +95,6 @@ gensim = ">=4.3,<5"
 
 [tool.pixi.feature.cluster-rapids]
 channels = [{ channel = "rapidsai", priority = 1 }]
-
-[tool.pixi.feature.cluster-rapids.system-requirements]
-cuda = "12"
 
 [tool.pixi.feature.cluster-rapids.dependencies]
 python = "3.12.*"

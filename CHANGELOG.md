@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.1 (2026-07-18)
+
+### Continuous Integration
+
+- Add devenv shell bootstrap
+  ([#149](https://github.com/ascii-supply-networks/dagster-slurm/pull/149),
+  [`427ec8f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/427ec8f0dc925ea055abdbc58152c0096809a88a))
+
+- Add supported Python test matrix
+  ([#150](https://github.com/ascii-supply-networks/dagster-slurm/pull/150),
+  [`c3c2a92`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c3c2a92a884d4ff516c892f90453c2e9a5e9a1db))
+
+- Update actions and dependency pins
+  ([#148](https://github.com/ascii-supply-networks/dagster-slurm/pull/148),
+  [`523a024`](https://github.com/ascii-supply-networks/dagster-slurm/commit/523a024a6750d3ea40359ce9f9788ab596d073b3))
+
+### Features
+
+- **infra**: Cleanup ci and releases
+  ([#151](https://github.com/ascii-supply-networks/dagster-slurm/pull/151),
+  [`a8cc9b4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/a8cc9b43cc13a7cec135a05078ea197a8fbea05d))
+
+
 ## v1.14.0 (2026-05-29)
 
 
