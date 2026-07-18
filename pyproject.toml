@@ -4,7 +4,7 @@ version = "1.14.0"
 description = "Workspace root - not published"
 readme = "README.md"
 authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.10,<3.15"
 dependencies = []
 
 [tool.uv]
@@ -37,6 +37,7 @@ build = { features = ["build"], solve-group = "build" }
 docs = { features = ["docs"], solve-group = "docs" }
 
 [tool.pixi.feature.build.dependencies]
+python = "3.10.*"
 dprint = ">=0.50.0,<1"
 
 [tool.pixi.feature.build.pypi-dependencies]

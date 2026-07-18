@@ -1,7 +1,7 @@
-from enum import StrEnum
+from enum import Enum
 
 
-class Environment(StrEnum):
+class Environment(str, Enum):
     DEVELOPMENT = "development"
     STAGING_DOCKER = "staging_docker"
     STAGING_SUPERCOMPUTER = "staging_supercomputer"
@@ -20,7 +20,7 @@ class Environment(StrEnum):
     PRODUCTION_SUPERCOMPUTER_HETJOB = "production_supercomputer_hetjob"
 
 
-class ExecutionMode(StrEnum):
+class ExecutionMode(str, Enum):
     """Defines the execution modes for the application.
     Members of this enum behave like strings.
     """
