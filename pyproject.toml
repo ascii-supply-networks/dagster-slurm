@@ -35,7 +35,6 @@ platforms = [
   { name = "osx-arm64-macos-26-5-2", platform = "osx-arm64", macos = "26.5.2" },
   { name = "osx-64-macos-26-5-2", platform = "osx-64", macos = "26.5.2" },
   { platform = "win-64" },
-  "osx-arm64",
 ]
 channels = ["conda-forge"]
 
