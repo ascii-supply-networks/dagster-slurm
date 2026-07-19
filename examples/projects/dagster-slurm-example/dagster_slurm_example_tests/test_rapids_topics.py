@@ -13,6 +13,9 @@ from dagster_slurm_example.defs.rapids_topics.topic_assets import (
     _merged_slurm_opts,
     _run_overrides,
 )
+from dagster_slurm_example_hpc_workload.rapids_topics.aggregate_topics import (
+    split_current_and_stale,
+)
 from dagster_slurm_example_hpc_workload.rapids_topics.prepare_corpus import (
     parse_sgml_docs,
     verify_sha256,
@@ -71,6 +74,23 @@ def test_sklearn_lda_produces_normalized_topic_vectors():
 
     assert topic_term.shape == (2, 4)
     assert all(abs(float(row.sum()) - 1.0) < 1e-6 for row in topic_term)
+
+
+def test_aggregator_skips_models_from_older_vocabularies():
+    # Re-materializing the corpus changes the vocabulary size; model
+    # files from before must be skipped, not stacked into ragged rows.
+    import pyarrow as pa
+
+    def model_table(dim):
+        return pa.table({"month": ["1987-02"], "vector": [[0.5] * dim]})
+
+    current, stale = split_current_and_stale(
+        {"fresh/seed=0": model_table(4), "old/seed=0": model_table(3)},
+        expected_dim=4,
+    )
+
+    assert list(current) == ["fresh/seed=0"]
+    assert list(stale) == ["old/seed=0"]
 
 
 def test_sha256_verification_accepts_match_and_rejects_mismatch(tmp_path):
