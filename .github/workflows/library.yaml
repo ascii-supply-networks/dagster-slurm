@@ -413,13 +413,13 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: prerelease-python-package-distributions
-          path: projects/dist/*
+          path: dist/*
           if-no-files-found: error
 
       - name: Publish pre-release to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
-          packages-dir: projects/dist
+          packages-dir: dist
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
           verbose: true
@@ -515,13 +515,13 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: release-python-package-distributions
-          path: projects/dist/*
+          path: dist/*
           if-no-files-found: error
 
       - name: Publish to PyPI (Trusted Publishing)
         if: github.event.inputs.release_type != 'prerelease'
         uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
-          packages-dir: projects/dist
+          packages-dir: dist
           skip-existing: true
           verbose: true
