@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.6 (2026-07-19)
+
+### Continuous Integration
+
+- Verify built release distributions
+  ([#159](https://github.com/ascii-supply-networks/dagster-slurm/pull/159),
+  [`1a625a9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1a625a987bdd23109f0372fe4206b4ad5d9ba487))
+
+### Documentation
+
+- Improve landing page discoverability
+  ([#161](https://github.com/ascii-supply-networks/dagster-slurm/pull/161),
+  [`137e7e4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/137e7e4167b70bc576bb8c2de003f637f288582c))
+
+### Refactoring
+
+- Replace gensim with scikit-learn
+  ([#157](https://github.com/ascii-supply-networks/dagster-slurm/pull/157),
+  [`8330aca`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8330aca85f67aaec3052230980735cee6bef3665))
+
+
 ## v1.14.0-rc.5 (2026-07-19)
 
 ### Bug Fixes
