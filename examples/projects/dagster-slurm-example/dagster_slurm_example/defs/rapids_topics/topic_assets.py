@@ -3,7 +3,7 @@
 A public-data version of a production Common Crawl topic-modeling
 pipeline. The chain demonstrates Slurm scheduling with dagster-slurm:
 
-- CPU stages (corpus prep, per-partition gensim LDA, aggregation) run
+- CPU stages (corpus prep, per-partition scikit-learn LDA, aggregation) run
   as sbatch jobs in the ``workload-topic-modeling`` packed env.
 - GPU stages (UMAP, HDBSCAN, report) run in the
   ``packaged-cluster-rapids`` env with cuML, requesting one GPU on
@@ -169,10 +169,10 @@ def _run_overrides(config: TopicSlurmConfig, compute: ComputeResource) -> dict:
 class CorpusConfig(TopicSlurmConfig):
     """Configuration for Reuters corpus preparation."""
 
-    dict_keep_n: int = Field(
+    max_features: int = Field(
         default=20000,
         gt=0,
-        description="Dictionary size cap (shared vocabulary across all models)",
+        description="Maximum shared vocabulary size",
     )
 
 
@@ -180,7 +180,7 @@ class LdaConfig(TopicSlurmConfig):
     """Configuration for per-partition LDA training."""
 
     num_topics: int = Field(default=15, gt=0, le=500)
-    passes: int = Field(default=5, gt=0, le=100)
+    max_iter: int = Field(default=5, gt=0, le=100)
     top_terms: int = Field(default=10, gt=0, le=50)
     min_docs: int = Field(
         default=50,
@@ -217,7 +217,7 @@ class HdbscanConfig(TopicSlurmConfig):
 
 @dg.asset(
     group_name=GROUP,
-    description="Download + parse Reuters-21578, build the shared dictionary",
+    description="Download + parse Reuters-21578, build the shared vocabulary",
     metadata=_CPU_PACK_METADATA,
 )
 def reuters_corpus(
@@ -229,7 +229,7 @@ def reuters_corpus(
         context=context,
         payload_path=_payload("prepare_corpus.py"),
         config=config,
-        extra_env={"DICT_KEEP_N": str(config.dict_keep_n), **_base_env()},
+        extra_env={"MAX_FEATURES": str(config.max_features), **_base_env()},
         extra_slurm_opts=_merged_slurm_opts(_cpu_slurm_opts(), config),
         **_run_overrides(config, compute),
     ).get_results()
@@ -240,7 +240,7 @@ def reuters_corpus(
     partitions_def=lda_partitions,
     deps=[reuters_corpus],
     description=(
-        "One gensim LDA model per (month, seed) partition: one Slurm job "
+        "One scikit-learn LDA model per (month, seed) partition: one Slurm job "
         "each, the fan-out stage of the pipeline"
     ),
     metadata=_CPU_PACK_METADATA,
@@ -259,7 +259,7 @@ def lda_models(
             "MONTH": keys["month"],
             "SEED": keys["seed"],
             "NUM_TOPICS": str(config.num_topics),
-            "PASSES": str(config.passes),
+            "MAX_ITER": str(config.max_iter),
             "TOP_TERMS": str(config.top_terms),
             "MIN_DOCS": str(config.min_docs),
             **_base_env(),

@@ -79,6 +79,7 @@ metaxy = { version = ">=0.1.0", extras = ["delta", "ray"] }
 
 [tool.pixi.feature.workload-document-processing.dependencies]
 pylatexenc = ">=2.10,<3"
+setuptools = "<82" # torch 2.11+cpu requires this
 
 [tool.pixi.feature.workload-document-processing.pypi-dependencies]
 torch = { version = "~=2.11.0", index = "https://download.pytorch.org/whl/cpu" }
@@ -89,7 +90,7 @@ duckdb = ">=1.4.4,<2"
 pyarrow-hotfix = ">=0.7,<1"
 
 [tool.pixi.feature.workload-topic-modeling.dependencies]
-gensim = ">=4.3,<5"
+scikit-learn = ">=1.5,<2"
 
 [tool.pixi.feature.cluster-rapids]
 channels = [{ channel = "rapidsai", priority = 1 }]
