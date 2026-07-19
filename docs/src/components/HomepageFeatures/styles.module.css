@@ -9,3 +9,13 @@
   height: 200px;
   width: 200px;
 }
+
+.pipeline {
+  padding: 3rem 0 4rem;
+}
+
+.pipelineLead {
+  max-width: 52rem;
+  margin: 1rem auto 0;
+  font-size: 1.05rem;
+}

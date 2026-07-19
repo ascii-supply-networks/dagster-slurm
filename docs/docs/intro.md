@@ -1,25 +1,36 @@
 ---
 sidebar_position: 1
+description: Develop Dagster assets locally, then run selected steps on Slurm with a Pixi-locked environment, telemetry, and end-to-end data dependencies.
+keywords: [dagster-slurm, Dagster Slurm, HPC workflow orchestration]
 ---
 
 # Getting started
 
-`dagster-slurm` lets you take the same Dagster assets from a laptop to a Slurm-backed supercomputer with minimal configuration changes. This page walks through the demo environment bundled with the repository and highlights the key concepts you will reuse on your own cluster.
+`dagster-slurm` lets the same Dagster asset run locally during development and on a Slurm cluster in production.
 
 **A European sovereign GPU cloud does not come out of nowhere.
 Maybe this project can support making HPC systems more accessible.**
 
-## What Dagster-Slurm technically delivers
+## Why dagster-slurm
 
-- **Deterministic runtimes:** `pixi` and `pixi-pack` freeze your dependencies, upload the bundle to the HPC edge, and install exactly once per version.
-- **Automated deployment:** Dagster assembles the run directory, syncs it to the cluster, and invokes Slurm without custom shell scripts.
-- **Structured telemetry:** Slurm job IDs, queue states, CPU/memory usage, and Ray logs stream back through Dagster Pipes so you keep a single source of truth.
+**Configure once, then materialize.** dagster-slurm transfers the payload from your current checkout, provides the environment captured by the Pixi lockfile, submits the job, and returns its logs and status to Dagster. You do not need a manual `ssh`, `scp`, environment activation, and `sbatch` loop for every run.
 
-## Developer experience benefits
+**Iterate locally.** Developers and coding agents can run the same asset without SSH or Slurm for rapid feedback, then change the compute configuration when it is ready for the cluster.
 
-- **Config-only mobility:** Toggle `DAGSTER_DEPLOYMENT` to jump between local execution, staging Slurm, and production supercomputers—no code forks.
-- **Unified observability:** Dagster’s UI surfaces HPC and non-HPC runs side by side, with log tailing, run metadata, and asset lineage in one place.
-- **Operational confidence:** Jobs inherit retries, alerts, and run status checks from Dagster, while structured metrics simplify post-mortems.
+**Keep HPC controls.**
+
+- Logs, Slurm state, CPU efficiency, memory, elapsed time, and node-hours appear in Dagster.
+- Assets can use different environments, launchers, and resource requirements.
+- Separate `ComputeResource` instances can target different clusters.
+- Run-scoped Ray can reuse one allocation. Shared-allocation sessions and heterogeneous (HET) jobs are experimental; see [Execution modes](#execution-modes).
+
+## Before, during, and after HPC
+
+An HPC job is one stage in a Dagster asset graph, not the whole pipeline:
+
+- **Before:** ingest and validate data where it lives.
+- **During:** send only the compute-heavy assets to Slurm.
+- **After:** aggregate, publish, and serve the results.
 
 ## Prerequisites
 
