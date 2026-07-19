@@ -394,6 +394,8 @@ jobs:
           git config --local user.name "GitHub Action"
 
       - name: Create pre-release version
+        env:
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
         run: |
           set -e
 
