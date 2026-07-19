@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.5 (2026-07-19)
+
+### Bug Fixes
+
+- Use build output path for releases
+  ([#158](https://github.com/ascii-supply-networks/dagster-slurm/pull/158),
+  [`78e1fe1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/78e1fe1e7d4c5e16f2216d635ac1d2abfedc7ee0))
+
+
 ## v1.14.0-rc.4 (2026-07-18)
 
 ### Bug Fixes
