@@ -5,12 +5,11 @@ description = "dagster integration with slurm"
 readme = "README.md"
 authors = [{ name = "geoheil", email = "georg.heiler@ascii.ac.at" }]
 requires-python = ">=3.10,<3.15"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 keywords = ["dagster", "slurm", "hpc", "workflow-orchestration", "ray", "feray"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
