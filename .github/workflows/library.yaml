@@ -320,7 +320,11 @@ jobs:
           docker compose logs
           docker compose down -v
 
-      - run: pixi run -e build --frozen build-lib
+      - name: Build distributions
+        run: pixi run -e build --frozen build-lib
+
+      - name: Verify distributions
+        run: pixi run -e build --frozen python scripts/verify_distributions.py dist
 
   release-dry-run:
     name: Semantic release dry run
@@ -368,10 +372,10 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: tibdex/github-app-token@v2.1.0
+        uses: actions/create-github-app-token@v3.2.0
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout code
         uses: actions/checkout@v7.0.0
@@ -389,24 +393,28 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-      - name: Create pre-release
-        env:
-          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+      - name: Create pre-release version
         run: |
           set -e
 
-          # Create pre-release version
           pixi run -e build --frozen uv run semantic-release version --prerelease
 
           if ! git diff --staged --quiet; then
             git commit -m "chore: additional changes [skip ci]"
           fi
 
-          # Push changes and tags
+      - name: Verify pre-release distributions
+        run: pixi run -e build --frozen python scripts/verify_distributions.py dist
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+        run: |
+          set -e
+
           git push origin main
           git push --tags
 
-          # Create GitHub pre-release
           pixi run -e build --frozen uv run semantic-release publish
 
       - name: Upload distribution artifacts
@@ -438,10 +446,10 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: tibdex/github-app-token@v2.1.0
+        uses: actions/create-github-app-token@v3.2.0
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout code
         uses: actions/checkout@v7.0.0
@@ -495,9 +503,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+      - name: Create release version
         run: |
           set -e
 
@@ -506,6 +512,15 @@ jobs:
           if ! git diff --staged --quiet; then
             git commit -m "chore: additional changes [skip ci]"
           fi
+
+      - name: Verify release distributions
+        run: pixi run -e build --frozen python scripts/verify_distributions.py dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+        run: |
+          set -e
 
           git push origin main
           git push --tags
