@@ -6,7 +6,8 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'dagster-slurm',
-  tagline: 'The Super developer experience for HPC',
+  tagline:
+    'Run the same Dagster assets on your laptop and on Slurm HPC clusters',
   favicon: 'img/dagster-slurm-logo.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -75,9 +76,14 @@ const config: Config = {
   plugins: ['docusaurus-lunr-search'],
 
   themeConfig: {
-    // Replace with your project's social card
-    // image: 'img/ascii-logo.jpg',
     image: 'img/featured.png',
+    metadata: [
+      {
+        name: 'keywords',
+        content:
+          'Dagster, Slurm, HPC, data pipelines, workflow orchestration, Pixi, Ray',
+      },
+    ],
     navbar: {
       title: 'dagster-slurm',
       logo: {

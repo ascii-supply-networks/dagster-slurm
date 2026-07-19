@@ -4,10 +4,23 @@
  */
 
 .heroBanner {
-  padding: 4rem 0;
+  padding: 5rem 0;
   text-align: center;
   position: relative;
   overflow: hidden;
+}
+
+.eyebrow {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+}
+
+.heroSubtitle {
+  margin: 1rem auto 0;
+  max-width: 46rem;
 }
 
 @media screen and (max-width: 996px) {
@@ -20,4 +33,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
 }

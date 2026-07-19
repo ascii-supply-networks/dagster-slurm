@@ -11,37 +11,40 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'Unified Compute Interface',
-    // Suggestion: An SVG representing a developer or a clean interface.
+    title: 'Configure once, then click Materialize',
     Svg: require('@site/static/img/undraw_server-cluster_7ugi.svg').default,
     description: (
       <>
-        Develop on your laptop, deploy to an HPC cluster. The <strong>ComputeResource</strong> provides a single, consistent API for local and remote execution, so your code never has to change. Dependencies are consistently managed and distributed automatically via <strong>pixi</strong>
+        dagster-slurm transfers the payload from your current checkout, provides
+        its Pixi-locked environment, submits it with <code>sbatch</code>, and
+        returns the job status and logs to Dagster.
       </>
     ),
   },
   {
-    title: 'HPC-Optimized Execution',
-    // Suggestion: An SVG representing a server cluster or high performance.
+    title: 'Fast feedback before HPC',
     Svg: require('@site/static/img/undraw_scooter_izdb.svg').default,
     description: (
       <>
-        Go beyond simple job submission. Use <strong>multi-assets</strong> to fuse multiple assets into a single Slurm allocation, minimizing queue times.
+        Run the same asset locally without SSH or Slurm. Developers and coding
+        agents can iterate quickly, then switch the compute configuration when
+        the workload is ready for the cluster.
       </>
     ),
   },
   {
-    title: 'Extensible & Environment-Aware',
-    // Suggestion: An SVG representing building blocks or packaging.
+    title: 'Advanced HPC controls',
     Svg: require('@site/static/img/undraw_monitor_ypga.svg').default,
     description: (
       <>
-        Built-in <strong>Launchers</strong> for Ray and Spark (WIP) enable distributed workloads out of the box. Automatic environment packaging with <code>pixi</code> ensures that your remote execution environment is a perfect replica of your local one.
+        Dagster reports Slurm state, logs, CPU efficiency, memory, elapsed time,
+        and node-hours. Choose environments per asset and define a separate{' '}
+        <code>ComputeResource</code> per cluster. Run-scoped Ray can reuse one
+        allocation; shared-allocation sessions and HET jobs are experimental.
       </>
     ),
   },
 ];
-
 
 function Feature({title, Svg, description}: FeatureItem) {
   return (
@@ -66,6 +69,23 @@ export default function HomepageFeatures(): ReactNode {
             <Feature key={idx} {...props} />
           ))}
         </div>
+      </div>
+    </section>
+  );
+}
+
+export function HomepagePipeline(): ReactNode {
+  return (
+    <section className={styles.pipeline}>
+      <div className="container text--center">
+        <Heading as="h2">Before, during, and after HPC</Heading>
+        <p className={styles.pipelineLead}>
+          <strong>Before:</strong> ingest and validate data.{' '}
+          <strong>During:</strong> send the heavy asset to Slurm.{' '}
+          <strong>After:</strong> aggregate, publish, or serve the result. Dagster
+          dependencies and lineage connect every stage, even when they run in
+          different places.
+        </p>
       </div>
     </section>
   );

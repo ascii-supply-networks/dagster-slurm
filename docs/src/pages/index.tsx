@@ -1,27 +1,37 @@
 import type {ReactNode} from 'react';
 import clsx from 'clsx';
 import Link from '@docusaurus/Link';
-import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
-import HomepageFeatures from '@site/src/components/HomepageFeatures';
+import HomepageFeatures, {
+  HomepagePipeline,
+} from '@site/src/components/HomepageFeatures';
 import Heading from '@theme/Heading';
 
 import styles from './index.module.css';
 
 function HomepageHeader() {
-  const {siteConfig} = useDocusaurusContext();
   return (
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
       <div className="container">
+        <p className={styles.eyebrow}>dagster-slurm</p>
         <Heading as="h1" className="hero__title">
-          {siteConfig.title}
+          Develop locally. Run on Slurm. Orchestrate the whole pipeline.
         </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
+        <p className={clsx('hero__subtitle', styles.heroSubtitle)}>
+          Configure a cluster once, then materialize Dagster assets with the
+          payload from your current checkout and a Pixi-locked environment. Keep
+          local feedback, Slurm telemetry, and data dependencies in one graph.
+        </p>
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
             to="/docs/intro">
-            Explore the tutorial - 10mins ⏱️
+            Get started
+          </Link>
+          <Link
+            className="button button--outline button--secondary button--lg"
+            href="https://github.com/ascii-supply-networks/dagster-slurm">
+            View on GitHub
           </Link>
         </div>
       </div>
@@ -30,14 +40,14 @@ function HomepageHeader() {
 }
 
 export default function Home(): ReactNode {
-  const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title={`Discover the Super in HPC - ${siteConfig.title}`}
-      description="Improve developer experience for HPC <head />">
+      title="Run Dagster data pipelines on Slurm HPC"
+      description="Develop Dagster assets locally, run selected steps on Slurm, and keep environments, telemetry, and end-to-end data dependencies in one pipeline.">
       <HomepageHeader />
       <main>
         <HomepageFeatures />
+        <HomepagePipeline />
       </main>
     </Layout>
   );
