@@ -13,6 +13,7 @@ from dagster_slurm_example.defs.rapids_topics.topic_assets import (
     _merged_slurm_opts,
     _run_overrides,
 )
+from dagster_slurm_example_hpc_workload.rapids_topics import prepare_corpus
 from dagster_slurm_example_hpc_workload.rapids_topics.aggregate_topics import (
     split_current_and_stale,
 )
@@ -91,6 +92,27 @@ def test_aggregator_skips_models_from_older_vocabularies():
 
     assert list(current) == ["fresh/seed=0"]
     assert list(stale) == ["old/seed=0"]
+
+
+def test_prepare_corpus_serializes_pruned_vocabulary(monkeypatch, tmp_path):
+    docs = [
+        {"month": "1987-01", "title": "", "body": f"common topic{i % 3}"}
+        for i in range(15)
+    ]
+    context = SimpleNamespace(
+        log=SimpleNamespace(info=lambda _message: None),
+        report_asset_materialization=lambda **_kwargs: None,
+    )
+    monkeypatch.setenv("RAPIDS_TOPICS_BASE", str(tmp_path))
+    monkeypatch.setattr(prepare_corpus.PipesContext, "get", lambda: context)
+    monkeypatch.setattr(prepare_corpus, "_fetch_tarball", lambda *_args: tmp_path)
+    monkeypatch.setattr(prepare_corpus, "_load_docs", lambda *_args: docs)
+
+    prepare_corpus.main()
+
+    assert (tmp_path / "corpus" / "vocabulary.json").read_text(
+        encoding="utf-8"
+    ) == '{"topic0": 0, "topic1": 1, "topic2": 2}'
 
 
 def test_sha256_verification_accepts_match_and_rejects_mismatch(tmp_path):

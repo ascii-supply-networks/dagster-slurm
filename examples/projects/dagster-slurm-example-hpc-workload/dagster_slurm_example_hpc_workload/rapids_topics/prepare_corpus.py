@@ -161,14 +161,16 @@ def main():
         max_features=max_features,
     )
     vectorizer.fit(d["body"] for d in docs)
-    # sklearn indexes the vocabulary with numpy int64 when max_features
-    # re-indexes it; coerce to plain int for JSON.
-    vocabulary = {term: int(index) for term, index in vectorizer.vocabulary_.items()}
     vocabulary_path = corpus_dir / "vocabulary.json"
+    # default=int: sklearn stores numpy int64 indices when max_features
+    # re-indexes the vocabulary, which json cannot serialize directly.
     vocabulary_path.write_text(
-        json.dumps(vocabulary, sort_keys=True), encoding="utf-8"
+        json.dumps(vectorizer.vocabulary_, default=int, sort_keys=True),
+        encoding="utf-8",
     )
-    context.log.info(f"Vocabulary: {len(vocabulary)} terms -> {vocabulary_path}")
+    context.log.info(
+        f"Vocabulary: {len(vectorizer.vocabulary_)} terms -> {vocabulary_path}"
+    )
 
     month_counts: Counter[str] = Counter(d["month"] for d in docs)
     for month in sorted(month_counts):
@@ -190,7 +192,7 @@ def main():
         metadata={
             "n_docs": len(docs),
             "n_months": len(month_counts),
-            "vocab_size": len(vocabulary),
+            "vocab_size": len(vectorizer.vocabulary_),
             "months": ", ".join(f"{m}:{c}" for m, c in sorted(month_counts.items())),
             "output_dir": str(corpus_dir),
         }
