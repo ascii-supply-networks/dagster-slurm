@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.7 (2026-07-20)
+
+### Bug Fixes
+
+- **ci**: Hotfix release
+  ([`7fcfed4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7fcfed4830a6abe3a95373a7e9aca971aa1a5e8e))
+
+
 ## v1.14.0-rc.6 (2026-07-19)
 
 ### Continuous Integration
