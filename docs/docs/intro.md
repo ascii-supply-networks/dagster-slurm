@@ -84,10 +84,17 @@ Then start the cluster and point Dagster at it:
 
 ```bash
 docker compose up -d
+cd examples
 pixi run start-staging
 ```
 
 Navigate to [http://localhost:3000](http://localhost:3000) again. You can also SSH to your running docker container, and check the Slurm queue with `squeue -u submitter` and `sacct -u submitter`.
+
+```bash
+ssh -p 2223 submitter@localhost
+squeue -u submitter
+sacct -u submitter
+```
 
 ## 3. Point to your own HPC cluster
 
