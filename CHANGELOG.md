@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.8 (2026-07-24)
+
+### Bug Fixes
+
+- Env wiring slurm remote base
+  ([`739bc06`](https://github.com/ascii-supply-networks/dagster-slurm/commit/739bc066da10452358acb0577fd908daf9f1b0df))
+
+- Remote packaging
+  ([`519e70e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/519e70ebf3b8315a3d055499a9152398ccfe023a))
+
+### Documentation
+
+- Updated the getting started documentation for the beginners
+  ([#163](https://github.com/ascii-supply-networks/dagster-slurm/pull/163),
+  [`b14daac`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b14daac142b1a3e0e8cb3dda078e93ac6d275fd1))
+
+### Features
+
+- Upgrade stax to standard release
+  ([`29ab859`](https://github.com/ascii-supply-networks/dagster-slurm/commit/29ab859cfa77fc0d475aabdb0e53488b6ed98535))
+
+
 ## v1.14.0-rc.7 (2026-07-20)
 
 ### Bug Fixes
