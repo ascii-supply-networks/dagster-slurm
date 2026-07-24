@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.14.0-rc.9 (2026-07-24)
+
+### Bug Fixes
+
+- Stage remote pack inputs as archive
+  ([`9eacafb`](https://github.com/ascii-supply-networks/dagster-slurm/commit/9eacafb066432aa8d68cf15c8e83a016432c076e))
+
+
 ## v1.14.0-rc.8 (2026-07-24)
 
 ### Bug Fixes
