@@ -1537,10 +1537,11 @@ class SlurmPipesClient(PipesClient):
             self.logger.debug(f"Could not read pixi task {task_name!r}: {exc}")
             return None
 
-        tasks = data.get("tasks")
-        if tasks is None:
-            tasks = data.get("tool", {}).get("pixi", {}).get("tasks", {})
+        tasks = data.get("tasks", {})
         task = tasks.get(task_name) if isinstance(tasks, dict) else None
+        if task is None:
+            tasks = data.get("tool", {}).get("pixi", {}).get("tasks", {})
+            task = tasks.get(task_name) if isinstance(tasks, dict) else None
         if task is None:
             return None
         if isinstance(task, str):

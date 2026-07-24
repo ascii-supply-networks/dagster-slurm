@@ -21,6 +21,25 @@ update:
     cd examples && pixi update --no-install
     uv sync --all-packages --all-groups --upgrade
 
+# Remove generated environments, caches, dependencies, and build outputs.
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    find . -path './.git' -prune -o -type d \( \
+        -name .pixi -o -name .venv -o -name node_modules -o \
+        -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o \
+        -name .mypy_cache -o -name .ty_cache -o -name .cache -o \
+        -name .parcel-cache -o -name .docusaurus -o -name .vite -o \
+        -name .slidev -o -name .turbo -o -name .nx -o \
+        -name build -o -name dist -o -name coverage -o -name htmlcov \
+        \) -prune -print -exec rm -rf {} +
+    find . -path './.git' -prune -o -type f \( \
+        -name '*.pyc' -o -name '*.pyo' -o -name '.coverage*' -o \
+        -name '.eslintcache' -o -name '.stylelintcache' -o \
+        -name '*.tsbuildinfo' -o -name 'environment*.sh' \
+        \) -print -delete
+
 # Delete local branches merged into main, with remote-gone branches, and prune remotes.
 # Safe mode: `just clean-branches`
 # Force mode: `just clean-branches --force`
