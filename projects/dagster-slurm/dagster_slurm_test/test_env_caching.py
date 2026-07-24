@@ -657,6 +657,9 @@ cmd = "pixi-pack --inject dist/base-*.whl pyproject.toml"
     fake_pixi.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+test -f pyproject.toml
+test -f pixi.lock
+test -f dist/base-1.0.0-py3-none-any.whl
 cat > environment.sh <<'PACK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -700,10 +703,8 @@ exec "$@"
     assert activation_script == str(env_base_dir / "activate.sh")
     assert (env_base_dir / "activate.sh").is_file()
     assert (env_dir / "bin" / "python").is_file()
-    staged_destinations = {Path(dest).name for _, dest in pool.uploads}
-    assert {"pyproject.toml", "pixi.lock", "base-1.0.0-py3-none-any.whl"} <= (
-        staged_destinations
-    )
+    assert len(pool.uploads) == 1
+    assert Path(pool.uploads[0][1]).name == "remote-pack-inputs.tar"
     assert not any(Path(src).name == "environment.sh" for src, _ in pool.uploads)
 
 

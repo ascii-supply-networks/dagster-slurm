@@ -10,6 +10,8 @@ import shlex
 import signal
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import time
 import uuid
@@ -1640,15 +1642,27 @@ class SlurmPipesClient(PipesClient):
         self.logger.info(
             "Staging %s small pack input file(s) on the Slurm edge node", len(files)
         )
-        ssh_pool.run(f"mkdir -p {shlex.quote(remote_project_dir)}")
-        for local_path, relative_path in files:
-            remote_path = _remote_join_under_root(
-                root=remote_pack_root,
-                base=remote_project_dir,
-                relative_path=relative_path,
+        remote_archive = _remote_join_under_root(
+            root=remote_pack_root,
+            base=remote_pack_root,
+            relative_path="remote-pack-inputs.tar",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            archive_path = Path(tmp_dir) / "remote-pack-inputs.tar"
+            with tarfile.open(archive_path, "w") as archive:
+                for local_path, relative_path in files:
+                    archive.add(local_path, arcname=relative_path, recursive=False)
+
+            ssh_pool.run(
+                f"mkdir -p {shlex.quote(remote_pack_root)} "
+                f"{shlex.quote(remote_project_dir)}"
             )
-            ssh_pool.run(f"mkdir -p {shlex.quote(posixpath.dirname(remote_path))}")
-            ssh_pool.upload_file(str(local_path), remote_path)
+            ssh_pool.upload_file(str(archive_path), remote_archive)
+
+        ssh_pool.run(
+            f"tar -xf {shlex.quote(remote_archive)} "
+            f"-C {shlex.quote(remote_project_dir)}"
+        )
 
     def _pack_environment_on_remote(
         self,
