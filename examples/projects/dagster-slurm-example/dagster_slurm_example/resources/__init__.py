@@ -68,6 +68,8 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
     },
     "compute_config": {
         "auto_detect_platform": True,  # Critical for local docker runs on ARM macs
+        "pack_on_remote": _env_bool("SLURM_PACK_ON_REMOTE", True),
+        "remote_pack_timeout": _env_int("SLURM_REMOTE_PACK_TIMEOUT", 600),
         "debug_mode": False,
         # Hash local source trees, not built artifacts, so source edits trigger a cache
         # miss before the pack step decides whether artifacts need rebuilding.

@@ -192,7 +192,7 @@ description = "Start dagster webserver in production mode with real HPC"
 
 # pixi run -e opstooling --frozen build-shared-library
 [tool.pixi.tasks.build-shared-library]
-cmd = "pixi build -o dist"
+cmd = "rm -f dist/dagster_slurm_example_shared-*.conda && pixi build -o dist"
 cwd = "./projects/dagster-slurm-example-shared"
 
 [tool.pixi.tasks.build-integrations]
@@ -200,11 +200,11 @@ cmd = "pixi run -e build --frozen build-lib"
 cwd = "../projects"
 description = "Build all slurm integrations"
 [tool.pixi.tasks.build-hpc-workload]
-cmd = "pixi build -o dist"
+cmd = "rm -f dist/dagster_slurm_example_hpc_workload-*.conda && pixi build -o dist"
 cwd = "./projects/dagster-slurm-example-hpc-workload"
 
 [tool.pixi.tasks.build-example]
-cmd = "pixi build -o dist"
+cmd = "rm -f dist/dagster_slurm_example-*.conda && pixi build -o dist"
 cwd = "./projects/dagster-slurm-example"
 
 [tool.pixi.tasks.pack]
