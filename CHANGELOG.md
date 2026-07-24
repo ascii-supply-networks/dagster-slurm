@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.15.0-rc.1 (2026-07-24)
+
+### Bug Fixes
+
+- Pass release token to semantic-release
+  ([`e4cb06c`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e4cb06cf7ac79c872003932c46bc5f45d9fa5792))
+
+
 ## v1.15.0 (2026-07-24)
 
 
