@@ -85,6 +85,10 @@ chmod +x environment.sh
     with pool:
         try:
             pool.run(f"rm -rf {remote_root} && mkdir -p {remote_root}/bin")
+            pool.run(
+                "command -v pixi && pixi --version && "
+                "command -v pixi-pack && pixi-pack --version"
+            )
             pool.upload_file(str(fake_pixi), remote_pixi)
             pool.run(f"chmod +x {remote_pixi}")
 
