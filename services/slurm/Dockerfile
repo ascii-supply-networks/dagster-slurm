@@ -136,6 +136,23 @@ RUN set -ex \
     && chown -R submitter:submitter /data_and_logs \
     && /sbin/create-munge-key
 
+ARG PIXI_VERSION=0.73.0
+ARG PIXI_PACK_VERSION=0.7.10
+
+RUN set -ex \
+    && case "${TARGETARCH}" in \
+         amd64) pixi_arch=x86_64 ;; \
+         arm64) pixi_arch=aarch64 ;; \
+         *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && wget -O /usr/local/bin/pixi \
+       "https://github.com/prefix-dev/pixi/releases/download/v${PIXI_VERSION}/pixi-${pixi_arch}-unknown-linux-musl" \
+    && wget -O /usr/local/bin/pixi-pack \
+       "https://github.com/Quantco/pixi-pack/releases/download/v${PIXI_PACK_VERSION}/pixi-pack-${pixi_arch}-unknown-linux-musl" \
+    && chmod +x /usr/local/bin/pixi /usr/local/bin/pixi-pack \
+    && pixi --version \
+    && pixi-pack --version
+
 COPY slurm.conf /etc/slurm/slurm.conf
 COPY slurmdbd.conf /etc/slurm/slurmdbd.conf
 COPY cgroup.conf /etc/slurm/cgroup.conf
