@@ -1561,6 +1561,10 @@ class SlurmPipesClient(PipesClient):
         scripts, selected cache source globs, and already-built inject artifacts.
         Payload scripts and per-run extra files are handled by the normal ad hoc
         upload path, so script/config edits do not require re-shipping the env.
+
+        Paths are returned relative to the workspace root (not the project dir)
+        so that inputs above the project dir in monorepo layouts stage without
+        ``..`` archive members, which remote tar refuses to extract.
         """
         files: dict[str, Path] = {}
         workspace_root = _local_pack_workspace_root(project_dir)
@@ -1570,17 +1574,12 @@ class SlurmPipesClient(PipesClient):
                 return
             resolved = path.resolve()
             try:
-                resolved.relative_to(workspace_root)
+                relative = resolved.relative_to(workspace_root)
             except ValueError as exc:
                 raise ValueError(
                     "Remote packing input file is outside the local workspace "
                     f"root {workspace_root}: {resolved}"
                 ) from exc
-
-            try:
-                relative = resolved.relative_to(project_dir.resolve())
-            except ValueError:
-                relative = Path(os.path.relpath(resolved, project_dir.resolve()))
             files[relative.as_posix()] = resolved
 
         for name in ("pyproject.toml", "pixi.toml", "pixi.lock"):
@@ -1629,15 +1628,31 @@ class SlurmPipesClient(PipesClient):
     def _stage_remote_pack_workspace(
         self,
         ssh_pool: SSHConnectionPool,
-        remote_project_dir: str,
+        remote_pack_root: str,
         pack_cmds: list[list[str]],
-    ) -> None:
-        """Upload the small set of files needed to run pixi-pack remotely."""
+    ) -> str:
+        """Upload the small set of files needed to run pixi-pack remotely.
+
+        The staged files mirror the local workspace layout under
+        ``<remote_pack_root>/workspace`` so relative references such as
+        ``--inject ../dist/*.whl`` resolve on the edge node. Returns the remote
+        directory corresponding to the local project dir.
+        """
         project_dir = Path.cwd()
+        workspace_root = _local_pack_workspace_root(project_dir)
         files = self._remote_pack_input_files(pack_cmds, project_dir=project_dir)
         if not files:
             raise RuntimeError("Remote packing could not find any local pack inputs")
-        remote_pack_root = posixpath.dirname(remote_project_dir)
+
+        remote_workspace = f"{remote_pack_root}/workspace"
+        project_relative = Path(
+            os.path.relpath(project_dir.resolve(), workspace_root)
+        ).as_posix()
+        remote_project_dir = _remote_join_under_root(
+            root=remote_pack_root,
+            base=remote_workspace,
+            relative_path=project_relative,
+        )
 
         self.logger.info(
             "Staging %s small pack input file(s) on the Slurm edge node", len(files)
@@ -1651,18 +1666,23 @@ class SlurmPipesClient(PipesClient):
             archive_path = Path(tmp_dir) / "remote-pack-inputs.tar"
             with tarfile.open(archive_path, "w") as archive:
                 for local_path, relative_path in files:
+                    _remote_join_under_root(
+                        root=remote_pack_root,
+                        base=remote_workspace,
+                        relative_path=relative_path,
+                    )
                     archive.add(local_path, arcname=relative_path, recursive=False)
 
             ssh_pool.run(
-                f"mkdir -p {shlex.quote(remote_pack_root)} "
+                f"mkdir -p {shlex.quote(remote_workspace)} "
                 f"{shlex.quote(remote_project_dir)}"
             )
             ssh_pool.upload_file(str(archive_path), remote_archive)
 
         ssh_pool.run(
-            f"tar -xf {shlex.quote(remote_archive)} "
-            f"-C {shlex.quote(remote_project_dir)}"
+            f"tar -xf {shlex.quote(remote_archive)} -C {shlex.quote(remote_workspace)}"
         )
+        return remote_project_dir
 
     def _pack_environment_on_remote(
         self,
@@ -1674,10 +1694,10 @@ class SlurmPipesClient(PipesClient):
     ) -> str:
         """Run pixi-pack on the edge node and extract into the shared env cache."""
         token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
-        remote_project_dir = f"{env_base_dir}/pack-work/{token}/project"
-        self._stage_remote_pack_workspace(
+        remote_pack_root = f"{env_base_dir}/pack-work/{token}"
+        remote_project_dir = self._stage_remote_pack_workspace(
             ssh_pool=ssh_pool,
-            remote_project_dir=remote_project_dir,
+            remote_pack_root=remote_pack_root,
             pack_cmds=[pack_cmd],
         )
 
@@ -1696,10 +1716,11 @@ class SlurmPipesClient(PipesClient):
         python_quoted = shlex.quote(python_bin)
         pack_script_quoted = f"{project_dir_quoted}/$pack_file"
 
+        pack_root_quoted = shlex.quote(remote_pack_root)
         inner = f"""
 set -euo pipefail
 if [ -f {activation_quoted} ] && [ -x {python_quoted} ]; then
-  rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
+  rm -rf {pack_root_quoted}
   exit 0
 fi
 mkdir -p {env_dir_quoted}
@@ -1721,7 +1742,7 @@ case "$pack_file" in
     exit 1
     ;;
 esac
-rm -rf {shlex.quote(posixpath.dirname(remote_project_dir))}
+rm -rf {pack_root_quoted}
 """
         pack_cmd_remote = (
             f"mkdir -p {env_base_quoted} && "

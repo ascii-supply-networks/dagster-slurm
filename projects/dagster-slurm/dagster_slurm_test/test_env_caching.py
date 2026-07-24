@@ -374,10 +374,15 @@ def test_prepare_environment_remote_pack_does_not_upload_packed_env(
         lambda pack_cmd, env_overrides=None: "remote123",
     )
     monkeypatch.setattr(client, "_cached_env_ready", lambda **_: False)
+
+    def fake_stage_remote_pack_workspace(**kwargs):
+        captured["stage"] = kwargs
+        return f"{kwargs['remote_pack_root']}/workspace"
+
     monkeypatch.setattr(
         client,
         "_stage_remote_pack_workspace",
-        lambda **kwargs: captured.update({"stage": kwargs}),
+        fake_stage_remote_pack_workspace,
     )
     monkeypatch.setattr(
         "dagster_slurm.pipes_clients.slurm_pipes_client.pack_environment_with_pixi",
@@ -606,6 +611,48 @@ def test_remote_pack_input_files_rejects_matches_outside_workspace(
         )
 
 
+def test_remote_pack_input_files_uses_workspace_relative_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    slurm_client_factory: Callable[..., SlurmPipesClient],
+):
+    workspace = tmp_path / "workspace"
+    project_dir = workspace / "examples"
+    project_dir.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q"], cwd=workspace, check=True, capture_output=True
+    )
+    (project_dir / "pyproject.toml").write_text(
+        """
+[tool.pixi.tasks.pack]
+cmd = "pixi-pack --inject ../dist/base-*.whl pyproject.toml"
+"""
+    )
+    (project_dir / "pixi.lock").write_text("lock")
+    dist = workspace / "dist"
+    dist.mkdir()
+    (dist / "base-1.0.0-py3-none-any.whl").write_text("wheel")
+    lib = workspace / "projects" / "lib" / "pkg"
+    lib.mkdir(parents=True)
+    (lib / "__init__.py").write_text("VALUE = 1\n")
+
+    monkeypatch.chdir(project_dir)
+    client = slurm_client_factory(cache_inject_globs=["../projects/lib/**/*.py"])
+
+    files = client._remote_pack_input_files(
+        [["pixi", "run", "--frozen", "pack"]], project_dir=project_dir
+    )
+
+    relative_paths = {relative for _, relative in files}
+    assert relative_paths == {
+        "examples/pyproject.toml",
+        "examples/pixi.lock",
+        "dist/base-1.0.0-py3-none-any.whl",
+        "projects/lib/pkg/__init__.py",
+    }
+    assert not any(".." in relative.split("/") for relative in relative_paths)
+
+
 def test_remote_pack_join_rejects_paths_outside_workspace():
     remote_root = "/remote/base/env-cache/key/pack-work/token"
     remote_project_dir = f"{remote_root}/project"
@@ -706,6 +753,94 @@ exec "$@"
     assert len(pool.uploads) == 1
     assert Path(pool.uploads[0][1]).name == "remote-pack-inputs.tar"
     assert not any(Path(src).name == "environment.sh" for src, _ in pool.uploads)
+
+
+def test_remote_pack_flow_supports_inputs_above_project_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    slurm_client_factory: Callable[..., SlurmPipesClient],
+):
+    workspace = tmp_path / "workspace"
+    project_dir = workspace / "examples"
+    project_dir.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q"], cwd=workspace, check=True, capture_output=True
+    )
+    (project_dir / "pyproject.toml").write_text(
+        """
+[tool.pixi.tasks.pack-only]
+cmd = "pixi-pack --inject ../dist/base-*.whl pyproject.toml"
+""",
+        encoding="utf-8",
+    )
+    (project_dir / "pixi.lock").write_text("lock", encoding="utf-8")
+    dist = workspace / "dist"
+    dist.mkdir()
+    (dist / "base-1.0.0-py3-none-any.whl").write_text("wheel", encoding="utf-8")
+    lib = workspace / "projects" / "lib" / "pkg"
+    lib.mkdir(parents=True)
+    (lib / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_pixi = fake_bin / "pixi"
+    fake_pixi.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+test -f pyproject.toml
+test -f pixi.lock
+test -f ../dist/base-1.0.0-py3-none-any.whl
+test -f ../projects/lib/pkg/__init__.py
+cat > environment.sh <<'PACK'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p env/bin
+printf '#!/usr/bin/env bash\n' > env/bin/python
+chmod +x env/bin/python
+printf 'export PATH="$(pwd)/env/bin:$PATH"\n' > activate.sh
+PACK
+chmod +x environment.sh
+""",
+        encoding="utf-8",
+    )
+    fake_pixi.chmod(0o755)
+    fake_flock = fake_bin / "flock"
+    fake_flock.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+shift
+exec "$@"
+""",
+        encoding="utf-8",
+    )
+    fake_flock.chmod(0o755)
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+
+    client = slurm_client_factory(
+        pack_on_remote=True,
+        remote_pack_timeout=10,
+        cache_inject_globs=["../projects/lib/**/*.py"],
+    )
+    pool = LocalShellPool()
+    env_base_dir = tmp_path / "remote" / "env-cache" / "remote123"
+    env_dir = env_base_dir / "env"
+
+    activation_script = client._pack_environment_on_remote(
+        ssh_pool=cast(Any, pool),
+        env_base_dir=str(env_base_dir),
+        env_dir=str(env_dir),
+        pack_cmd=["pixi", "run", "--frozen", "pack-only"],
+        env_overrides={"SLURM_PACK_PLATFORM": "linux-64"},
+    )
+
+    assert activation_script == str(env_base_dir / "activate.sh")
+    assert (env_base_dir / "activate.sh").is_file()
+    assert (env_dir / "bin" / "python").is_file()
+    assert not (env_base_dir / "pack-work").exists() or not any(
+        (env_base_dir / "pack-work").iterdir()
+    )
 
 
 def test_resolve_pack_platform_detects_apple_silicon_under_rosetta(
