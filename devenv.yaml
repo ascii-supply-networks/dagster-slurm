@@ -5,7 +5,7 @@ inputs:
   nixpkgs:
     url: github:NixOS/nixpkgs/nixpkgs-unstable
   stax-src:
-    url: github:geoHeil/stax/90372b44939831911de551dc30cd9610854b3fef
+    url: github:cesarferreira/stax/v0.97.1
     flake: false
   # Provides Python versions dropped from nixpkgs-unstable.
   nixpkgs-python:
