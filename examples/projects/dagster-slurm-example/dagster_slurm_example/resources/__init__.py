@@ -431,7 +431,7 @@ def build_slurm_resources(config: Dict[str, Any]) -> Dict[str, Any]:
     slurm = SlurmResource(
         ssh=ssh,
         queue=queue,
-        remote_base="$HOME/dagster_runs",
+        remote_base=os.getenv("SLURM_REMOTE_BASE", "$HOME/dagster_runs"),
     )
     slurm_cfg = config.get("slurm_config", {})
     if "auth_provider" in slurm_cfg:
