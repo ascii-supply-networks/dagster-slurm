@@ -17,7 +17,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol, TypeVar
 
 from dagster import (
     AssetExecutionContext,
@@ -52,6 +52,27 @@ _TAG_LAST_SUPERVISOR_HEARTBEAT = "dagster_slurm/last_supervisor_heartbeat"
 _TAG_ORPHAN_RECONCILED_AT = "dagster_slurm/orphan_reconciled_at"
 _TAG_ORPHAN_RETRY_OF = "dagster_slurm/orphan_retry_of"
 _HEARTBEAT_INTERVAL_SECONDS = 30.0
+
+
+class _TerminableProcess(Protocol):
+    """Process operations required by log-stream cleanup."""
+
+    def poll(self) -> Optional[int]: ...
+
+    def terminate(self) -> None: ...
+
+    def wait(self, timeout: Optional[float] = None) -> int: ...
+
+    def kill(self) -> None: ...
+
+
+class _JoinableThread(Protocol):
+    """Thread operation required by log-stream cleanup."""
+
+    def join(self, timeout: Optional[float] = None) -> None: ...
+
+
+_TerminableProcessT = TypeVar("_TerminableProcessT", bound=_TerminableProcess)
 
 
 def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
@@ -2455,6 +2476,8 @@ rm -rf {pack_root_quoted}
         stop_streaming = threading.Event()
         streamed_lines = {"stdout": 0, "stderr": 0}
         streamed_lock = threading.Lock()
+        stream_processes: dict[str, subprocess.Popen[str]] = {}
+        stream_processes_lock = threading.Lock()
 
         def stream_file(remote_path: str, output_stream, prefix: str, stream_key: str):
             try:
@@ -2497,17 +2520,22 @@ rm -rf {pack_root_quoted}
                         stop_streaming.wait(1.0)
                     return
 
-                proc = subprocess.Popen(
-                    tail_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    text=True,
-                    bufsize=1,
-                )
-                if not proc.stdout:
-                    self.logger.warning(f"No stdout for {stream_key}")
-                    return
+                with stream_processes_lock:
+                    if stop_streaming.is_set():
+                        return
+                    proc = subprocess.Popen(
+                        tail_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        bufsize=1,
+                    )
+                    stream_processes[stream_key] = proc
+
                 try:
+                    if not proc.stdout:
+                        self.logger.warning(f"No stdout for {stream_key}")
+                        return
                     while not stop_streaming.is_set():
                         line = proc.stdout.readline()
                         if not line:
@@ -2522,11 +2550,10 @@ rm -rf {pack_root_quoted}
                         with streamed_lock:
                             streamed_lines[stream_key] += 1
                 finally:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2)
-                    except:  # noqa: E722
-                        proc.kill()
+                    with stream_processes_lock:
+                        owns_process = stream_processes.pop(stream_key, None) is proc
+                    if owns_process:
+                        self._terminate_stream_processes({stream_key: proc})
             except Exception as e:
                 self.logger.warning(f"Error streaming {remote_path}: {e}")
 
@@ -2715,11 +2742,6 @@ rm -rf {pack_root_quoted}
                         # Give streaming threads time to catch up
                         self._interruptible_sleep(2, job_id)
 
-                        # Stop streaming and wait for threads to finish
-                        stop_streaming.set()
-                        stdout_thread.join(timeout=10)
-                        stderr_thread.join(timeout=10)
-
                         if state in {"CANCELLED", "PREEMPTED"}:
                             self.logger.warning(f"Job {job_id} was {state}")
                             self._cancellation_requested = True
@@ -2781,10 +2803,12 @@ rm -rf {pack_root_quoted}
                     raise
 
         finally:
-            # Stop streaming and clean up
-            stop_streaming.set()
-            stdout_thread.join(timeout=5)
-            stderr_thread.join(timeout=5)
+            self._stop_streaming_threads(
+                stop_streaming=stop_streaming,
+                stream_processes=stream_processes,
+                stream_processes_lock=stream_processes_lock,
+                stream_threads=(stdout_thread, stderr_thread),
+            )
             try:
                 existing = getattr(message_reader, "_streamed_lines", {})
                 if not isinstance(existing, dict):
@@ -2794,6 +2818,79 @@ rm -rf {pack_root_quoted}
                 setattr(message_reader, "_streamed_lines", existing)
             except Exception as exc:  # pragma: no cover - best effort bookkeeping
                 self.logger.debug(f"Failed to record streamed bytes: {exc}")
+
+    def _stop_streaming_threads(
+        self,
+        *,
+        stop_streaming: threading.Event,
+        stream_processes: dict[str, _TerminableProcessT],
+        stream_processes_lock: Any,
+        stream_threads: tuple[_JoinableThread, ...],
+    ) -> None:
+        """Terminate SSH tail processes before joining their reader threads."""
+        stop_streaming.set()
+        with stream_processes_lock:
+            processes = dict(stream_processes)
+            stream_processes.clear()
+
+        self._terminate_stream_processes(processes)
+
+        for thread in stream_threads:
+            thread.join(timeout=5)
+
+    def _terminate_stream_processes(
+        self,
+        processes: Mapping[str, _TerminableProcess],
+    ) -> None:
+        """Stop and reap SSH tail processes without masking the job outcome."""
+        for stream_key, proc in processes.items():
+            try:
+                if proc.poll() is not None:
+                    continue
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            except OSError as exc:
+                self.logger.debug(
+                    "Could not terminate SSH %s log stream: %s",
+                    stream_key,
+                    exc,
+                )
+
+        for stream_key, proc in processes.items():
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                except OSError as exc:
+                    self.logger.debug(
+                        "Could not kill SSH %s log stream: %s",
+                        stream_key,
+                        exc,
+                    )
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.logger.warning(
+                        "SSH %s log stream did not exit after being killed",
+                        stream_key,
+                    )
+                except OSError as exc:
+                    self.logger.debug(
+                        "Could not reap killed SSH %s log stream: %s",
+                        stream_key,
+                        exc,
+                    )
+            except OSError as exc:
+                self.logger.debug(
+                    "Could not reap SSH %s log stream: %s",
+                    stream_key,
+                    exc,
+                )
 
     def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:
         """Build SSH tail command for streaming logs.

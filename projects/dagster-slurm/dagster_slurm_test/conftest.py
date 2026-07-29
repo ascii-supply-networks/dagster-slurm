@@ -11,6 +11,7 @@ import pytest
 from dagster_slurm import (
     ComputeResource,
     SlurmQueueConfig,
+    SlurmPipesClient,
     SlurmResource,
     SSHConnectionResource,
     BashLauncher,
@@ -89,18 +90,22 @@ def temp_dir():
 
 
 @pytest.fixture
-def mock_ssh_resource():
+def mock_ssh_resource(tmp_path: Path) -> SSHConnectionResource:
     """Mock SSH connection resource."""
+    key_path = tmp_path / "test_key"
+    key_path.touch()
     return SSHConnectionResource(
         host="localhost",
         port=2223,
         user="testuser",
-        key_path="/tmp/test_key",
+        key_path=str(key_path),
     )
 
 
 @pytest.fixture
-def mock_slurm_resource(mock_ssh_resource):
+def mock_slurm_resource(
+    mock_ssh_resource: SSHConnectionResource,
+) -> SlurmResource:
     """Mock Slurm resource."""
     return SlurmResource(
         ssh=mock_ssh_resource,
@@ -111,6 +116,17 @@ def mock_slurm_resource(mock_ssh_resource):
             mem="1G",
         ),
         remote_base="/tmp/dagster_test",
+    )
+
+
+@pytest.fixture
+def slurm_pipes_client(
+    mock_slurm_resource: SlurmResource,
+) -> SlurmPipesClient:
+    """Build a Slurm Pipes client with shared mock resources."""
+    return SlurmPipesClient(
+        slurm_resource=mock_slurm_resource,
+        launcher=BashLauncher(),
     )
 
 
