@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.15.1-rc.1 (2026-07-29)
+
+### Bug Fixes
+
+- Stop SSH log streams promptly
+  ([`dc2c890`](https://github.com/ascii-supply-networks/dagster-slurm/commit/dc2c8902a50f4a81b2ae7e41367df40df5db55c0))
+
+
 ## v1.15.1 (2026-07-24)
 
 
