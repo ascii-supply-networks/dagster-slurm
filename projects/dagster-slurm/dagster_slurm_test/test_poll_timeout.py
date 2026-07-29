@@ -6,6 +6,7 @@ ComputeResource.run() -> SlurmPipesClient.run() -> _execute_standalone()
 """
 
 import inspect
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -13,40 +14,10 @@ import pytest
 from dagster import AssetKey
 from dagster._core.errors import DagsterPipesExecutionError
 
-from dagster_slurm import (
-    BashLauncher,
-    ComputeResource,
-    SlurmResource,
-    SSHConnectionResource,
-    SlurmQueueConfig,
-)
+from dagster_slurm import ComputeResource
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.helpers import SlurmJobMetrics
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
-
-
-def _make_client() -> SlurmPipesClient:
-    ssh = SSHConnectionResource(
-        host="localhost",
-        port=2223,
-        user="testuser",
-        password="testpass",
-    )
-    slurm = SlurmResource(
-        ssh=ssh,
-        queue=SlurmQueueConfig(
-            partition="test",
-            time_limit="00:10:00",
-            cpus=2,
-            mem="1G",
-        ),
-        remote_base="/tmp/dagster_test",
-    )
-    return SlurmPipesClient(
-        slurm_resource=slurm,
-        launcher=BashLauncher(),
-    )
-
 
 # ---------------------------------------------------------------------------
 # Signature tests — verify the parameter exists with correct defaults
@@ -78,19 +49,25 @@ def test_wait_for_job_default_poll_timeout():
 # ---------------------------------------------------------------------------
 
 
-def test_execute_standalone_forwards_poll_timeout():
+def test_execute_standalone_forwards_poll_timeout(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """_execute_standalone passes poll_timeout to _wait_for_job_with_streaming."""
-    client = _make_client()
-
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.return_value = "Submitted batch job 12345"
 
     with (
-        patch.object(client, "_wait_for_job_with_streaming") as mock_wait,
-        patch.object(client, "_store_job_tags"),
-        patch.object(client, "_log_estimated_start_time"),
-        patch.object(client, "_get_asset_key_string", return_value="test_asset"),
-        patch.object(client, "_build_sbatch_command", return_value="sbatch job.sh"),
+        patch.object(slurm_pipes_client, "_wait_for_job_with_streaming") as mock_wait,
+        patch.object(slurm_pipes_client, "_store_job_tags"),
+        patch.object(slurm_pipes_client, "_log_estimated_start_time"),
+        patch.object(
+            slurm_pipes_client, "_get_asset_key_string", return_value="test_asset"
+        ),
+        patch.object(
+            slurm_pipes_client,
+            "_build_sbatch_command",
+            return_value="sbatch job.sh",
+        ),
     ):
         # Mock the script writing/upload portion
         mock_execution_plan = MagicMock()
@@ -98,7 +75,7 @@ def test_execute_standalone_forwards_poll_timeout():
         mock_execution_plan.resources = {}
         mock_execution_plan.kind = "bash"
 
-        client._execute_standalone(
+        slurm_pipes_client._execute_standalone(
             execution_plan=mock_execution_plan,
             run_dir="/tmp/test_run",
             ssh_pool=mock_ssh_pool,
@@ -111,26 +88,32 @@ def test_execute_standalone_forwards_poll_timeout():
         assert kwargs["poll_timeout"] == 7200
 
 
-def test_execute_standalone_uses_default_poll_timeout():
+def test_execute_standalone_uses_default_poll_timeout(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """_execute_standalone uses default 3600s when poll_timeout not specified."""
-    client = _make_client()
-
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.return_value = "Submitted batch job 12345"
 
     with (
-        patch.object(client, "_wait_for_job_with_streaming") as mock_wait,
-        patch.object(client, "_store_job_tags"),
-        patch.object(client, "_log_estimated_start_time"),
-        patch.object(client, "_get_asset_key_string", return_value="test_asset"),
-        patch.object(client, "_build_sbatch_command", return_value="sbatch job.sh"),
+        patch.object(slurm_pipes_client, "_wait_for_job_with_streaming") as mock_wait,
+        patch.object(slurm_pipes_client, "_store_job_tags"),
+        patch.object(slurm_pipes_client, "_log_estimated_start_time"),
+        patch.object(
+            slurm_pipes_client, "_get_asset_key_string", return_value="test_asset"
+        ),
+        patch.object(
+            slurm_pipes_client,
+            "_build_sbatch_command",
+            return_value="sbatch job.sh",
+        ),
     ):
         mock_execution_plan = MagicMock()
         mock_execution_plan.payload = ["#!/bin/bash", "echo hello"]
         mock_execution_plan.resources = {}
         mock_execution_plan.kind = "bash"
 
-        client._execute_standalone(
+        slurm_pipes_client._execute_standalone(
             execution_plan=mock_execution_plan,
             run_dir="/tmp/test_run",
             ssh_pool=mock_ssh_pool,
@@ -142,10 +125,10 @@ def test_execute_standalone_uses_default_poll_timeout():
         assert kwargs["poll_timeout"] == 3600
 
 
-def test_reattach_path_forwards_poll_timeout():
+def test_reattach_path_forwards_poll_timeout(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """The reattach code path in run() also forwards poll_timeout."""
-    client = _make_client()
-
     # Build a mock context that satisfies the run() method
     mock_context = MagicMock()
     mock_context.run.run_id = "test-run-id"
@@ -156,16 +139,26 @@ def test_reattach_path_forwards_poll_timeout():
     reattach_info = {"job_id": "42", "run_dir": "/tmp/old_run"}
 
     with (
-        patch.object(client, "_wait_for_job_with_streaming") as mock_wait,
-        patch.object(client, "_execute_standalone") as mock_standalone,
-        patch.object(client, "_find_reattachable_job", return_value=reattach_info),
-        patch.object(client, "_is_job_still_running", return_value=True),
-        patch.object(client, "_get_job_state", return_value="RUNNING"),
-        patch.object(client, "_get_asset_key_string", return_value="test_asset"),
-        patch.object(client, "_store_job_tags"),
-        patch.object(client, "_maybe_emit_final_logs"),
-        patch.object(client, "_collect_and_emit_metrics"),
-        patch.object(client, "_get_remote_base", return_value="/tmp/dagster_test"),
+        patch.object(slurm_pipes_client, "_wait_for_job_with_streaming") as mock_wait,
+        patch.object(slurm_pipes_client, "_execute_standalone") as mock_standalone,
+        patch.object(
+            slurm_pipes_client,
+            "_find_reattachable_job",
+            return_value=reattach_info,
+        ),
+        patch.object(slurm_pipes_client, "_is_job_still_running", return_value=True),
+        patch.object(slurm_pipes_client, "_get_job_state", return_value="RUNNING"),
+        patch.object(
+            slurm_pipes_client, "_get_asset_key_string", return_value="test_asset"
+        ),
+        patch.object(slurm_pipes_client, "_store_job_tags"),
+        patch.object(slurm_pipes_client, "_maybe_emit_final_logs"),
+        patch.object(slurm_pipes_client, "_collect_and_emit_metrics"),
+        patch.object(
+            slurm_pipes_client,
+            "_get_remote_base",
+            return_value="/tmp/dagster_test",
+        ),
         patch(
             "dagster_slurm.pipes_clients.slurm_pipes_client.SSHConnectionPool"
         ) as MockSSHPool,
@@ -183,7 +176,7 @@ def test_reattach_path_forwards_poll_timeout():
         mock_open_pipes.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_open_pipes.return_value.__exit__ = MagicMock(return_value=False)
 
-        client.run(
+        slurm_pipes_client.run(
             context=mock_context,
             payload_path="test_payload.py",
             poll_timeout=14400,
@@ -198,16 +191,16 @@ def test_reattach_path_forwards_poll_timeout():
         assert kwargs["poll_timeout"] == 14400
 
 
-def test_wait_for_job_respects_custom_poll_timeout():
+def test_wait_for_job_respects_custom_poll_timeout(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """_wait_for_job_with_streaming times out based on poll_timeout value."""
-    client = _make_client()
-
     mock_ssh_pool = MagicMock()
     # Simulate a job that is always PENDING (never completes)
     mock_ssh_pool.run.return_value = "PENDING"
 
     with pytest.raises(RuntimeError, match=r"Timed out after 1s"):
-        client._wait_for_job_with_streaming(
+        slurm_pipes_client._wait_for_job_with_streaming(
             job_id=99999,
             ssh_pool=mock_ssh_pool,
             run_dir="/tmp/test_run",
@@ -216,27 +209,129 @@ def test_wait_for_job_respects_custom_poll_timeout():
         )
 
 
-def test_get_job_state_normalizes_truncated_terminal_state():
+def test_stream_cleanup_terminates_tail_processes_before_single_join(
+    slurm_pipes_client: SlurmPipesClient,
+):
+    """Blocked tail readers should stop promptly and be joined only once."""
+    events = []
+
+    class BlockingTailProcess:
+        def __init__(self, stream_key):
+            self.stream_key = stream_key
+            self.released = threading.Event()
+            self.stdout = SimpleNamespace(readline=self._readline)
+            self.returncode = None
+            self.terminate_calls = 0
+
+        def _readline(self):
+            self.released.wait(timeout=5)
+            return ""
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminate_calls += 1
+            events.append(f"terminate:{self.stream_key}")
+            self.returncode = -15
+            self.released.set()
+
+        def wait(self, timeout=None):
+            if not self.released.wait(timeout=timeout):
+                raise TimeoutError
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+            self.released.set()
+
+    class RecordingThread:
+        def __init__(self, stream_key, process):
+            self.stream_key = stream_key
+            self._thread = threading.Thread(target=process.stdout.readline)
+            self.join_calls = 0
+            self._thread.start()
+
+        def join(self, timeout=None):
+            self.join_calls += 1
+            events.append(f"join:{self.stream_key}")
+            self._thread.join(timeout=timeout)
+
+        def is_alive(self):
+            return self._thread.is_alive()
+
+    stdout_process = BlockingTailProcess("stdout")
+    stderr_process = BlockingTailProcess("stderr")
+    stdout_thread = RecordingThread("stdout", stdout_process)
+    stderr_thread = RecordingThread("stderr", stderr_process)
+    stop_streaming = threading.Event()
+    stream_processes = {
+        "stdout": stdout_process,
+        "stderr": stderr_process,
+    }
+
+    slurm_pipes_client._stop_streaming_threads(
+        stop_streaming=stop_streaming,
+        stream_processes=stream_processes,
+        stream_processes_lock=threading.Lock(),
+        stream_threads=(stdout_thread, stderr_thread),
+    )
+
+    assert stop_streaming.is_set()
+    assert stdout_process.terminate_calls == 1
+    assert stderr_process.terminate_calls == 1
+    assert stream_processes == {}
+    assert events[:2] == ["terminate:stdout", "terminate:stderr"]
+    assert stdout_thread.join_calls == 1
+    assert stderr_thread.join_calls == 1
+    assert not stdout_thread.is_alive()
+    assert not stderr_thread.is_alive()
+
+
+def test_stream_cleanup_does_not_raise_for_process_errors(
+    slurm_pipes_client: SlurmPipesClient,
+):
+    """Tail cleanup failures should not mask the Slurm job outcome."""
+    process = MagicMock()
+    process.poll.side_effect = OSError("process disappeared")
+    process.wait.side_effect = OSError("process disappeared")
+    thread = MagicMock()
+    stream_processes = {"stdout": process}
+
+    slurm_pipes_client._stop_streaming_threads(
+        stop_streaming=threading.Event(),
+        stream_processes=stream_processes,
+        stream_processes_lock=threading.Lock(),
+        stream_threads=(thread,),
+    )
+
+    assert stream_processes == {}
+    thread.join.assert_called_once_with(timeout=5)
+
+
+def test_get_job_state_normalizes_truncated_terminal_state(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """sacct state truncation should still resolve to a terminal state."""
-    client = _make_client()
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.side_effect = ["", "OUT_OF_ME+\n"]
 
-    state = client._get_job_state(12345, mock_ssh_pool)
+    state = slurm_pipes_client._get_job_state(12345, mock_ssh_pool)
 
     assert state == "OUT_OF_MEMORY"
 
 
-def test_validate_final_slurm_outcome_rejects_failed_batch_state():
+def test_validate_final_slurm_outcome_rejects_failed_batch_state(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """Final sacct validation must reject batch-step failures after a transient success."""
-    client = _make_client()
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.return_value = (
         "12345|TIMEOUT|0:0\n12345.batch|OUT_OF_ME+|0:125\n12345.extern|COMPLETED|0:0\n"
     )
 
     with patch.object(
-        client.metrics_collector,
+        slurm_pipes_client.metrics_collector,
         "collect_job_metrics",
         return_value=SlurmJobMetrics(
             job_id=12345,
@@ -250,12 +345,13 @@ def test_validate_final_slurm_outcome_rejects_failed_batch_state():
         ),
     ):
         with pytest.raises(RuntimeError, match=r"12345 did not complete successfully"):
-            client._validate_final_slurm_outcome(12345, mock_ssh_pool)
+            slurm_pipes_client._validate_final_slurm_outcome(12345, mock_ssh_pool)
 
 
-def test_validate_final_slurm_outcome_accepts_clean_completed_job():
+def test_validate_final_slurm_outcome_accepts_clean_completed_job(
+    slurm_pipes_client: SlurmPipesClient,
+):
     """Final sacct validation should accept clean parent and batch completion."""
-    client = _make_client()
     mock_ssh_pool = MagicMock()
     mock_ssh_pool.run.return_value = (
         "12345|COMPLETED|0:0\n12345.batch|COMPLETED|0:0\n12345.extern|COMPLETED|0:0\n"
@@ -272,17 +368,20 @@ def test_validate_final_slurm_outcome_accepts_clean_completed_job():
     )
 
     with patch.object(
-        client.metrics_collector,
+        slurm_pipes_client.metrics_collector,
         "collect_job_metrics",
         return_value=expected_metrics,
     ):
-        actual_metrics = client._validate_final_slurm_outcome(12345, mock_ssh_pool)
+        actual_metrics = slurm_pipes_client._validate_final_slurm_outcome(
+            12345, mock_ssh_pool
+        )
 
     assert actual_metrics == expected_metrics
 
 
-def test_raise_if_pipes_process_failed_raises():
-    client = _make_client()
+def test_raise_if_pipes_process_failed_raises(
+    slurm_pipes_client: SlurmPipesClient,
+):
     message_reader = SimpleNamespace(
         closed_exception={
             "name": "RuntimeError",
@@ -294,7 +393,7 @@ def test_raise_if_pipes_process_failed_raises():
         DagsterPipesExecutionError,
         match="RuntimeError: remote boom",
     ):
-        client._raise_if_pipes_process_failed(message_reader, job_id=12345)
+        slurm_pipes_client._raise_if_pipes_process_failed(message_reader, job_id=12345)
 
 
 # ---------------------------------------------------------------------------
@@ -313,19 +412,15 @@ class _RecordingClient(SlurmPipesClient):
         return SimpleNamespace()
 
 
-def test_compute_resource_forwards_poll_timeout(monkeypatch):
+def test_compute_resource_forwards_poll_timeout(
+    monkeypatch,
+    slurm_pipes_client: SlurmPipesClient,
+):
     """ComputeResource.run() forwards poll_timeout to client.run() via kwargs."""
-    slurm = SlurmResource(
-        ssh=SSHConnectionResource(
-            host="localhost", port=2222, user="test", password="secret"
-        ),
-        queue=SlurmQueueConfig(),
-        remote_base="/tmp/dagster_test",
-    )
     resource = ComputeResource(
         mode=ExecutionMode.SLURM,
-        slurm=slurm,
-        default_launcher=BashLauncher(),
+        slurm=slurm_pipes_client.slurm,
+        default_launcher=slurm_pipes_client.launcher,
     )
 
     fake_client = _RecordingClient()

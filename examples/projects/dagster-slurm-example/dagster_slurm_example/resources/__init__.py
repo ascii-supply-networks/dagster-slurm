@@ -260,13 +260,15 @@ SUPERCOMPUTER_SITE_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "remote_pack_timeout": 1800,
         },
         "slurm_queue_config": {
-            "partition": "GPU-a100s",
+            # Keep the GRES request generic (gpu:1) so Slurm can place the job on
+            # whichever Datalab GPU partition becomes available first.
+            "partition": ("GPU-a100,GPU-a100s,GPU-a40,GPU-l40s,GPU-rtx6000"),
             "time_limit": "00:10:00",
             "num_nodes": 1,
             "gpus_per_node": 1,
         },
         "slurm_session_config": {
-            "partition": "GPU-a100s",
+            "partition": ("GPU-a100,GPU-a100s,GPU-a40,GPU-l40s,GPU-rtx6000"),
             "time_limit": "00:10:00",
             "num_nodes": 1,
             "gpus_per_node": 1,

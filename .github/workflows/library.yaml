@@ -427,8 +427,12 @@ jobs:
 
           pixi run -e build --frozen uv run semantic-release version --prerelease
 
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: additional changes [skip ci]"
+          # semantic-release updates the workspace versions after dependency
+          # installation, so refresh the uv workspace metadata before pushing.
+          uv lock
+          git add uv.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update uv lockfile version [skip ci]"
           fi
 
       - name: Verify pre-release distributions
@@ -539,8 +543,12 @@ jobs:
 
           pixi run -e build --frozen uv run semantic-release version
 
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: additional changes [skip ci]"
+          # Keep the lockfile's editable workspace versions in sync with the
+          # versions written by semantic-release.
+          uv lock
+          git add uv.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update uv lockfile version [skip ci]"
           fi
 
       - name: Verify release distributions

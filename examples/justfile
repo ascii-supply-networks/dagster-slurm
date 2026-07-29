@@ -14,9 +14,10 @@ start-staging:
 start-prod-docker:
     pixi run -e dev --frozen start-prod-docker
 
-# Start dagster webserver in staging mode with real HPC
-start-staging-supercomputer:
-    pixi run -e dev --frozen start-staging-supercomputer
+# Start on port 3000 when available, otherwise let Dagster choose a free port.
+start-staging-supercomputer port="0":
+    mkdir -p "{{justfile_directory()}}/z_tmp/dagster_home"
+    DAGSTER_HOME="{{justfile_directory()}}/z_tmp/dagster_home" pixi run -e dev --frozen start-staging-supercomputer -- --port "{{port}}"
 
 # Start dagster webserver in production mode with real HPC (must pre-deploy!)
 start-production-supercomputer:
