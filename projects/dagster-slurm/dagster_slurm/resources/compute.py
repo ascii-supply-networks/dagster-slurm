@@ -163,6 +163,36 @@ class ComputeResource(ConfigurableResource):
         description="Timeout in seconds for remote environment packing on the edge node.",
     )
 
+    project_setup_cmd: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional project-level command that prepares multiple named environments "
+            "on the Slurm edge node. The command runs from a durable staged project "
+            "directory inside the existing environment cache."
+        ),
+    )
+
+    project_setup_env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables passed to project_setup_cmd.",
+    )
+
+    project_setup_input_globs: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Additional project-relative glob patterns staged for project_setup_cmd. "
+            "Pixi manifests, pixi.lock, and Justfiles are staged automatically."
+        ),
+    )
+
+    default_environment_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Default named environment produced by project_setup_cmd. Can be "
+            "overridden per run or with slurm_environment_name asset metadata."
+        ),
+    )
+
     cache_inject_globs: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -336,6 +366,9 @@ class ComputeResource(ConfigurableResource):
                 cache_inject_globs=self.cache_inject_globs,
                 pack_on_remote=self.pack_on_remote,
                 remote_pack_timeout=self.remote_pack_timeout,
+                project_setup_cmd=self.project_setup_cmd,
+                project_setup_env=self.project_setup_env,
+                project_setup_input_globs=self.project_setup_input_globs,
             )
 
         elif self.mode == ExecutionMode.SLURM_SESSION:
@@ -360,6 +393,9 @@ class ComputeResource(ConfigurableResource):
                 cache_inject_globs=self.cache_inject_globs,
                 pack_on_remote=self.pack_on_remote,
                 remote_pack_timeout=self.remote_pack_timeout,
+                project_setup_cmd=self.project_setup_cmd,
+                project_setup_env=self.project_setup_env,
+                project_setup_input_globs=self.project_setup_input_globs,
             )
 
         else:  # ExecutionMode.SLURM_HETJOB
@@ -378,6 +414,9 @@ class ComputeResource(ConfigurableResource):
                 cache_inject_globs=self.cache_inject_globs,
                 pack_on_remote=self.pack_on_remote,
                 remote_pack_timeout=self.remote_pack_timeout,
+                project_setup_cmd=self.project_setup_cmd,
+                project_setup_env=self.project_setup_env,
+                project_setup_input_globs=self.project_setup_input_globs,
             )
 
     def _get_or_create_run_allocation_session(
@@ -771,6 +810,33 @@ class ComputeResource(ConfigurableResource):
 
         return pack_cmd_override, pre_deployed_env_path
 
+    def _resolve_environment_name(self, context) -> Optional[str]:
+        """Read one named project environment from selected asset metadata."""
+        metadata_by_key = self._get_metadata_by_key(context)
+        if not metadata_by_key:
+            return None
+
+        environment_names: list[str] = []
+        for key in self._extract_asset_keys(context):
+            metadata = metadata_by_key.get(key, {})
+            if not isinstance(metadata, dict):
+                continue
+            value = metadata.get("slurm_environment_name")
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    "slurm_environment_name asset metadata must be a non-empty string"
+                )
+            environment_names.append(value.strip())
+
+        unique_names = list(dict.fromkeys(environment_names))
+        if len(unique_names) > 1:
+            raise ValueError(
+                "Conflicting slurm_environment_name values found across asset outputs."
+            )
+        return unique_names[0] if unique_names else None
+
     def run(
         self,
         context,
@@ -781,6 +847,7 @@ class ComputeResource(ConfigurableResource):
         force_env_push: Optional[bool] = None,
         skip_payload_upload: Optional[bool] = None,
         remote_payload_path: Optional[str] = None,
+        environment_name: Optional[str] = None,
         config: Optional[SlurmRunConfig] = None,
         extra_files: Optional[List[str]] = None,
         poll_timeout: int = 3600,
@@ -810,6 +877,9 @@ class ComputeResource(ConfigurableResource):
                 or asset metadata key 'skip_slurm_payload_upload'.
             remote_payload_path: Remote path to an existing payload when skipping upload.
                 Falls back to config.remote_payload_path or asset metadata.
+            environment_name: Named environment produced by project_setup_cmd.
+                Falls back to config.environment_name, slurm_environment_name asset
+                metadata, then default_environment_name.
             config: Optional SlurmRunConfig for run-time configuration via launchpad.
                 Values from config are used as defaults, but explicit parameters take precedence.
             extra_files: List of local file paths to upload alongside the payload.
@@ -875,6 +945,7 @@ class ComputeResource(ConfigurableResource):
         effective_force_env_push = force_env_push
         effective_skip_payload_upload = skip_payload_upload
         effective_remote_payload_path = remote_payload_path
+        effective_environment_name = environment_name
 
         if config is not None:
             if effective_force_env_push is None:
@@ -883,6 +954,13 @@ class ComputeResource(ConfigurableResource):
                 effective_skip_payload_upload = config.skip_payload_upload
             if effective_remote_payload_path is None:
                 effective_remote_payload_path = config.remote_payload_path
+            if effective_environment_name is None:
+                effective_environment_name = config.environment_name
+
+        if effective_environment_name is None and self.project_setup_cmd:
+            effective_environment_name = (
+                self._resolve_environment_name(context) or self.default_environment_name
+            )
 
         # Determine effective launcher
         effective_launcher = self._resolve_launcher(launcher)
@@ -958,6 +1036,8 @@ class ComputeResource(ConfigurableResource):
                 kwargs["pack_cmd_override"] = pack_cmd_override
             if pre_deployed_env_override:
                 kwargs["pre_deployed_env_path_override"] = pre_deployed_env_override
+            if effective_environment_name:
+                kwargs["environment_name"] = effective_environment_name
         elif resolved_force_env_push:
             logger.debug(
                 "force_env_push requested but ignored because execution is not using Slurm"

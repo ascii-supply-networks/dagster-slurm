@@ -3,6 +3,8 @@
 import os
 import shutil
 import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -755,6 +757,207 @@ exec "$@"
     assert not any(Path(src).name == "environment.sh" for src, _ in pool.uploads)
 
 
+def _write_project_setup_fixture(project_dir: Path, *, fail: bool = False) -> None:
+    """Create a two-environment Pixi-style project setup fixture."""
+    (project_dir / "pyproject.toml").write_text(
+        "[tool.pixi.workspace]\nchannels = []\nplatforms = ['linux-64']\n",
+        encoding="utf-8",
+    )
+    (project_dir / "pixi.lock").write_text("lock", encoding="utf-8")
+    (project_dir / "justfile").write_text("setup-gpu:\n    bash setup.sh\n")
+    failure = 'echo "intentional setup failure" >&2\nexit 7\n' if fail else ""
+    (project_dir / "setup.sh").write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+test "$PWD" = "$DAGSTER_SLURM_REMOTE_PROJECT_DIR"
+test "$CUSTOM_SETUP_VALUE" = "configured"
+{failure}mkdir -p .pixi/envs/cpu/bin .pixi/envs/gpu/bin
+for environment in cpu gpu; do
+  printf '#!/usr/bin/env bash\\n' > ".pixi/envs/$environment/bin/python"
+  chmod +x ".pixi/envs/$environment/bin/python"
+  printf 'export PROJECT_SETUP_ENV=%q\\n' "$environment" > ".pixi/envs/$environment/activate.sh"
+done
+printf 'setup-ran\\n' >> "$DAGSTER_SLURM_ENV_BASE_DIR/setup-count"
+""",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="The local remote-shell fixture exercises Linux flock and mv semantics",
+)
+def test_project_setup_publishes_multiple_named_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    slurm_client_factory: Callable[..., SlurmPipesClient],
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    _write_project_setup_fixture(project_dir)
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.pack_environment_with_pixi",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("project setup must not fall back to local pixi-pack")
+        ),
+    )
+
+    client = slurm_client_factory(
+        project_setup_cmd=["bash", "setup.sh"],
+        project_setup_env={"CUSTOM_SETUP_VALUE": "configured"},
+        project_setup_input_globs=["setup.sh"],
+        remote_pack_timeout=10,
+    )
+    pool = LocalShellPool()
+    remote_base = tmp_path / "remote"
+
+    activation, python_executable = client._prepare_environment(
+        ssh_pool=cast(Any, pool),
+        remote_base=str(remote_base),
+        run_dir=str(remote_base / "runs" / "run1"),
+        force_env_push=False,
+        environment_name="gpu",
+    )
+
+    assert Path(activation).is_file()
+    assert Path(python_executable).is_file()
+    envs_dir = Path(python_executable).parents[2]
+    assert (envs_dir / "cpu" / "bin" / "python").is_file()
+    assert (envs_dir / "gpu" / "bin" / "python").is_file()
+    assert (envs_dir / "cpu" / "activate.sh").is_file()
+    assert (envs_dir / "gpu" / "activate.sh").is_file()
+    env_base_dir = envs_dir.parent
+    assert (env_base_dir / "setup-count").read_text() == "setup-ran\n"
+    assert not (env_base_dir / "pack-work").exists() or not any(
+        (env_base_dir / "pack-work").iterdir()
+    )
+
+    cached_activation, cached_python = client._prepare_environment(
+        ssh_pool=cast(Any, pool),
+        remote_base=str(remote_base),
+        run_dir=str(remote_base / "runs" / "run2"),
+        force_env_push=False,
+        environment_name="cpu",
+    )
+
+    assert Path(cached_activation).is_file()
+    assert Path(cached_python).is_file()
+    assert (env_base_dir / "setup-count").read_text() == "setup-ran\n"
+
+    refreshed_activation, refreshed_python = client._prepare_environment(
+        ssh_pool=cast(Any, pool),
+        remote_base=str(remote_base),
+        run_dir=str(remote_base / "runs" / "run3"),
+        force_env_push=True,
+        environment_name="gpu",
+    )
+
+    assert Path(refreshed_activation).is_file()
+    assert Path(refreshed_python).is_file()
+    assert (env_base_dir / "setup-count").read_text() == "setup-ran\nsetup-ran\n"
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="The local remote-shell fixture exercises Linux flock and mv semantics",
+)
+def test_project_setup_failure_blocks_environment_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    slurm_client_factory: Callable[..., SlurmPipesClient],
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    _write_project_setup_fixture(project_dir, fail=True)
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.pack_environment_with_pixi",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("failed project setup must not fall back")
+        ),
+    )
+
+    client = slurm_client_factory(
+        project_setup_cmd=["bash", "setup.sh"],
+        project_setup_env={"CUSTOM_SETUP_VALUE": "configured"},
+        project_setup_input_globs=["setup.sh"],
+        remote_pack_timeout=10,
+    )
+    remote_base = tmp_path / "remote"
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Remote project setup failed.*bash setup\.sh.*gpu",
+    ):
+        client._prepare_environment(
+            ssh_pool=cast(Any, LocalShellPool()),
+            remote_base=str(remote_base),
+            run_dir=str(remote_base / "runs" / "run1"),
+            force_env_push=False,
+            environment_name="gpu",
+        )
+
+    assert not list(remote_base.glob("env-cache/*/envs"))
+
+
+def test_project_setup_rejects_unsafe_names(
+    slurm_client_factory: Callable[..., SlurmPipesClient],
+):
+    client = slurm_client_factory()
+
+    with pytest.raises(ValueError, match="environment_name"):
+        client._validate_environment_name("../gpu")
+    with pytest.raises(ValueError, match="invalid environment variable"):
+        client._validate_environment_variables({"SAFE": "yes", "NOT-SAFE": "no"})
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="The local remote-shell fixture exercises Linux flock and mv semantics",
+)
+def test_concurrent_project_setup_runs_command_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    slurm_client_factory: Callable[..., SlurmPipesClient],
+):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    _write_project_setup_fixture(project_dir)
+    monkeypatch.chdir(project_dir)
+
+    client = slurm_client_factory(
+        project_setup_cmd=["bash", "setup.sh"],
+        project_setup_env={"CUSTOM_SETUP_VALUE": "configured"},
+        project_setup_input_globs=["setup.sh"],
+        remote_pack_timeout=10,
+    )
+    remote_base = tmp_path / "remote"
+    cache_key = client._compute_project_setup_cache_key(
+        setup_cmd=["bash", "setup.sh"],
+        env_overrides={
+            "CUSTOM_SETUP_VALUE": "configured",
+            "SLURM_PACK_PLATFORM": "linux-64",
+        },
+    )
+    env_base_dir = remote_base / "env-cache" / cache_key
+
+    def prepare() -> tuple[str, str]:
+        return client._setup_project_environments_on_remote(
+            ssh_pool=cast(Any, LocalShellPool()),
+            env_base_dir=str(env_base_dir),
+            setup_cmd=["bash", "setup.sh"],
+            environment_name="gpu",
+            env_overrides={"SLURM_PACK_PLATFORM": "linux-64"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: prepare(), range(2)))
+
+    assert results[0] == results[1]
+    assert (env_base_dir / "setup-count").read_text() == "setup-ran\n"
+
+
 def test_remote_pack_flow_supports_inputs_above_project_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1250,6 +1453,65 @@ def test_predeployed_env_override_from_metadata(monkeypatch):
     assert fake_client.kwargs["pre_deployed_env_path_override"] == "/prebuilt/envs/ml"
 
 
+def test_named_environment_resolution_precedence(monkeypatch):
+    slurm_resource = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="localhost", port=2222, user="test", password="secret"
+        ),
+        queue=SlurmQueueConfig(),
+        remote_base="/tmp/dagster_test",
+    )
+    resource = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=slurm_resource,
+        default_launcher=BashLauncher(),
+        project_setup_cmd=["just", "setup-gpu"],
+        default_environment_name="default",
+    )
+
+    class DummyContext:
+        def __init__(self):
+            self.asset_key = AssetKey("demo")
+            self.selected_asset_keys = {self.asset_key}
+            self.assets_def = SimpleNamespace(
+                metadata_by_key={self.asset_key: {"slurm_environment_name": "metadata"}}
+            )
+
+        def has_assets_def(self):
+            return True
+
+    fake_client = DummySlurmClient()
+    monkeypatch.setattr(
+        ComputeResource,
+        "get_pipes_client",
+        lambda self, context, launcher=None: fake_client,
+    )
+
+    resource.run(context=DummyContext(), payload_path="script.py")
+    captured = fake_client.kwargs
+    assert captured is not None
+    assert captured["environment_name"] == "metadata"
+
+    resource.run(
+        context=DummyContext(),
+        payload_path="script.py",
+        config=SlurmRunConfig(environment_name="config"),
+    )
+    captured = fake_client.kwargs
+    assert captured is not None
+    assert captured["environment_name"] == "config"
+
+    resource.run(
+        context=DummyContext(),
+        payload_path="script.py",
+        config=SlurmRunConfig(environment_name="config"),
+        environment_name="explicit",
+    )
+    captured = fake_client.kwargs
+    assert captured is not None
+    assert captured["environment_name"] == "explicit"
+
+
 def test_slurm_run_config_sets_force_env_push(monkeypatch):
     """SlurmRunConfig should set force_env_push when passed to compute.run()."""
     slurm_resource = SlurmResource(
@@ -1346,6 +1608,9 @@ def test_compute_resource_passes_remote_pack_options_to_slurm_client():
         default_launcher=BashLauncher(),
         pack_on_remote=True,
         remote_pack_timeout=321,
+        project_setup_cmd=["just", "setup-gpu"],
+        project_setup_env={"MODEL_CACHE": "/share/models"},
+        project_setup_input_globs=["scripts/setup-*.sh"],
     )
 
     client = resource.get_pipes_client(cast(Any, SimpleNamespace()))
@@ -1353,6 +1618,9 @@ def test_compute_resource_passes_remote_pack_options_to_slurm_client():
     assert isinstance(client, SlurmPipesClient)
     assert client.pack_on_remote is True
     assert client.remote_pack_timeout == 321
+    assert client.project_setup_cmd == ["just", "setup-gpu"]
+    assert client.project_setup_env == {"MODEL_CACHE": "/share/models"}
+    assert client.project_setup_input_globs == ["scripts/setup-*.sh"]
 
 
 def test_explicit_params_override_config(monkeypatch):

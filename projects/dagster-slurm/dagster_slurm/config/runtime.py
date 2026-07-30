@@ -67,6 +67,14 @@ class SlurmRunConfig(dg.Config):
         ),
     )
 
+    environment_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Named environment produced by ComputeResource.project_setup_cmd. "
+            "Overrides asset metadata and the resource default."
+        ),
+    )
+
     extra_files: Optional[List[str]] = Field(
         default=None,
         description=(

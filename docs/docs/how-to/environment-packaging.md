@@ -51,6 +51,10 @@ compute = ComputeResource(
 | `cache_inject_globs`          | `None`  | Glob patterns for inject files that affect cache key. If not set, all inject files are hashed.                       |
 | `pack_on_remote`              | `False` | When `True`, run packaging on the Slurm edge node on cache misses and upload only small pack inputs.                 |
 | `remote_pack_timeout`         | `600`   | Timeout in seconds for remote packaging and extraction.                                                              |
+| `project_setup_cmd`           | `None`  | Project-level edge-node command that prepares multiple named environments in one cache entry.                        |
+| `project_setup_env`           | `{}`    | Environment variables passed to the project setup command.                                                           |
+| `project_setup_input_globs`   | `None`  | Additional project-relative inputs staged for the setup command.                                                     |
+| `default_environment_name`    | `None`  | Default named environment selected from project setup output.                                                        |
 | `auto_detect_platform`        | `False` | Auto-detect target platform from edge node architecture.                                                             |
 | `pack_platform`               | `None`  | Explicit target platform (e.g., `linux-64`).                                                                         |
 | `debug_mode`                  | `False` | Keep build artefacts for inspection.                                                                                 |
@@ -133,6 +137,86 @@ If the remote pack step fails, `dagster-slurm` falls back to local packaging and
 For the example supercomputer configuration, `SLURM_PACK_ON_REMOTE` defaults to enabled and can be disabled with `SLURM_PACK_ON_REMOTE=false`.
 Use `SLURM_REMOTE_PACK_TIMEOUT` to tune the remote timeout.
 
+## Multi-environment project setup
+
+Use `project_setup_cmd` when one project command prepares a coordinated set of environments instead of one `pixi-pack` archive.
+The command runs on a cache miss or forced refresh from a durable staged project directory on the Slurm edge node.
+Pixi manifests, `pixi.lock`, and `justfile`/`Justfile` are staged automatically; use `project_setup_input_globs` for scripts, local packages, or other required inputs.
+
+```python
+compute = ComputeResource(
+    mode="slurm",
+    slurm=slurm_resource,
+    default_launcher=BashLauncher(),
+    project_setup_cmd=["just", "setup-gpu"],
+    project_setup_env={
+        "MODEL_CACHE": "/share/models",
+    },
+    project_setup_input_globs=[
+        "scripts/setup-*.sh",
+        "projects/shared/**/*.py",
+    ],
+    default_environment_name="cpu",
+    remote_pack_timeout=1800,
+)
+```
+
+The setup command receives these additional variables:
+
+| Variable                           | Purpose                                                         |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `DAGSTER_SLURM_REMOTE_PROJECT_DIR` | Durable staged project directory and command working directory. |
+| `DAGSTER_SLURM_ENV_BASE_DIR`       | Stable cache entry below `{remote_base}/env-cache/<key>`.       |
+| `SLURM_PACK_PLATFORM`              | Resolved target platform, such as `linux-64`.                   |
+
+An ordinary multi-environment Pixi setup can install environments into `.pixi/envs`:
+
+```just title="justfile"
+setup-gpu:
+    pixi install --locked --environment cpu
+    pixi install --locked --environment gpu
+```
+
+After the command succeeds, every executable `.pixi/envs/<name>/bin/python` is published under `{env_base_dir}/envs/<name>/bin/python`.
+An existing `.pixi/envs/<name>/activate.sh` is preserved; otherwise dagster-slurm generates one with `pixi shell-hook --shell bash -e <name>` so Pixi activation variables and scripts are retained.
+Publication happens under the existing remote-pack lock, and the shared `envs` link is replaced atomically.
+A failed or timed-out setup blocks job submission and does not fall back to another environment.
+Set `force_env_push=True` to rerun the setup command and atomically refresh every named environment even when the cache is already populated.
+
+Select an environment explicitly, through launchpad configuration, or with asset metadata:
+
+```python
+@dg.asset(metadata={"slurm_environment_name": "gpu"})
+def gpu_training(context: dg.AssetExecutionContext, compute: ComputeResource):
+    return compute.run(
+        context=context,
+        payload_path="train.py",
+    ).get_results()
+
+
+@dg.asset
+def cpu_inference(context: dg.AssetExecutionContext, compute: ComputeResource):
+    return compute.run(
+        context=context,
+        payload_path="infer.py",
+        environment_name="cpu",
+    ).get_results()
+```
+
+`SlurmRunConfig.environment_name` provides the same selection in the Dagster launchpad.
+Selection precedence is the explicit `compute.run()` argument, `SlurmRunConfig`, `slurm_environment_name` metadata, then `default_environment_name`.
+All selections share one setup cache because the environment name is not part of its cache key.
+
+### Shared storage and scratch
+
+The cache remains below `SlurmResource.remote_base`; no second durable storage root is introduced.
+Choose a shared filesystem such as `/home` or `/share` according to site policy, and point model or tool caches at shared locations through `project_setup_env`.
+For example, a group installation can use `remote_base="/share/group/dagster-runs"` and `MODEL_CACHE="/share/models"`.
+
+Node-local `/scratch` can improve runtime I/O, but it is not a durable project setup destination.
+If needed, copy selected files to `/scratch` from inside the Slurm allocation and copy durable results back to shared storage.
+An edge-node setup must not assume that its `/scratch` path is local to every compute node.
+
 ## Runtime configuration with SlurmRunConfig
 
 Use `SlurmRunConfig` to make environment and payload settings configurable at job submission time via the Dagster launchpad.
@@ -162,6 +246,7 @@ def my_asset(
 | `force_env_push`      | `False` | Force re-pack and upload the environment even when cached. Useful after manual changes to injected packages. |
 | `skip_payload_upload` | `False` | Skip uploading the payload script. Use when the script already exists on the remote.                         |
 | `remote_payload_path` | `None`  | Custom remote path for the payload when `skip_payload_upload=True`.                                          |
+| `environment_name`    | `None`  | Select one environment produced by `project_setup_cmd`.                                                      |
 
 ### When to use SlurmRunConfig
 
