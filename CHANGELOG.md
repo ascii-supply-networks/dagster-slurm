@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.15.2-rc.1 (2026-07-30)
+
+### Bug Fixes
+
+- Make stable release notes cumulative
+  ([`15cfa1e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/15cfa1e796dfcbc23b468c97fd98f7d5590ec800))
+
+- Retry tutorial environment packing
+  ([`5a9cb17`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5a9cb17868a1744107c860ca6de04b51799a0693))
+
+- Revalidate stale release candidates
+  ([`ff8e7c9`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ff8e7c96d2ebd608cd550c7f733dad002b1f658b))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`7f8ab7b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7f8ab7bd73d2caa734dc2481566ea67063bb1379))
+
+### Features
+
+- Add project setup hooks
+  ([`aada2fa`](https://github.com/ascii-supply-networks/dagster-slurm/commit/aada2fad14d35d97164610b5753e8d71054c948b))
+
+
 ## v1.15.2 (2026-07-29)
 
 ### Chores
