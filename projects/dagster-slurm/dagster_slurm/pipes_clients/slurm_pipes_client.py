@@ -135,6 +135,9 @@ class SlurmPipesClient(PipesClient):
         cache_inject_globs: Optional[list[str]] = None,
         pack_on_remote: bool = False,
         remote_pack_timeout: int = 600,
+        project_setup_cmd: Optional[list[str]] = None,
+        project_setup_env: Optional[dict[str, str]] = None,
+        project_setup_input_globs: Optional[list[str]] = None,
         run_allocation_scope: bool = False,
     ):
         """Args:
@@ -152,6 +155,11 @@ class SlurmPipesClient(PipesClient):
         pack_on_remote: If True, stage small pack inputs on the edge node and run
             pixi-pack there instead of uploading the self-extracting environment.
         remote_pack_timeout: Timeout in seconds for the remote pack and extract step.
+        project_setup_cmd: Optional command that prepares multiple named environments
+            from a staged project on the edge node.
+        project_setup_env: Environment variables passed to ``project_setup_cmd``.
+        project_setup_input_globs: Additional project-relative files to stage for the
+            setup command.
 
         """
         super().__init__()
@@ -174,6 +182,9 @@ class SlurmPipesClient(PipesClient):
         self.cache_inject_globs = cache_inject_globs
         self.pack_on_remote = pack_on_remote
         self.remote_pack_timeout = remote_pack_timeout
+        self.project_setup_cmd = project_setup_cmd
+        self.project_setup_env = project_setup_env or {}
+        self.project_setup_input_globs = project_setup_input_globs or []
         self.run_allocation_scope = run_allocation_scope
 
     def run(  # ty: ignore[invalid-method-override]  # Dagster PipesClient is designed for extension
@@ -190,6 +201,7 @@ class SlurmPipesClient(PipesClient):
         remote_payload_path: Optional[str] = None,
         pack_cmd_override: Optional[list[str]] = None,
         pre_deployed_env_path_override: Optional[str] = None,
+        environment_name: Optional[str] = None,
         extra_files: Optional[list[str]] = None,
         poll_timeout: int = 3600,
         **kwargs,
@@ -210,6 +222,7 @@ class SlurmPipesClient(PipesClient):
                 it already exists remotely).
             remote_payload_path: Optional pre-existing remote payload path to use when
                 skipping upload.
+            environment_name: Named environment prepared by ``project_setup_cmd``.
             poll_timeout: Maximum time in seconds to wait for the Slurm job to
                 complete. Defaults to 3600 (1 hour).
             **kwargs: Additional arguments (ignored, for forward compatibility)
@@ -445,6 +458,7 @@ class SlurmPipesClient(PipesClient):
                     force_env_push=force_env_push,
                     pack_cmd_override=pack_cmd_override,
                     pre_deployed_env_path_override=pre_deployed_env_path_override,
+                    environment_name=environment_name,
                 )
 
                 # Check for cancellation – only abort on user-initiated cancel
@@ -1574,7 +1588,10 @@ class SlurmPipesClient(PipesClient):
         return None
 
     def _remote_pack_input_files(
-        self, pack_cmds: list[list[str]], project_dir: Path
+        self,
+        pack_cmds: list[list[str]],
+        project_dir: Path,
+        extra_input_globs: Optional[list[str]] = None,
     ) -> list[tuple[Path, str]]:
         """Return local files to stage for remote packing.
 
@@ -1603,7 +1620,13 @@ class SlurmPipesClient(PipesClient):
                 ) from exc
             files[relative.as_posix()] = resolved
 
-        for name in ("pyproject.toml", "pixi.toml", "pixi.lock"):
+        for name in (
+            "pyproject.toml",
+            "pixi.toml",
+            "pixi.lock",
+            "justfile",
+            "Justfile",
+        ):
             add_file(project_dir / name)
 
         patterns: list[str] = []
@@ -1622,6 +1645,8 @@ class SlurmPipesClient(PipesClient):
 
         if self.cache_inject_globs:
             patterns.extend(self.cache_inject_globs)
+        if extra_input_globs:
+            patterns.extend(extra_input_globs)
 
         missing_patterns: list[str] = []
         for pattern in patterns:
@@ -1651,6 +1676,7 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         remote_pack_root: str,
         pack_cmds: list[list[str]],
+        extra_input_globs: Optional[list[str]] = None,
     ) -> str:
         """Upload the small set of files needed to run pixi-pack remotely.
 
@@ -1661,7 +1687,11 @@ class SlurmPipesClient(PipesClient):
         """
         project_dir = Path.cwd()
         workspace_root = _local_pack_workspace_root(project_dir)
-        files = self._remote_pack_input_files(pack_cmds, project_dir=project_dir)
+        files = self._remote_pack_input_files(
+            pack_cmds,
+            project_dir=project_dir,
+            extra_input_globs=extra_input_globs,
+        )
         if not files:
             raise RuntimeError("Remote packing could not find any local pack inputs")
 
@@ -1704,6 +1734,193 @@ class SlurmPipesClient(PipesClient):
             f"tar -xf {shlex.quote(remote_archive)} -C {shlex.quote(remote_workspace)}"
         )
         return remote_project_dir
+
+    @staticmethod
+    def _validate_environment_name(environment_name: str) -> str:
+        """Validate a named environment used below the shared cache root."""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", environment_name):
+            raise ValueError(
+                "environment_name must contain only letters, numbers, '.', '_', "
+                f"or '-', and must start with a letter or number: {environment_name!r}"
+            )
+        return environment_name
+
+    @staticmethod
+    def _validate_environment_variables(environment: Mapping[str, str]) -> None:
+        """Reject environment keys that cannot be assigned safely by Bash."""
+        invalid_keys = [
+            key
+            for key in environment
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+        ]
+        if invalid_keys:
+            raise ValueError(
+                "project_setup_env contains invalid environment variable name(s): "
+                + ", ".join(sorted(invalid_keys))
+            )
+
+    def _compute_project_setup_cache_key(
+        self,
+        setup_cmd: list[str],
+        env_overrides: dict[str, str],
+    ) -> str:
+        """Hash the setup command, environment, and every staged project input."""
+        project_dir = Path.cwd()
+        files = self._remote_pack_input_files(
+            [setup_cmd],
+            project_dir=project_dir,
+            extra_input_globs=self.project_setup_input_globs,
+        )
+        if not files:
+            raise RuntimeError(
+                "Project setup could not find any inputs to stage. Add a Pixi "
+                "manifest or configure project_setup_input_globs."
+            )
+
+        digest = hashlib.sha256()
+        digest.update(b"dagster-slurm-project-setup-v2\0")
+        for arg in setup_cmd:
+            digest.update(arg.encode())
+            digest.update(b"\0")
+        for key, value in sorted(env_overrides.items()):
+            digest.update(key.encode())
+            digest.update(b"=")
+            digest.update(value.encode())
+            digest.update(b"\0")
+        for path, relative_path in files:
+            digest.update(relative_path.encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+        return digest.hexdigest()[:16]
+
+    def _setup_project_environments_on_remote(
+        self,
+        ssh_pool: SSHConnectionPool,
+        env_base_dir: str,
+        setup_cmd: list[str],
+        environment_name: str,
+        env_overrides: dict[str, str],
+        force_refresh: bool = False,
+    ) -> tuple[str, str]:
+        """Prepare and atomically publish named environments on the edge node."""
+        environment_name = self._validate_environment_name(environment_name)
+        token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        remote_pack_root = f"{env_base_dir}/pack-work/{token}"
+        staged_project_dir = self._stage_remote_pack_workspace(
+            ssh_pool=ssh_pool,
+            remote_pack_root=remote_pack_root,
+            pack_cmds=[setup_cmd],
+            extra_input_globs=self.project_setup_input_globs,
+        )
+
+        output_root = f"{env_base_dir}/setup-output/{token}"
+        setup_project_dir = f"{output_root}/project"
+        project_envs_dir = f"{setup_project_dir}/.pixi/envs"
+        published_envs_dir = f"{env_base_dir}/envs"
+        activation_script = f"{published_envs_dir}/{environment_name}/activate.sh"
+        python_executable = f"{published_envs_dir}/{environment_name}/bin/python"
+        lock_file = f"{env_base_dir}/.remote-pack.lock"
+        temporary_link = f"{env_base_dir}/.envs.{token}.tmp"
+
+        command_env = {
+            **self.project_setup_env,
+            **env_overrides,
+            "DAGSTER_SLURM_ENV_BASE_DIR": env_base_dir,
+            "DAGSTER_SLURM_REMOTE_PROJECT_DIR": setup_project_dir,
+        }
+        self._validate_environment_variables(command_env)
+        env_prefix = " ".join(
+            f"{key}={shlex.quote(value)}" for key, value in sorted(command_env.items())
+        )
+        command = f"{env_prefix} {shlex.join(setup_cmd)}".strip()
+
+        pack_root_quoted = shlex.quote(remote_pack_root)
+        staged_project_quoted = shlex.quote(staged_project_dir)
+        output_root_quoted = shlex.quote(output_root)
+        setup_project_quoted = shlex.quote(setup_project_dir)
+        project_envs_quoted = shlex.quote(project_envs_dir)
+        published_envs_quoted = shlex.quote(published_envs_dir)
+        activation_quoted = shlex.quote(activation_script)
+        python_quoted = shlex.quote(python_executable)
+        temporary_link_quoted = shlex.quote(temporary_link)
+
+        inner = f"""
+set -euo pipefail
+cleanup_failed_setup() {{
+  status=$?
+  rm -rf {pack_root_quoted} {output_root_quoted} {temporary_link_quoted}
+  exit "$status"
+}}
+trap cleanup_failed_setup ERR
+if [ {int(force_refresh)} -eq 0 ] && [ -f {activation_quoted} ] && [ -x {python_quoted} ]; then
+  rm -rf {pack_root_quoted}
+  trap - ERR
+  exit 0
+fi
+rm -rf {output_root_quoted}
+mkdir -p {setup_project_quoted}
+cp -a {staged_project_quoted}/. {setup_project_quoted}/
+cd {setup_project_quoted}
+{command}
+if [ ! -d {project_envs_quoted} ]; then
+  echo "Project setup completed but produced no named environments under .pixi/envs in the staged project." >&2
+  exit 1
+fi
+shopt -s nullglob
+python_bins=({project_envs_quoted}/*/bin/python)
+if [ "${{#python_bins[@]}}" -eq 0 ]; then
+  echo "Project setup produced no executable .pixi/envs/<name>/bin/python paths" >&2
+  exit 1
+fi
+for python_bin in "${{python_bins[@]}}"; do
+  if [ ! -x "$python_bin" ]; then
+    continue
+  fi
+  environment_dir="$(dirname "$(dirname "$python_bin")")"
+  if [ ! -f "$environment_dir/activate.sh" ]; then
+    environment="$(basename "$environment_dir")"
+    pixi shell-hook --shell bash -e "$environment" > "$environment_dir/activate.sh.tmp"
+    mv "$environment_dir/activate.sh.tmp" "$environment_dir/activate.sh"
+  fi
+done
+if [ ! -f {project_envs_quoted}/{shlex.quote(environment_name)}/activate.sh ] || [ ! -x {project_envs_quoted}/{shlex.quote(environment_name)}/bin/python ]; then
+  echo "Project setup did not produce requested environment {shlex.quote(environment_name)}" >&2
+  exit 1
+fi
+ln -s {project_envs_quoted} {temporary_link_quoted}
+mv -Tf {temporary_link_quoted} {published_envs_quoted}
+rm -rf {pack_root_quoted}
+trap - ERR
+"""
+        setup_cmd_remote = (
+            f"mkdir -p {shlex.quote(env_base_dir)} && "
+            f"flock {shlex.quote(lock_file)} bash -c {shlex.quote(inner)}"
+        )
+        self.logger.info(
+            "Running project setup command on the Slurm edge node for environment %s",
+            environment_name,
+        )
+        try:
+            output = ssh_pool.run(
+                setup_cmd_remote,
+                timeout=self.remote_pack_timeout,
+            )
+            self.logger.debug(f"Remote project setup output:\n{output}")
+        except Exception as exc:
+            raise RuntimeError(
+                "Remote project setup failed before Slurm submission. Command: "
+                f"{shlex.join(setup_cmd)}. Requested environment: "
+                f"{environment_name}. Error: {exc}"
+            ) from exc
+
+        ssh_pool.run(f"test -f {activation_quoted} && test -x {python_quoted}")
+        self.logger.info(
+            "Project environment %s is ready at %s",
+            environment_name,
+            python_executable,
+        )
+        return activation_script, python_executable
 
     def _pack_environment_on_remote(
         self,
@@ -1807,6 +2024,7 @@ rm -rf {pack_root_quoted}
         force_env_push: bool,
         pack_cmd_override: Optional[list[str]] = None,
         pre_deployed_env_path_override: Optional[str] = None,
+        environment_name: Optional[str] = None,
     ) -> tuple[str, str]:
         """Ensure a usable Python environment exists and return activation + python paths."""
         pre_deployed_env_path = (
@@ -1828,6 +2046,63 @@ rm -rf {pack_root_quoted}
             pack_env_overrides["SLURM_PACK_PLATFORM"],
         )
         resolved_pack_platform = pack_env_overrides["SLURM_PACK_PLATFORM"]
+
+        if self.project_setup_cmd:
+            if pack_cmd_override:
+                raise ValueError(
+                    "slurm_pack_cmd cannot be combined with project_setup_cmd. "
+                    "Use environment_name to select one environment produced by "
+                    "the project setup command."
+                )
+            if not environment_name:
+                raise ValueError(
+                    "environment_name is required when project_setup_cmd is "
+                    "configured. Pass it to ComputeResource.run(), set it in "
+                    "SlurmRunConfig, or use slurm_environment_name metadata."
+                )
+            environment_name = self._validate_environment_name(environment_name)
+            setup_cache_env = {
+                **self.project_setup_env,
+                **pack_env_overrides,
+            }
+            cache_key = self._compute_project_setup_cache_key(
+                setup_cmd=self.project_setup_cmd,
+                env_overrides=setup_cache_env,
+            )
+            env_base_dir = f"{remote_base}/env-cache/{cache_key}"
+            activation_script = f"{env_base_dir}/envs/{environment_name}/activate.sh"
+            python_executable = f"{env_base_dir}/envs/{environment_name}/bin/python"
+
+            if not force_env_push and self._cached_env_ready(
+                ssh_pool=ssh_pool,
+                activation_script=activation_script,
+                python_executable=python_executable,
+            ):
+                self.logger.info(
+                    "Reusing project environment %s from cache %s",
+                    environment_name,
+                    cache_key,
+                )
+                return activation_script, python_executable
+
+            if force_env_push:
+                self.logger.info(
+                    "Force refreshing project environments in cache %s",
+                    cache_key,
+                )
+            else:
+                self.logger.info(
+                    "Project environment cache miss for %s; running setup",
+                    cache_key,
+                )
+            return self._setup_project_environments_on_remote(
+                ssh_pool=ssh_pool,
+                env_base_dir=env_base_dir,
+                setup_cmd=self.project_setup_cmd,
+                environment_name=environment_name,
+                env_overrides=pack_env_overrides,
+                force_refresh=force_env_push,
+            )
 
         # Use pack-only command for cache key computation (stable keys)
         pack_cmd_for_cache = self._get_pack_command(

@@ -1,6 +1,7 @@
 """Docker-backed integration coverage for remote environment packaging."""
 
 import os
+import shlex
 import uuid
 from pathlib import Path
 from typing import Any, cast
@@ -110,5 +111,148 @@ chmod +x environment.sh
                     ]
                 )
             )
+        finally:
+            pool.run(f"rm -rf {remote_root}")
+
+
+def test_project_setup_on_docker_edge_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Install, activate, execute, reuse, and refresh two real Pixi environments."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "pixi.toml").write_text(
+        """[workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.12.*"
+
+[feature.cpu.activation.env]
+DAGSTER_SLURM_TEST_ENV = "cpu"
+
+[feature.cpu.activation]
+scripts = ["activate-cpu.sh"]
+
+[feature.gpu.activation.env]
+DAGSTER_SLURM_TEST_ENV = "gpu"
+
+[feature.gpu.activation]
+scripts = ["activate-gpu.sh"]
+
+[environments]
+cpu = ["cpu"]
+gpu = ["gpu"]
+""",
+        encoding="utf-8",
+    )
+    for environment in ("cpu", "gpu"):
+        (project_dir / f"activate-{environment}.sh").write_text(
+            f"export DAGSTER_SLURM_TEST_SCRIPT={environment}-script\n",
+            encoding="utf-8",
+        )
+    (project_dir / "setup.sh").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+test "$SETUP_KIND" = "multi-environment"
+pixi install --all
+printf 'setup-ran\n' >> "$DAGSTER_SLURM_ENV_BASE_DIR/setup-count"
+""",
+        encoding="utf-8",
+    )
+
+    remote_root = f"/home/submitter/dagster_ci_runs/project-setup-{uuid.uuid4().hex}"
+    ssh = SSHConnectionResource(
+        host=os.environ.get("SLURM_EDGE_NODE_HOST", "127.0.0.1"),
+        port=int(os.environ.get("SLURM_EDGE_NODE_PORT", "2223")),
+        user=os.environ.get("SLURM_EDGE_NODE_USER", "submitter"),
+        password=os.environ.get("SLURM_EDGE_NODE_PASSWORD", "submitter"),
+    )
+    slurm = SlurmResource(ssh=ssh, queue=SlurmQueueConfig(), remote_base=remote_root)
+    client = SlurmPipesClient(
+        slurm_resource=slurm,
+        launcher=BashLauncher(),
+        project_setup_cmd=["bash", "setup.sh"],
+        project_setup_env={"SETUP_KIND": "multi-environment"},
+        project_setup_input_globs=["setup.sh", "activate-*.sh"],
+        remote_pack_timeout=60,
+    )
+
+    monkeypatch.chdir(project_dir)
+    pool = SSHConnectionPool(ssh)
+    with pool:
+        try:
+            activation_script, python_executable = client._prepare_environment(
+                ssh_pool=cast(Any, pool),
+                remote_base=remote_root,
+                run_dir=f"{remote_root}/runs/run-1",
+                force_env_push=False,
+                environment_name="gpu",
+            )
+
+            assert activation_script.endswith("/envs/gpu/activate.sh")
+            assert python_executable.endswith("/envs/gpu/bin/python")
+            envs_dir = python_executable.removesuffix("/gpu/bin/python")
+            env_base_dir = envs_dir.removesuffix("/envs")
+            pool.run(
+                " && ".join(
+                    [
+                        f"test -x {envs_dir}/cpu/bin/python",
+                        f"test -x {envs_dir}/gpu/bin/python",
+                        f"test -f {envs_dir}/cpu/activate.sh",
+                        f"test -f {envs_dir}/gpu/activate.sh",
+                        f"test $(wc -l < {env_base_dir}/setup-count) -eq 1",
+                    ]
+                )
+            )
+
+            def execute_in_environment(
+                activation: str,
+                expected_environment: str,
+            ) -> str:
+                python_code = (
+                    "import os, sys; "
+                    f"assert os.environ['DAGSTER_SLURM_TEST_ENV'] == "
+                    f"{expected_environment!r}; "
+                    f"assert os.environ['DAGSTER_SLURM_TEST_SCRIPT'] == "
+                    f"{f'{expected_environment}-script'!r}; "
+                    "print(sys.executable)"
+                )
+                activated_command = (
+                    f"source {shlex.quote(activation)} && "
+                    f"python -c {shlex.quote(python_code)}"
+                )
+                return pool.run(f"bash -c {shlex.quote(activated_command)}").strip()
+
+            assert execute_in_environment(activation_script, "gpu").endswith(
+                "/.pixi/envs/gpu/bin/python"
+            )
+
+            cached_activation, cached_python = client._prepare_environment(
+                ssh_pool=cast(Any, pool),
+                remote_base=remote_root,
+                run_dir=f"{remote_root}/runs/run-2",
+                force_env_push=False,
+                environment_name="cpu",
+            )
+            assert cached_python.endswith("/envs/cpu/bin/python")
+            assert execute_in_environment(cached_activation, "cpu").endswith(
+                "/.pixi/envs/cpu/bin/python"
+            )
+            pool.run(f"test $(wc -l < {env_base_dir}/setup-count) -eq 1")
+
+            refreshed_activation, _ = client._prepare_environment(
+                ssh_pool=cast(Any, pool),
+                remote_base=remote_root,
+                run_dir=f"{remote_root}/runs/run-3",
+                force_env_push=True,
+                environment_name="gpu",
+            )
+            assert execute_in_environment(refreshed_activation, "gpu").endswith(
+                "/.pixi/envs/gpu/bin/python"
+            )
+            pool.run(f"test $(wc -l < {env_base_dir}/setup-count) -eq 2")
         finally:
             pool.run(f"rm -rf {remote_root}")
