@@ -564,6 +564,44 @@ jobs:
           git push --tags
           pixi run -e build --frozen uv run semantic-release publish
 
+      - name: Generate cumulative stable release notes
+        env:
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="$(grep "version =" pyproject.toml | head -1 | cut -d'"' -f2)"
+          FINAL_TAG="v$RELEASE_VERSION"
+
+          if ! gh release view "$FINAL_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null; then
+            echo "Published stable release $FINAL_TAG was not found" >&2
+            exit 1
+          fi
+
+          PREVIOUS_STABLE_TAG="$(
+            gh release list \
+              --repo "$GITHUB_REPOSITORY" \
+              --exclude-drafts \
+              --exclude-pre-releases \
+              --limit 2 \
+              --json tagName \
+              --jq '.[1].tagName // empty'
+          )"
+          if [ -z "$PREVIOUS_STABLE_TAG" ]; then
+            echo "No previous stable release was found before $FINAL_TAG" >&2
+            exit 1
+          fi
+
+          echo "Generating release notes for $PREVIOUS_STABLE_TAG...$FINAL_TAG"
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$FINAL_TAG" \
+            -f previous_tag_name="$PREVIOUS_STABLE_TAG" \
+            --jq .body |
+            gh release edit "$FINAL_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --notes-file -
+
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
