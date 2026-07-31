@@ -1,10 +1,126 @@
 """Tests for launchers."""
 
+import os
+import shutil
+import socket
+import subprocess
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+import pytest
+from dagster_slurm.helpers.ray_dashboard import (
+    RayDashboardLogEmitter,
+    ray_dashboard_url_from_line,
+)
 from dagster_slurm.launchers import (
     BashLauncher,
     RayLauncher,
+    RayPortConfig,
     SparkLauncher,
 )
+from dagster_slurm.runners.local_runner import LocalRunner
+
+
+@dataclass
+class _FakeRayLaunch:
+    process: subprocess.Popen[str]
+    args_path: Path
+    pid_path: Path
+    output_path: Path
+
+    def args(self) -> list[str]:
+        return self.args_path.read_text(encoding="utf-8").splitlines()
+
+    def output_lines(self) -> list[str]:
+        return self.output_path.read_text(encoding="utf-8").splitlines()
+
+
+class _FakeRayRuntime:
+    def __init__(self, root: Path):
+        self.root = root
+        self.processes: list[subprocess.Popen[str]] = []
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        fake_ray = fake_bin / "ray"
+        fake_ray.write_text(
+            """#!/bin/bash
+set -euo pipefail
+command_name="$1"
+shift
+if [[ "$command_name" == "status" ]]; then exit 0; fi
+if [[ "$command_name" != "start" ]]; then exit 2; fi
+printf '%s\\n' "$@" > "$FAKE_RAY_ARGS"
+printf '%s\\n' "$$" > "$FAKE_RAY_PID"
+trap 'exit 0' TERM INT
+while true; do sleep 0.05; done
+""",
+            encoding="utf-8",
+        )
+        fake_ray.chmod(0o755)
+        self.fake_bin = fake_bin
+        self.payload = root / "payload.sh"
+        self.payload.write_text('sleep "$PAYLOAD_SLEEP"\n', encoding="utf-8")
+
+    def start(
+        self,
+        launcher: RayLauncher,
+        name: str,
+        *,
+        seed: int,
+        payload_sleep: float,
+    ) -> _FakeRayLaunch:
+        working_dir = self.root / name
+        working_dir.mkdir()
+        plan = launcher.prepare_execution(
+            payload_path=str(self.payload),
+            python_executable="/bin/bash",
+            working_dir=str(working_dir),
+            pipes_context={},
+            extra_env={
+                "PAYLOAD_SLEEP": str(payload_sleep),
+                "RAY_PORT_SEED": str(seed),
+            },
+        )
+        launch_script = working_dir / "launch.sh"
+        launch_script.write_text("\n".join(plan.payload), encoding="utf-8")
+        args_path = working_dir / "ray-args"
+        pid_path = working_dir / "ray-pid"
+        output_path = working_dir / "launcher.log"
+        process_env = {
+            **os.environ,
+            "FAKE_RAY_ARGS": str(args_path),
+            "FAKE_RAY_PID": str(pid_path),
+            "PATH": f"{self.fake_bin}:{os.environ['PATH']}",
+        }
+        with output_path.open("w", encoding="utf-8") as output:
+            process = subprocess.Popen(
+                ["bash", str(launch_script)],
+                cwd=working_dir,
+                env=process_env,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        self.processes.append(process)
+        return _FakeRayLaunch(process, args_path, pid_path, output_path)
+
+    def close(self) -> None:
+        for process in self.processes:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=15)
+
+
+@pytest.fixture
+def fake_ray_runtime(tmp_path: Path) -> Iterator[_FakeRayRuntime]:
+    runtime = _FakeRayRuntime(tmp_path)
+    try:
+        yield runtime
+    finally:
+        runtime.close()
 
 
 def test_bash_launcher_basic():
@@ -112,22 +228,176 @@ def test_ray_launcher_existing_cluster_prefers_packed_native_libraries():
     )
 
 
-def test_ray_launcher_seeded_local_ports_use_high_range():
-    """RAY_PORT_SEED should avoid low Ray default ports on shared CI hosts."""
-    launcher = RayLauncher(num_gpus_per_node=0, dashboard_port=8265)
-
-    plan = launcher.prepare_execution(
-        payload_path="/path/to/script.py",
-        python_executable="python3",
-        working_dir="/tmp/test",
-        activation_script="env/activate.sh",
-        pipes_context={"DAGSTER_PIPES_CONTEXT": "test"},
+def test_concurrent_ray_launchers_use_disjoint_ports_and_isolated_cleanup(
+    fake_ray_runtime: _FakeRayRuntime,
+):
+    launcher = RayLauncher(
+        num_gpus_per_node=0,
+        port_config=RayPortConfig(
+            range_start=30000,
+            range_end=31999,
+            block_size=1000,
+            lock_dir=str(fake_ray_runtime.root / "port-locks"),
+        ),
+        node_ip_address_command="printf '192.0.2.10'",
     )
 
-    script = "\n".join(plan.payload)
-    assert "port=$(( 20000 + off ))" in script
-    assert "dash_port=$(( 40000 + off ))" in script
-    assert "port=$(( 6379 + off ))" in script
+    first = fake_ray_runtime.start(
+        launcher,
+        "first",
+        seed=0,
+        payload_sleep=0.1,
+    )
+    second = fake_ray_runtime.start(
+        launcher,
+        "second",
+        seed=0,
+        payload_sleep=8,
+    )
+    assert first.process.wait(timeout=15) == 0
+    assert second.process.poll() is None
+    os.kill(int(second.pid_path.read_text(encoding="utf-8")), 0)
+    third = fake_ray_runtime.start(
+        launcher,
+        "third",
+        seed=0,
+        payload_sleep=0.1,
+    )
+    assert third.process.wait(timeout=15) == 0
+    assert second.process.poll() is None
+
+    first_args = first.args()
+    second_args = second.args()
+    third_args = third.args()
+    assert "--node-ip-address=192.0.2.10" in first_args
+    assert "--node-ip-address=192.0.2.10" in second_args
+    first_ports = {
+        int(argument.rsplit("=", 1)[1])
+        for argument in first_args
+        if "port=" in argument or "ports=" in argument
+    }
+    second_ports = {
+        int(argument.rsplit("=", 1)[1])
+        for argument in second_args
+        if "port=" in argument or "ports=" in argument
+    }
+    third_ports = {
+        int(argument.rsplit("=", 1)[1])
+        for argument in third_args
+        if "port=" in argument or "ports=" in argument
+    }
+    assert first_ports
+    assert second_ports
+    assert first_ports.isdisjoint(second_ports)
+    assert {min(first_ports), min(second_ports)} == {30000, 31000}
+    assert {max(first_ports), max(second_ports)} == {30999, 31999}
+    assert third_ports == first_ports
+
+    first_dashboard_url = next(
+        filter(
+            None,
+            (ray_dashboard_url_from_line(line) for line in first.output_lines()),
+        )
+    )
+    deadline = time.monotonic() + 10
+    second_dashboard_url = None
+    while time.monotonic() < deadline and second_dashboard_url is None:
+        second_dashboard_url = next(
+            filter(
+                None,
+                (ray_dashboard_url_from_line(line) for line in second.output_lines()),
+            ),
+            None,
+        )
+        if second_dashboard_url is None:
+            time.sleep(0.05)
+    assert second.process.poll() is None
+    assert second_dashboard_url is not None
+    assert int(first_dashboard_url.rsplit(":", 1)[1]) in first_ports
+    assert int(second_dashboard_url.rsplit(":", 1)[1]) in second_ports
+    assert second.process.wait(timeout=15) == 0
+
+
+def test_random_ray_ports_skip_a_block_with_a_listener(
+    fake_ray_runtime: _FakeRayRuntime,
+):
+    if shutil.which("ss") is None:
+        pytest.skip("ss is required to probe occupied port blocks")
+
+    listener = socket.socket()
+    for occupied_base in range(20000, 30000, 1000):
+        try:
+            listener.bind(("0.0.0.0", occupied_base))
+            listener.listen()
+            break
+        except OSError:
+            continue
+    else:
+        listener.close()
+        pytest.skip("no test port block is available")
+
+    launcher = RayLauncher(
+        port_config=RayPortConfig(
+            range_start=20000,
+            range_end=29999,
+            block_size=1000,
+            lock_dir=str(fake_ray_runtime.root / "port-locks"),
+        ),
+        node_ip_address_command="printf '192.0.2.10'",
+    )
+    try:
+        launch = fake_ray_runtime.start(
+            launcher,
+            "occupied",
+            seed=(occupied_base - 20000) // 1000,
+            payload_sleep=0.1,
+        )
+        assert launch.process.wait(timeout=15) == 0
+    finally:
+        listener.close()
+
+    assigned_ports = {
+        int(argument.rsplit("=", 1)[1])
+        for argument in launch.args()
+        if "port=" in argument or "ports=" in argument
+    }
+    occupied_ports = range(occupied_base, occupied_base + 1000)
+    assert assigned_ports.isdisjoint(occupied_ports)
+
+
+def test_local_runner_logs_ray_dashboard_while_process_is_alive(tmp_path: Path):
+    release_path = tmp_path / "release"
+    observed_messages: list[str] = []
+    dashboard_observed = threading.Event()
+
+    def log_info(message: str) -> None:
+        observed_messages.append(message)
+        dashboard_observed.set()
+
+    emitter = RayDashboardLogEmitter(log_info)
+    runner = LocalRunner()
+    runner_thread = threading.Thread(
+        target=runner.execute_script,
+        kwargs={
+            "script_lines": [
+                "#!/bin/bash",
+                "set -euo pipefail",
+                "echo DAGSTER_SLURM_RAY_DASHBOARD_URL=http://192.0.2.10:31005",
+                f"while [[ ! -f {release_path} ]]; do sleep 0.05; done",
+            ],
+            "working_dir": str(tmp_path),
+            "line_callback": emitter.process_line,
+        },
+    )
+    runner_thread.start()
+    try:
+        assert dashboard_observed.wait(timeout=5)
+        assert runner_thread.is_alive()
+        assert observed_messages == ["Ray head node web UI: http://192.0.2.10:31005"]
+    finally:
+        release_path.touch()
+        runner_thread.join(timeout=5)
+    assert not runner_thread.is_alive()
 
 
 def test_ray_launcher_cluster_standalone_mode():

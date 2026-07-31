@@ -3,11 +3,13 @@
 import os
 import shutil
 import subprocess
+import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import List
+from typing import List, Optional, TextIO
 
 from dagster import get_dagster_logger
-import sys
 
 from .base import Runner
 
@@ -26,6 +28,7 @@ class LocalRunner(Runner):
         script_lines: List[str],
         working_dir: str,
         wait: bool = True,
+        line_callback: Optional[Callable[[str], object]] = None,
     ) -> int:
         """Execute shell script locally.
 
@@ -33,6 +36,7 @@ class LocalRunner(Runner):
             script_lines: Bash script lines (including shebang)
             working_dir: Directory to execute in
             wait: Block until completion
+            line_callback: Called as each stdout or stderr line is observed
 
         Returns:
             Process ID
@@ -49,26 +53,55 @@ class LocalRunner(Runner):
         self.logger.info(f"Executing local script: {script_path}")
 
         if wait:
-            # Run synchronously
-            try:
-                result = subprocess.run(
+            process = subprocess.Popen(
+                ["bash", str(script_path)],
+                cwd=working_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            stdout_lines: list[str] = []
+            stderr_lines: list[str] = []
+
+            def forward_lines(
+                source: TextIO,
+                destination: TextIO,
+                captured: list[str],
+            ) -> None:
+                for line in source:
+                    captured.append(line)
+                    if line_callback is not None:
+                        line_callback(line.rstrip("\n"))
+                    destination.write(line)
+                    destination.flush()
+
+            threads = [
+                threading.Thread(
+                    target=forward_lines,
+                    args=(process.stdout, sys.stdout, stdout_lines),
+                    daemon=True,
+                ),
+                threading.Thread(
+                    target=forward_lines,
+                    args=(process.stderr, sys.stderr, stderr_lines),
+                    daemon=True,
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+            return_code = process.wait()
+            for thread in threads:
+                thread.join()
+            if return_code:
+                error = subprocess.CalledProcessError(
+                    return_code,
                     ["bash", str(script_path)],
-                    cwd=working_dir,
-                    capture_output=True,
-                    text=True,
-                    check=True,
+                    output="".join(stdout_lines),
+                    stderr="".join(stderr_lines),
                 )
-                if result.stdout:
-                    print(result.stdout)
-                if result.stderr:
-                    print(result.stderr, file=sys.stderr)
-            except subprocess.CalledProcessError as e:
-                self.logger.error(f"Script failed (exit {e.returncode})")
-                if e.stdout:
-                    self.logger.error(f"stdout:\n{e.stdout}")
-                if e.stderr:
-                    self.logger.error(f"stderr:\n{e.stderr}")
-                raise
+                self.logger.error(f"Script failed (exit {error.returncode})")
+                raise error
         else:
             # Run asynchronously
             subprocess.Popen(

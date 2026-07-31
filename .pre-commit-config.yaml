@@ -42,7 +42,7 @@ repos:
     hooks:
       - id: check-merge-conflict
         name: check for merge conflicts
-        entry: sh -c 'if grep -r "^<<<<<<< \|^=======$\|^>>>>>>> " --include="*.rs" --include="*.py" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.json" --include="*.sql" --exclude-dir=".pixi" --exclude-dir="node_modules" --exclude-dir=".git" --exclude-dir="target" --exclude-dir="dagster-skills" .; then echo "Found merge conflict markers!"; exit 1; else echo "No merge conflicts found"; fi'
+        entry: sh -c 'if grep -r "^<<<<<<< \|^=======$\|^>>>>>>> " --include="*.rs" --include="*.py" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.json" --include="*.sql" --exclude-dir=".pixi" --exclude-dir=".venv" --exclude-dir="node_modules" --exclude-dir=".git" --exclude-dir="target" --exclude-dir="dagster-skills" .; then echo "Found merge conflict markers!"; exit 1; else echo "No merge conflicts found"; fi'
         language: system
         pass_filenames: false
       - id: check-large-files

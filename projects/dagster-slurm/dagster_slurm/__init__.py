@@ -13,7 +13,7 @@ Run Dagster assets on Slurm clusters with support for:
 from .config.runtime import SlurmRunConfig
 
 # Core resources
-from .launchers.ray import RayLauncher
+from .launchers.ray import RayLauncher, RayPortConfig
 
 # Launchers
 from .launchers.script import BashLauncher
@@ -50,6 +50,7 @@ __all__ = [
     # Launchers
     "BashLauncher",
     "RayLauncher",
+    "RayPortConfig",
     "ComputeLauncher",
     "SparkLauncher",  # experimental Spark support
     # Advanced: Direct client access

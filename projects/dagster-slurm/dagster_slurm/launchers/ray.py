@@ -2,14 +2,225 @@
 
 import shlex
 from pathlib import Path
-from typing import Any, Dict, Optional, Literal
+from typing import Any, Dict, Literal, Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from dagster_slurm.config.runtime import RuntimeVariant
+from dagster_slurm.helpers.ray_dashboard import RAY_DASHBOARD_URL_MARKER
 
 from .base import ComputeLauncher, ExecutionPlan
 import dagster as dg
+
+
+class RayPortConfig(dg.Config):
+    """Port pool and fixed-port settings for a Ray cluster."""
+
+    range_start: int = Field(
+        default=10000,
+        ge=1,
+        le=65535,
+        description="First port available to job-specific port blocks.",
+    )
+    range_end: int = Field(
+        default=29999,
+        ge=1,
+        le=65535,
+        description="Last port available to job-specific port blocks.",
+    )
+    block_size: int = Field(
+        default=1000,
+        ge=17,
+        le=65535,
+        description=(
+            "Ports reserved per concurrent Ray cluster. Sixteen ports are "
+            "reserved for services; the remainder is the worker port range."
+        ),
+    )
+    lock_dir: str = Field(
+        default="/tmp/dagster-slurm-ray-ports",
+        min_length=1,
+        description="Node-local lock directory shared by concurrent Slurm users.",
+    )
+    node_manager_port: int = Field(default=6700, ge=1, le=65535)
+    object_manager_port: int = Field(default=6701, ge=1, le=65535)
+    redis_shard_port: int = Field(default=6702, ge=1, le=65535)
+    runtime_env_agent_port: int = Field(default=6703, ge=1, le=65535)
+    dashboard_agent_grpc_port: int = Field(default=6704, ge=1, le=65535)
+    dashboard_agent_listen_port: int = Field(default=6705, ge=1, le=65535)
+    metrics_export_port: int = Field(default=6706, ge=1, le=65535)
+    ray_client_server_port: int = Field(default=10001, ge=1, le=65535)
+    min_worker_port: int = Field(default=10002, ge=1, le=65535)
+    max_worker_port: int = Field(default=19999, ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def validate_port_ranges(self):
+        if self.range_end < self.range_start:
+            raise ValueError("range_end must be greater than or equal to range_start")
+        range_size = self.range_end - self.range_start + 1
+        if range_size < self.block_size:
+            raise ValueError(
+                "Ray port range must contain at least one complete port block"
+            )
+        if self.min_worker_port > self.max_worker_port:
+            raise ValueError(
+                "min_worker_port must be less than or equal to max_worker_port"
+            )
+        return self
+
+
+def _render_ray_port_assignments(
+    *,
+    ray_port: int,
+    dashboard_port: int,
+    port_strategy: str,
+    port_config: RayPortConfig,
+) -> str:
+    """Render collision-resistant ports for every Ray service on a node."""
+    block_count = (
+        port_config.range_end - port_config.range_start + 1
+    ) // port_config.block_size
+    return f"""# Assign every Ray service from one job-specific port block.
+port="{ray_port}"
+dash_port="{dashboard_port}"
+node_manager_port="{port_config.node_manager_port}"
+object_manager_port="{port_config.object_manager_port}"
+redis_shard_port="{port_config.redis_shard_port}"
+runtime_env_agent_port="{port_config.runtime_env_agent_port}"
+dashboard_agent_grpc_port="{port_config.dashboard_agent_grpc_port}"
+dashboard_agent_listen_port="{port_config.dashboard_agent_listen_port}"
+metrics_export_port="{port_config.metrics_export_port}"
+ray_client_server_port="{port_config.ray_client_server_port}"
+min_worker_port="{port_config.min_worker_port}"
+max_worker_port="{port_config.max_worker_port}"
+_ray_port_lock_fd=""
+if [[ "{port_strategy}" == "random" ]]; then
+    if ! command -v flock >/dev/null 2>&1; then
+        echo "ERROR: port_strategy=random requires flock (util-linux)" >&2
+        exit 1
+    fi
+    _port_lock_root={shlex.quote(port_config.lock_dir)}
+    if [[ ! -d "$_port_lock_root" ]]; then
+        if (umask 000; mkdir "$_port_lock_root") 2>/dev/null; then
+            chmod 1777 "$_port_lock_root"
+        elif [[ ! -d "$_port_lock_root" ]]; then
+            echo "ERROR: Cannot create Ray port lock directory $_port_lock_root" >&2
+            exit 1
+        fi
+    fi
+    if [[ ! -r "$_port_lock_root" || ! -w "$_port_lock_root" || ! -x "$_port_lock_root" ]]; then
+        echo "ERROR: Ray port lock directory is not accessible: $_port_lock_root" >&2
+        exit 1
+    fi
+    ray_port_block_in_use() {{
+        local block_start="$1"
+        local block_end="$2"
+        command -v ss >/dev/null 2>&1 || return 1
+        ss -H -lntu 2>/dev/null | awk \
+            -v block_start="$block_start" \
+            -v block_end="$block_end" '
+                {{
+                    local_address = $5
+                    sub(/^.*:/, "", local_address)
+                    if (local_address ~ /^[0-9]+$/ && local_address + 0 >= block_start && local_address + 0 <= block_end) {{
+                        found = 1
+                    }}
+                }}
+                END {{ exit(found ? 0 : 1) }}
+            '
+    }}
+    _port_seed="${{RAY_PORT_SEED:-}}"
+    if [[ -z "$_port_seed" ]]; then
+        _port_seed="$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')"
+    fi
+    if [[ -z "$_port_seed" ]]; then
+        _port_seed="$(date +%s%N | cksum)"
+        _port_seed="${{_port_seed%% *}}"
+    fi
+    if [[ ! "$_port_seed" =~ ^[0-9]+$ ]]; then
+        _port_seed="$(printf '%s' "$_port_seed" | cksum)"
+        _port_seed="${{_port_seed%% *}}"
+    fi
+    for ((_port_attempt = 0; _port_attempt < {block_count}; _port_attempt++)); do
+        _port_slot=$(( (_port_seed + _port_attempt) % {block_count} ))
+        _port_candidate=$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))
+        _port_candidate_end=$(( _port_candidate + {port_config.block_size - 1} ))
+        # The directory is a stable inode for flock, not persisted claim state.
+        # Never remove it: the kernel releases the claim when the FD closes.
+        _candidate_lock="$_port_lock_root/block-${{_port_candidate}}-${{_port_candidate_end}}.lock.d"
+        if [[ ! -d "$_candidate_lock" ]]; then
+            if (umask 000; mkdir "$_candidate_lock") 2>/dev/null; then
+                chmod 0555 "$_candidate_lock"
+            elif [[ ! -d "$_candidate_lock" ]]; then
+                continue
+            fi
+        fi
+        [[ ! -L "$_candidate_lock" ]] || continue
+        if ! exec {{_candidate_lock_fd}}<"$_candidate_lock"; then
+            continue
+        fi
+        if flock -n "$_candidate_lock_fd"; then
+            if ray_port_block_in_use "$_port_candidate" "$_port_candidate_end"; then
+                flock -u "$_candidate_lock_fd"
+                exec {{_candidate_lock_fd}}<&-
+                continue
+            fi
+            _ray_port_lock_fd="$_candidate_lock_fd"
+            _port_base="$_port_candidate"
+            break
+        fi
+        exec {{_candidate_lock_fd}}<&-
+    done
+    if [[ -z "$_ray_port_lock_fd" ]]; then
+        echo "ERROR: No free Ray port block in {port_config.range_start}-{port_config.range_end}" >&2
+        exit 1
+    fi
+elif [[ "{port_strategy}" == "hash_jobid" ]]; then
+    _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-$$}}}}"
+    if [[ ! "$_port_seed" =~ ^[0-9]+$ ]]; then
+        _port_seed="$(printf '%s' "$_port_seed" | cksum)"
+        _port_seed="${{_port_seed%% *}}"
+    fi
+    _port_slot=$(( _port_seed % {block_count} ))
+    _port_base=$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))
+fi
+if [[ "{port_strategy}" != "fixed" ]]; then
+    port="$_port_base"
+    node_manager_port=$(( _port_base + 1 ))
+    object_manager_port=$(( _port_base + 2 ))
+    ray_client_server_port=$(( _port_base + 3 ))
+    redis_shard_port=$(( _port_base + 4 ))
+    dash_port=$(( _port_base + 5 ))
+    runtime_env_agent_port=$(( _port_base + 6 ))
+    dashboard_agent_grpc_port=$(( _port_base + 7 ))
+    dashboard_agent_listen_port=$(( _port_base + 8 ))
+    metrics_export_port=$(( _port_base + 9 ))
+    min_worker_port=$(( _port_base + 16 ))
+    max_worker_port=$(( _port_base + {port_config.block_size - 1} ))
+fi"""
+
+
+def _render_ray_process_cleanup(grace_period: int) -> str:
+    """Render cleanup that stops one ``ray start --block`` process tree."""
+    return f"""stop_ray_process() {{
+    local ray_pid="${{1:-}}"
+    if [[ -n "$ray_pid" ]] && kill -0 "$ray_pid" 2>/dev/null; then
+        kill -TERM "$ray_pid" 2>/dev/null || true
+        for ((ray_wait = 0; ray_wait < {grace_period}; ray_wait++)); do
+            if ! kill -0 "$ray_pid" 2>/dev/null; then break; fi
+            sleep 1
+        done
+        if kill -0 "$ray_pid" 2>/dev/null; then
+            kill -KILL "$ray_pid" 2>/dev/null || true
+        fi
+        wait "$ray_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${{_ray_port_lock_fd:-}}" ]]; then
+        flock -u "$_ray_port_lock_fd" 2>/dev/null || true
+        exec {{_ray_port_lock_fd}}<&-
+        _ray_port_lock_fd=""
+    fi
+}}"""
 
 
 class RayLauncher(ComputeLauncher):
@@ -33,7 +244,12 @@ class RayLauncher(ComputeLauncher):
     ray_address: Optional[str] = Field(
         default=None, description="Connect to existing cluster (skip startup)"
     )
-    dashboard_port: int = Field(default=8265, description="Ray dashboard port")
+    dashboard_port: int = Field(
+        default=8265,
+        ge=1,
+        le=65535,
+        description="Ray dashboard port for the fixed strategy.",
+    )
     object_store_memory_gb: Optional[int] = Field(
         default=None, description="Object store size (None = auto)"
     )
@@ -44,12 +260,21 @@ class RayLauncher(ComputeLauncher):
     redis_password: Optional[str] = Field(
         default=None, description="Redis password (None = auto-generate with uuidgen)"
     )
-    ray_port: int = Field(default=6379, description="Ray head port")
+    ray_port: int = Field(
+        default=6379,
+        ge=1,
+        le=65535,
+        description="Ray GCS/head port for the fixed strategy.",
+    )
     grace_period: int = Field(
-        default=5, description="Seconds to wait for graceful shutdown"
+        default=5,
+        ge=0,
+        description="Seconds to wait for graceful shutdown",
     )
     head_startup_timeout: int = Field(
-        default=120, description="Seconds to wait for head to be ready"
+        default=120,
+        ge=1,
+        description="Seconds to wait for head to be ready",
     )
     worker_startup_delay: int = Field(
         default=1, description="Seconds between worker starts"
@@ -74,10 +299,66 @@ class RayLauncher(ComputeLauncher):
         default="0.0.0.0",
         description="Bind host for Ray dashboard (e.g., 0.0.0.0 or 127.0.0.1).",
     )
-    port_strategy: Literal["fixed", "hash_jobid"] = Field(
-        default="hash_jobid",
-        description="'fixed' or 'hash_jobid' for head/dashboard ports.",
+    port_strategy: Literal["fixed", "hash_jobid", "random"] = Field(
+        default="random",
+        description=(
+            "'random' claims an available random per-node port block; 'fixed' uses "
+            "fixed ports; 'hash_jobid' deterministically selects a block from "
+            "RAY_PORT_SEED, SLURM_JOB_ID, or the local PID."
+        ),
     )
+    port_config: RayPortConfig = Field(
+        default_factory=RayPortConfig,
+        description="Allowed port pool and fixed service ports.",
+    )
+    network_interface: Optional[str] = Field(
+        default=None,
+        description=(
+            "Network interface to bind on every Ray node, such as 'ib0'. "
+            "Ignored when node_ip_address_command is set."
+        ),
+    )
+    node_ip_address_command: Optional[str] = Field(
+        default=None,
+        description=(
+            "Shell command run on each Ray node to resolve its bind IP. "
+            "Use for clusters whose interface names differ between nodes."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_fixed_ports(self):
+        if self.port_strategy != "fixed":
+            return self
+        service_ports = {
+            "ray_port": self.ray_port,
+            "dashboard_port": self.dashboard_port,
+            "node_manager_port": self.port_config.node_manager_port,
+            "object_manager_port": self.port_config.object_manager_port,
+            "redis_shard_port": self.port_config.redis_shard_port,
+            "runtime_env_agent_port": self.port_config.runtime_env_agent_port,
+            "dashboard_agent_grpc_port": self.port_config.dashboard_agent_grpc_port,
+            "dashboard_agent_listen_port": (
+                self.port_config.dashboard_agent_listen_port
+            ),
+            "metrics_export_port": self.port_config.metrics_export_port,
+            "ray_client_server_port": self.port_config.ray_client_server_port,
+        }
+        if len(set(service_ports.values())) != len(service_ports):
+            raise ValueError("Fixed Ray service ports must be unique")
+        worker_range = range(
+            self.port_config.min_worker_port,
+            self.port_config.max_worker_port + 1,
+        )
+        overlapping_services = [
+            name for name, port in service_ports.items() if port in worker_range
+        ]
+        if overlapping_services:
+            raise ValueError(
+                "Fixed Ray service ports overlap the worker range: "
+                + ", ".join(overlapping_services)
+            )
+        return self
 
     def _render_override_block(self, date_fmt: str) -> str:
         if not self.pre_start_commands:
@@ -94,6 +375,34 @@ class RayLauncher(ComputeLauncher):
     def _library_path_export(python_executable: str) -> str:
         env_lib = Path(python_executable).parent.parent / "lib"
         return f"export LD_LIBRARY_PATH={shlex.quote(str(env_lib))}:${{LD_LIBRARY_PATH:-}}\n"
+
+    def _render_node_ip_override(self, variable_name: str) -> str:
+        if not variable_name.isidentifier():
+            raise ValueError(f"Invalid shell variable name: {variable_name!r}")
+        if self.node_ip_address_command:
+            assignment = (
+                f'{variable_name}="$({self.node_ip_address_command})"\n'
+                f'{variable_name}="${{{variable_name}%%[[:space:]]*}}"'
+            )
+        elif self.network_interface:
+            interface = shlex.quote(self.network_interface)
+            assignment = (
+                f'{variable_name}="$(ip -o -4 address show dev {interface} '
+                '| awk \'NR==1 {sub(/\\\\/.*/, "", $4); print $4}\')"\n'
+                f'if [[ -z "${{{variable_name}}}" ]]; then\n'
+                f'  {variable_name}="$(ip -o -6 address show dev {interface} '
+                '| awk \'NR==1 {sub(/\\\\/.*/, "", $4); print $4}\')"\n'
+                "fi"
+            )
+        else:
+            return ""
+        return (
+            f"{assignment}\n"
+            f'if [[ -z "${{{variable_name}}}" ]]; then\n'
+            '  echo "ERROR: Ray node IP resolution returned no address" >&2\n'
+            "  exit 1\n"
+            "fi"
+        )
 
     def prepare_execution(
         self,
@@ -233,43 +542,17 @@ class RayLauncher(ComputeLauncher):
     {self._library_path_export(python_executable).strip()}
     echo "[$({date_fmt})] Environment activated."
     """
+        port_assignments = _render_ray_port_assignments(
+            ray_port=self.ray_port,
+            dashboard_port=self.dashboard_port,
+            port_strategy=self.port_strategy,
+            port_config=self.port_config,
+        )
+        node_ip_override = self._render_node_ip_override("head_bind_addr")
         # The rest of the function remains the same
         return f"""{activation_block}
-    # Cross-platform timeout wrapper (macOS doesn't have timeout command)
-    run_with_timeout() {{
-      local timeout_sec=$1
-      shift
-      if command -v timeout >/dev/null 2>&1; then
-        timeout "$timeout_sec" "$@"
-      elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout "$timeout_sec" "$@"
-      else
-        # Fallback for macOS without coreutils
-        ( "$@" ) & local pid=$!
-        ( sleep "$timeout_sec"; kill -TERM "$pid" 2>/dev/null ) &
-        wait "$pid"
-      fi
-    }}
-
-    # Compute ports (optionally hash by SLURM_JOB_ID or RAY_PORT_SEED)
-    # RAY_PORT_SEED allows CI to randomize ports without faking SLURM_JOB_ID
-    # (which has side effects: IP resolution, temp dirs, multi-node detection).
-    port="{self.ray_port}"
-    dash_port="{self.dashboard_port}"
-    _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-}}}}"
-    if [[ "{self.port_strategy}" == "hash_jobid" && -n "$_port_seed" ]]; then
-        if [[ -n "${{RAY_PORT_SEED:-}}" ]]; then
-            # CI/local runs share a host, so use high ports instead of small
-            # offsets from Ray defaults where collisions are common.
-            off=$(( _port_seed % 20000 ))
-            port=$(( 20000 + off ))
-            dash_port=$(( 40000 + off ))
-        else
-            off=$(( _port_seed % 1000 ))
-            port=$(( {self.ray_port} + off ))
-            dash_port=$(( {self.dashboard_port} + off ))
-        fi
-    fi
+    {port_assignments}
+    {_render_ray_process_cleanup(self.grace_period)}
     # Resolve head address for local mode.
     # Always attempt IP resolution when use_head_ip=true, not just under Slurm.
     # In Docker/CI, Ray detects the container IP internally but if we bind to
@@ -290,53 +573,66 @@ class RayLauncher(ComputeLauncher):
         if [[ -n "$ipv4" ]]; then head_bind_addr="$ipv4"; fi
       fi
     fi
+    {node_ip_override}
     head_adv="$head_bind_addr"
     if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
     # Use short path for Ray sockets (Unix socket path limit: 107 bytes)
     # Must be node-local storage - Unix sockets don't work over NFS
     temp_dir_arg=""
     RAY_TMP_DIR=""  # Global for cleanup function
+    _ray_instance="${{_port_base:-$port}}"
     if [[ -n "${{SLURM_JOB_ID:-}}" ]]; then
       # Use SLURM_TMPDIR if available (per-job temp dir)
       if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
-        RAY_TMP_DIR="${{SLURM_TMPDIR}}/ray"
+        RAY_TMP_DIR="${{SLURM_TMPDIR}}/ray-${{_ray_instance}}"
         mkdir -p "$RAY_TMP_DIR"
         echo "[$({date_fmt})] Using SLURM_TMPDIR: $RAY_TMP_DIR (node-local)"
-      elif mkdir -p "/tmp/r${{SLURM_JOB_ID}}" 2>/dev/null; then
-        RAY_TMP_DIR="/tmp/r${{SLURM_JOB_ID}}"
+      elif mkdir -p "/tmp/r${{SLURM_JOB_ID}}-${{_ray_instance}}" 2>/dev/null; then
+        RAY_TMP_DIR="/tmp/r${{SLURM_JOB_ID}}-${{_ray_instance}}"
         echo "[$({date_fmt})] Using /tmp: $RAY_TMP_DIR (node-local)"
-      elif mkdir -p "/var/tmp/r${{SLURM_JOB_ID}}" 2>/dev/null; then
-        RAY_TMP_DIR="/var/tmp/r${{SLURM_JOB_ID}}"
+      elif mkdir -p "/var/tmp/r${{SLURM_JOB_ID}}-${{_ray_instance}}" 2>/dev/null; then
+        RAY_TMP_DIR="/var/tmp/r${{SLURM_JOB_ID}}-${{_ray_instance}}"
         echo "[$({date_fmt})] Using /var/tmp: $RAY_TMP_DIR (node-local)"
       else
-        RAY_TMP_DIR="$HOME/.r${{SLURM_JOB_ID}}"
+        RAY_TMP_DIR="$HOME/.r${{SLURM_JOB_ID}}-${{_ray_instance}}"
         mkdir -p "$RAY_TMP_DIR"
-        echo "[$({date_fmt})] WARNING: Using HOME: $RAY_TMP_DIR - may fail if shared filesystem"
+        echo "[$({
+            date_fmt
+        })] WARNING: Using HOME: $RAY_TMP_DIR - may fail if shared filesystem"
       fi
-      export RAY_TMPDIR="$RAY_TMP_DIR"
-      temp_dir_arg="--temp-dir=$RAY_TMP_DIR"
-      echo "[$({date_fmt})] Ray temp directory: $RAY_TMP_DIR ($(echo -n "$RAY_TMP_DIR" | wc -c) chars)"
+    else
+      _ray_local_instance="${{_ray_instance}}-${{UID:-$(id -u)}}-$$"
+    if mkdir -p "/tmp/dsr${{_ray_local_instance}}" 2>/dev/null; then
+      RAY_TMP_DIR="/tmp/dsr${{_ray_local_instance}}"
+      echo "[$({date_fmt})] Using isolated local /tmp: $RAY_TMP_DIR"
+    elif mkdir -p "/var/tmp/dsr${{_ray_local_instance}}" 2>/dev/null; then
+      RAY_TMP_DIR="/var/tmp/dsr${{_ray_local_instance}}"
+      echo "[$({date_fmt})] Using isolated local /var/tmp: $RAY_TMP_DIR"
+    else
+      RAY_TMP_DIR="$HOME/.dsr${{_ray_local_instance}}"
+      mkdir -p "$RAY_TMP_DIR"
+      echo "[$({date_fmt})] Using isolated local HOME: $RAY_TMP_DIR"
     fi
+    fi
+    export RAY_TMPDIR="$RAY_TMP_DIR"
+    temp_dir_arg="--temp-dir=$RAY_TMP_DIR"
+    echo "[$({
+            date_fmt
+        })] Ray temp directory: $RAY_TMP_DIR ($(echo -n "$RAY_TMP_DIR" | wc -c) chars)"
 {override_block}    # Start local Ray cluster
     echo "[$({date_fmt})] Starting local Ray cluster"
     # Cleanup function - runs on exit, cancellation, or failure
     # This MUST succeed even if Ray never started or failed
     cleanup_ray() {{
       local exit_code=$?
-      echo "[$({date_fmt})] Cleanup triggered (exit code: $exit_code, signal: ${{1:-none}})"
+      echo "[$({
+            date_fmt
+        })] Cleanup triggered (exit code: $exit_code, signal: ${{1:-none}})"
 
-      # Stop Ray with timeout (to prevent hanging during cancellation)
+      # The --block parent owns only this Ray node's children. Signaling it
+      # avoids `ray stop`, which would kill concurrent Ray runs by this user.
       echo "[$({date_fmt})] Stopping Ray..."
-      # Use timeout to prevent ray stop from blocking forever (30 second timeout)
-      run_with_timeout 30 ray stop --force 2>&1 || {{
-        local ray_stop_exit=$?
-        if [[ $ray_stop_exit -eq 124 ]]; then
-          echo "[$({date_fmt})] ⚠ Ray stop timed out after 30s, force killing..."
-          pkill -9 -f "ray::" 2>&1 || true
-        else
-          echo "[$({date_fmt})] Ray stop failed with exit code $ray_stop_exit (ignored)"
-        fi
-      }}
+      stop_ray_process "${{RAY_HEAD_PID:-}}"
       echo "[$({date_fmt})] ✓ Ray stopped"
 
       # Stop background log sync
@@ -407,23 +703,19 @@ class RayLauncher(ComputeLauncher):
     echo "[$({date_fmt})] Starting Ray head on $head_bind_addr:$port..."
     ray start --head --port=$port --node-ip-address="$head_bind_addr" \
         --dashboard-host={self.dashboard_host} --dashboard-port=$dash_port \
-        --num-gpus={self.num_gpus_per_node} {obj_store} {(" " + " ".join(self.ray_start_args)) if self.ray_start_args else ""} $temp_dir_arg
-    ray_start_exit=$?
-    if [[ $ray_start_exit -ne 0 ]]; then
-        echo "[$({date_fmt})] ERROR: ray start failed with exit code $ray_start_exit" >&2
-        # Dump GCS and Ray logs for debugging (especially useful in CI)
-        for log_dir in /tmp/ray/session_latest/logs "${{RAY_TMP_DIR:-}}"/session_*/logs; do
-          if [[ -d "$log_dir" ]]; then
-            for f in "$log_dir"/gcs_server.{{out,err}} "$log_dir"/raylet.{{out,err}}; do
-              if [[ -f "$f" ]]; then
-                echo "--- $f ---" >&2
-                tail -50 "$f" >&2
-              fi
-            done
-          fi
-        done
-        exit 1
-    fi
+        --node-manager-port=$node_manager_port \
+        --object-manager-port=$object_manager_port \
+        --ray-client-server-port=$ray_client_server_port \
+        --redis-shard-ports=$redis_shard_port \
+        --runtime-env-agent-port=$runtime_env_agent_port \
+        --dashboard-agent-grpc-port=$dashboard_agent_grpc_port \
+        --dashboard-agent-listen-port=$dashboard_agent_listen_port \
+        --metrics-export-port=$metrics_export_port \
+        --min-worker-port=$min_worker_port --max-worker-port=$max_worker_port \
+        --num-gpus={self.num_gpus_per_node} {obj_store} {
+            (" " + " ".join(self.ray_start_args)) if self.ray_start_args else ""
+        } $temp_dir_arg --block &
+    RAY_HEAD_PID=$!
     export RAY_ADDRESS="$head_adv:$port"
     echo "[$({date_fmt})] RAY_ADDRESS=$RAY_ADDRESS"
     # Give GCS a moment to initialize before checking
@@ -435,13 +727,30 @@ class RayLauncher(ComputeLauncher):
         echo "[$({date_fmt})] Ray is ready (local mode)"
         break
       fi
+      if ! kill -0 "$RAY_HEAD_PID" 2>/dev/null; then
+        echo "[$({date_fmt})] ERROR: Ray head exited during startup" >&2
+        for log_dir in /tmp/ray/session_latest/logs "${{RAY_TMP_DIR:-}}"/session_*/logs; do
+          if [[ -d "$log_dir" ]]; then
+            for f in "$log_dir"/gcs_server.{{out,err}} "$log_dir"/raylet.{{out,err}}; do
+              if [[ -f "$f" ]]; then
+                echo "--- $f ---" >&2
+                tail -50 "$f" >&2
+              fi
+            done
+          fi
+        done
+        exit 1
+      fi
       if [[ $i -eq {self.head_startup_timeout} ]]; then
-        echo "[$({date_fmt})] ERROR: Ray failed to start within {self.head_startup_timeout} seconds" >&2
+        echo "[$({date_fmt})] ERROR: Ray failed to start within {
+            self.head_startup_timeout
+        } seconds" >&2
         exit 1
       fi
       sleep 1
     done
     echo "[$({date_fmt})] Ray cluster ready"
+    echo "{RAY_DASHBOARD_URL_MARKER}http://$head_adv:$dash_port"
     ray status --address "$RAY_ADDRESS" 2>/dev/null || true
     """
 
@@ -486,9 +795,20 @@ class RayLauncher(ComputeLauncher):
                 "--port=$port",
                 f"--dashboard-host={self.dashboard_host}",
                 "--dashboard-port=$dash_port",
+                "--node-manager-port=$node_manager_port",
+                "--object-manager-port=$object_manager_port",
+                "--ray-client-server-port=$ray_client_server_port",
+                "--redis-shard-ports=$redis_shard_port",
+                "--runtime-env-agent-port=$runtime_env_agent_port",
+                "--dashboard-agent-grpc-port=$dashboard_agent_grpc_port",
+                "--dashboard-agent-listen-port=$dashboard_agent_listen_port",
+                "--metrics-export-port=$metrics_export_port",
+                "--min-worker-port=$min_worker_port",
+                "--max-worker-port=$max_worker_port",
                 f"--num-gpus={self.num_gpus_per_node}",
                 "--redis-password=$redis_password",
                 "--temp-dir=$RAY_CLUSTER_TMP",
+                "--block",
             ]
             + common_args
             + self.ray_start_args
@@ -498,13 +818,32 @@ class RayLauncher(ComputeLauncher):
             "-v",
             "--address=$ip_head",
             "--redis-password=$redis_password",
+            "--node-manager-port=$node_manager_port",
+            "--object-manager-port=$object_manager_port",
+            "--runtime-env-agent-port=$runtime_env_agent_port",
+            "--dashboard-agent-grpc-port=$dashboard_agent_grpc_port",
+            "--dashboard-agent-listen-port=$dashboard_agent_listen_port",
+            "--metrics-export-port=$metrics_export_port",
+            "--min-worker-port=$min_worker_port",
+            "--max-worker-port=$max_worker_port",
             f"--num-gpus={self.num_gpus_per_node}",
             "--temp-dir=$RAY_CLUSTER_TMP",
         ] + common_args
+        worker_node_ip_override = self._render_node_ip_override("worker_bind_addr")
+        if worker_node_ip_override:
+            worker_args.insert(2, "--node-ip-address=$worker_bind_addr")
 
         head_cmd_str = " \\\n    ".join(head_args)
         worker_cmd_str = " \\\n    ".join(worker_args)
         library_path_export = self._library_path_export(python_executable).strip()
+        port_assignments = _render_ray_port_assignments(
+            ray_port=self.ray_port,
+            dashboard_port=self.dashboard_port,
+            port_strategy=self.port_strategy,
+            port_config=self.port_config,
+        )
+        process_cleanup = _render_ray_process_cleanup(self.grace_period)
+        head_node_ip_override = self._render_node_ip_override("head_bind_addr")
 
         # --- Worker Script ---
         ray_worker_script = f"""#!/bin/bash
@@ -516,39 +855,33 @@ class RayLauncher(ComputeLauncher):
     source "$activation_script"
     {library_path_export}
     {self._render_override_block(date_fmt)}
-    # Cross-platform timeout wrapper
-    run_with_timeout() {{
-      local timeout_sec=$1
-      shift
-      if command -v timeout >/dev/null 2>&1; then
-        timeout "$timeout_sec" "$@"
-      elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout "$timeout_sec" "$@"
-      else
-        ( "$@" ) & local pid=$!
-        ( sleep "$timeout_sec"; kill -TERM "$pid" 2>/dev/null ) &
-        wait "$pid"
-      fi
-    }}
+    {port_assignments}
+    {process_cleanup}
+    {worker_node_ip_override}
     # Determine Ray temp directory FIRST (short path to avoid 107-byte socket limit)
     # IMPORTANT: Must be node-local storage, NOT shared filesystem (NFS)!
     # Unix sockets don't work across NFS.
     # This MUST be defined before the cleanup function, trap, and background
     # log sync that all reference $RAY_CLUSTER_TMP.
+    _ray_instance="${{_port_base:-$port}}"
     if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
-        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
+        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID-${{_ray_instance}}"
         echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
-    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
+    elif mkdir -p "/tmp/r$SLURM_JOB_ID-${{_ray_instance}}" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID-${{_ray_instance}}"
         echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
-    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
+    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID-${{_ray_instance}}" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID-${{_ray_instance}}"
         echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
     else
-        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
+        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID-${{_ray_instance}}"
+        echo "[$({
+            date_fmt
+        })] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
     fi
-    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
+    echo "[$({
+            date_fmt
+        })] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
     mkdir -p "$RAY_CLUSTER_TMP"
 
     cleanup_node() {{
@@ -557,7 +890,9 @@ class RayLauncher(ComputeLauncher):
 
         # Stop background log sync
         if [[ -n "${{WORKER_LOG_SYNC_PID:-}}" ]]; then
-            echo "[$({date_fmt})] Stopping background log sync (PID: $WORKER_LOG_SYNC_PID)..."
+            echo "[$({
+            date_fmt
+        })] Stopping background log sync (PID: $WORKER_LOG_SYNC_PID)..."
             kill -9 "$WORKER_LOG_SYNC_PID" 2>/dev/null || true
         fi
 
@@ -577,8 +912,8 @@ class RayLauncher(ComputeLauncher):
           fi
         done
 
-        # Stop Ray
-        run_with_timeout 30 ray stop --force 2>/dev/null || true
+        # Stop only this worker's --block parent and its owned children.
+        stop_ray_process "${{RAY_WORKER_PID:-}}"
 
         # Cleanup temp dir
         rm -rf "$RAY_CLUSTER_TMP" 2>/dev/null || true
@@ -607,10 +942,14 @@ class RayLauncher(ComputeLauncher):
       done
     }} &
     WORKER_LOG_SYNC_PID=$!
-    echo "[$({date_fmt})] Started background worker log sync (PID: $WORKER_LOG_SYNC_PID)"
+    echo "[$({
+            date_fmt
+        })] Started background worker log sync (PID: $WORKER_LOG_SYNC_PID)"
 
     echo "Worker on $(hostname) starting and connecting to $ip_head..."
-    ray start {worker_cmd_str} --block
+    ray start {worker_cmd_str} --block &
+    RAY_WORKER_PID=$!
+    wait "$RAY_WORKER_PID"
     """
 
         ray_driver_script = f"""#!/bin/bash
@@ -623,38 +962,9 @@ class RayLauncher(ComputeLauncher):
     source "$activation_script"
     {library_path_export}
     {self._render_override_block(date_fmt)}
-    # Cross-platform timeout wrapper
-    run_with_timeout() {{
-      local timeout_sec=$1
-      shift
-      if command -v timeout >/dev/null 2>&1; then
-        timeout "$timeout_sec" "$@"
-      elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout "$timeout_sec" "$@"
-      else
-        ( "$@" ) & local pid=$!
-        ( sleep "$timeout_sec"; kill -TERM "$pid" 2>/dev/null ) &
-        wait "$pid"
-      fi
-    }}
-
     # Define all variables first
-    # Figure out ports (RAY_PORT_SEED takes precedence over SLURM_JOB_ID)
-    port="{self.ray_port}"
-    dash_port="{self.dashboard_port}"
-    _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-}}}}"
-    if [[ "{self.port_strategy}" == "hash_jobid" && -n "$_port_seed" ]]; then
-        if [[ -n "${{RAY_PORT_SEED:-}}" ]]; then
-            off=$(( _port_seed % 20000 ))
-            port=$(( 20000 + off ))
-            dash_port=$(( 40000 + off ))
-        else
-            # keep in user space; avoid reserved/system ports
-            off=$(( _port_seed % 1000 ))
-            port=$(( {self.ray_port} + off ))
-            dash_port=$(( {self.dashboard_port} + off ))
-        fi
-    fi
+    {port_assignments}
+    {process_cleanup}
     
     # Choose head node (first host in allocation)
     head_node_name=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
@@ -670,6 +980,7 @@ class RayLauncher(ComputeLauncher):
           if [[ -n "$ipv6" ]]; then head_bind_addr="$ipv6"; fi
       fi
     fi
+    {head_node_ip_override}
     # Bracketize IPv6 for Ray's --address / RAY_ADDRESS usage 
     head_adv="$head_bind_addr"
     if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
@@ -688,26 +999,33 @@ class RayLauncher(ComputeLauncher):
     # Unix sockets don't work across NFS.
     # This MUST be defined before the cleanup function, trap, and background
     # log sync that all reference $RAY_CLUSTER_TMP.
+    _ray_instance="${{_port_base:-$port}}"
     if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
-        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID"
+        export RAY_CLUSTER_TMP="${{SLURM_TMPDIR}}/r$SLURM_JOB_ID-${{_ray_instance}}"
         echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
-    elif mkdir -p "/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID"
+    elif mkdir -p "/tmp/r$SLURM_JOB_ID-${{_ray_instance}}" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/tmp/r$SLURM_JOB_ID-${{_ray_instance}}"
         echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
-    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID" 2>/dev/null; then
-        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID"
+    elif mkdir -p "/var/tmp/r$SLURM_JOB_ID-${{_ray_instance}}" 2>/dev/null; then
+        export RAY_CLUSTER_TMP="/var/tmp/r$SLURM_JOB_ID-${{_ray_instance}}"
         echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
     else
-        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID"
-        echo "[$({date_fmt})] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
+        export RAY_CLUSTER_TMP="$HOME/.r$SLURM_JOB_ID-${{_ray_instance}}"
+        echo "[$({
+            date_fmt
+        })] WARNING: Using HOME for Ray - if HOME is shared (NFS), this may cause socket conflicts!"
     fi
-    echo "[$({date_fmt})] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
+    echo "[$({
+            date_fmt
+        })] Ray temp directory: $RAY_CLUSTER_TMP ($(echo -n "$RAY_CLUSTER_TMP" | wc -c) chars)"
     mkdir -p "$RAY_CLUSTER_TMP"
 
     cleanup() {{
         exit_code=$?
         echo "======================================="
-        echo "[$({date_fmt})] Initiating cluster shutdown (payload exit code: $exit_code, signal: ${{1:-none}})..."
+        echo "[$({
+            date_fmt
+        })] Initiating cluster shutdown (payload exit code: $exit_code, signal: ${{1:-none}})..."
         echo "======================================="
 
         # Capture error logs if job failed
@@ -725,18 +1043,17 @@ class RayLauncher(ComputeLauncher):
 
         # Terminate worker processes
         if [ ${{#WORKER_PIDS[@]}} -gt 0 ]; then
-            echo "[$({date_fmt})] Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
+            echo "[$({
+            date_fmt
+        })] Terminating ${{#WORKER_PIDS[@]}} worker srun process(es)..."
             kill -TERM "${{WORKER_PIDS[@]}}" 2>/dev/null || true
             sleep 2
             kill -9 "${{WORKER_PIDS[@]}}" 2>/dev/null || true
         fi
 
-        # Stop Ray head with timeout
-        echo "[$({date_fmt})] Force stopping Ray head node..."
-        run_with_timeout 30 ray stop --force 2>/dev/null || {{
-            echo "[$({date_fmt})] ⚠ Ray stop timed out, force killing..."
-            pkill -9 -f "ray::" 2>/dev/null || true
-        }}
+        # Stop only this head's --block parent and its owned children.
+        echo "[$({date_fmt})] Stopping Ray head node..."
+        stop_ray_process "${{RAY_HEAD_PID:-}}"
 
         # Stop background log sync
         if [[ -n "${{LOG_SYNC_PID:-}}" ]]; then
@@ -786,16 +1103,24 @@ class RayLauncher(ComputeLauncher):
 
     # ===== 1. Start Head Node =====
     echo "[$({date_fmt})] Starting Ray head on this node ($(hostname)) at $ip_head..."
-    ray start {head_cmd_str}
+    ray start {head_cmd_str} &
+    RAY_HEAD_PID=$!
     export RAY_ADDRESS="$ip_head"
 
     # ===== 2. Wait for Head to be Ready =====
     echo "Waiting for Ray head to be ready..."
     for i in {{1..{self.head_startup_timeout}}}; do
         if ray status &>/dev/null; then echo "✓ Ray head is ready"; break; fi
-        if [[ $i -eq {self.head_startup_timeout} ]]; then echo "ERROR: Ray head failed to start" >&2; exit 1; fi
+        if ! kill -0 "$RAY_HEAD_PID" 2>/dev/null; then
+            echo "ERROR: Ray head exited during startup" >&2
+            exit 1
+        fi
+        if [[ $i -eq {
+            self.head_startup_timeout
+        } ]]; then echo "ERROR: Ray head failed to start" >&2; exit 1; fi
         sleep 1
     done
+    echo "{RAY_DASHBOARD_URL_MARKER}http://$head_adv:$dash_port"
 
     # ===== 3. Start Worker Nodes =====
     all_nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
@@ -807,7 +1132,9 @@ class RayLauncher(ComputeLauncher):
     for node_i in "${{worker_nodes[@]}}"; do
         echo "Launching worker on $node_i..."
         srun {cpu_bind_option}--nodes=1 --ntasks=1 -w "$node_i" \\
-            {working_dir}/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
+            {
+            working_dir
+        }/ray_worker.sh "$activation_script" "$ip_head" "$redis_password" &
         WORKER_PIDS+=($!)
         sleep {self.worker_startup_delay}
     done

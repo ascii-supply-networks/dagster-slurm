@@ -165,6 +165,35 @@ Heterogeneous jobs remain experimental and separate from run-scoped Ray allocati
 
 To mix Ray with other launchers, override `launcher=` per asset or per step.
 
+## Networking
+
+`port_strategy="random"` is the default. Each Ray node locks a 1,000-port block in `10000–29999`; the lock is shared across users on that node.
+
+```python
+from dagster_slurm import RayLauncher, RayPortConfig
+
+RayLauncher(
+    port_config=RayPortConfig(range_start=30000, range_end=49999, block_size=2000)
+)
+```
+
+Use one pool and block size cluster-wide, restricted to ports allowed between compute nodes. Set `lock_dir` to a node-local directory shared by all jobs if `/tmp` is private. Random allocation requires `flock`; `ss` also rejects blocks with active listeners. For site-assigned ports, use `port_strategy="fixed"` and set `ray_port`, `dashboard_port`, and `port_config`.
+
+```python
+RayLauncher(network_interface="ib0")
+RayLauncher(node_ip_address_command="/site/bin/ray-node-ip")
+```
+
+The command must print one IP address. It overrides `network_interface`.
+
+Dagster logs `Ray head node web UI: <url>` after startup. Tunnel that address when compute nodes are private:
+
+```bash
+ssh -L 8265:<head-address>:<dashboard-port> <login-host>
+```
+
+Open `http://127.0.0.1:8265`.
+
 ## Resource sizing
 
 - `num_gpus_per_node` determines Ray GPU visibility inside each Slurm node.
@@ -182,8 +211,7 @@ Ray workers inherit that environment automatically.
 
 ## Observability
 
-- Dagster logs capture Ray's stdout/stderr from the head node. Use the Dagster UI metadata for quick metrics.
-- Enable the Ray dashboard by exposing the web UI through SSH tunnelling (`ray_args=["--dashboard-host=0.0.0.0"]`), then forward the port from the edge node.
+- Dagster logs include Ray stdout, stderr, and the dashboard URL.
 - Slurm usage metrics (CPU efficiency, memory high-water mark, elapsed time) appear in the asset materialization metadata automatically.
 
 ## Real-world examples

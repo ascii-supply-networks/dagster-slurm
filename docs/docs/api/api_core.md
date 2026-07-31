@@ -390,7 +390,7 @@ Modes:
 
 #### object_store_memory_gb *: `Optional`[`int`]*
 
-#### port_strategy *: `Literal`[`'fixed'`, `'hash_jobid'`]*
+#### port_strategy *: `Literal`[`'fixed'`, `'hash_jobid'`, `'random'`]*
 
 #### pre_start_commands *: `list`[`str`]*
 
