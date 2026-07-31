@@ -39,7 +39,7 @@ class FakePool:
         self.payload_exists = payload_exists
         self.multiplexing_active = True
         self.fallback_reason: str | None = None
-        self.on_multiplexing_lost = None
+        self.reporter = None
 
     def __enter__(self):
         return self
