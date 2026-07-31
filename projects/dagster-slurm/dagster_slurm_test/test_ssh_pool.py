@@ -388,3 +388,196 @@ def test_write_file_uses_unique_heredoc_delimiter(monkeypatch):
     assert len(commands) == 1
     assert "<<'DAGSTER_EOF_safe'" in commands[0]
     assert re.search(r"^DAGSTER_EOF_safe$", commands[0], re.MULTILINE)
+
+
+def _user_ssh_config(tmp_path, host: str = "example.com") -> str:
+    config = tmp_path / "user_ssh_config"
+    config.write_text(
+        f"Host {host}\n"
+        "  StrictHostKeyChecking no\n"
+        "  UserKnownHostsFile /my/hosts\n"
+        "  BatchMode no\n"
+    )
+    return str(config)
+
+
+def _resolved_with_config(command: list[str], config: str) -> dict[str, str]:
+    result = subprocess.run(
+        ["ssh", "-G", "-F", config, *command[1:]],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {
+        key: value
+        for line in result.stdout.splitlines()
+        for key, _, value in [line.partition(" ")]
+    }
+
+
+@pytest.mark.parametrize(
+    "variable",
+    ["TEST_SSH_KNOWN_HOSTS_FILE", "TEST_SSH_HOST_KEY_CHECKING", "TEST_SSH_KEY"],
+)
+def test_blank_environment_values_mean_unset(monkeypatch, variable):
+    """`FOO=` in a dotenv file must not fail validation."""
+    monkeypatch.setenv("TEST_SSH_HOST", "example.com")
+    monkeypatch.setenv("TEST_SSH_USER", "testuser")
+    monkeypatch.setenv("TEST_SSH_PASSWORD", "secret")
+    monkeypatch.setenv(variable, "   ")
+
+    ssh_resource = SSHConnectionResource.from_env(prefix="TEST_SSH")
+
+    assert ssh_resource.known_hosts_file is None
+    assert ssh_resource.host_key_checking == "strict"
+    assert ssh_resource.key_path is None
+
+
+def test_inherit_host_key_checking_defers_to_user_ssh_config(tmp_path):
+    """'inherit' must emit no host-key options so ~/.ssh/config wins."""
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        key_path=str(key_path),
+        host_key_checking="inherit",
+    )
+
+    assert ssh_resource.get_host_key_opts() == []
+
+    resolved = _resolved_with_config(
+        ssh_resource.get_ssh_base_command(), _user_ssh_config(tmp_path)
+    )
+    assert resolved["stricthostkeychecking"] == "false"
+    assert resolved["userknownhostsfile"] == "/my/hosts"
+
+
+def test_strict_host_key_checking_still_overrides_user_ssh_config(tmp_path):
+    """The default stays explicit, so a run is reproducible across machines."""
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+
+    resolved = _resolved_with_config(
+        ssh_resource.get_ssh_base_command(), _user_ssh_config(tmp_path)
+    )
+    assert resolved["stricthostkeychecking"] == "true"
+
+
+def test_inherit_still_honours_an_explicit_known_hosts_file(tmp_path):
+    known_hosts = tmp_path / "known_hosts"
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        password="secret",
+        host_key_checking="inherit",
+        known_hosts_file=str(known_hosts),
+    )
+
+    assert ssh_resource.get_host_key_opts() == [
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
+    ]
+
+
+def test_batch_mode_can_be_inherited(tmp_path):
+    """A passphrase-protected key needs OpenSSH to be allowed to prompt."""
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    strict = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+    inheriting = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        key_path=str(key_path),
+        batch_mode=None,
+    )
+
+    assert "BatchMode=yes" in strict.get_key_auth_opts()
+    assert not any("BatchMode" in opt for opt in inheriting.get_key_auth_opts())
+
+    resolved = _resolved_with_config(
+        inheriting.get_ssh_base_command(), _user_ssh_config(tmp_path)
+    )
+    assert resolved["batchmode"] == "no"
+
+
+def test_connection_without_key_or_password_defers_authentication():
+    """No explicit credential means ssh-agent and ~/.ssh/config decide."""
+    ssh_resource = SSHConnectionResource(host="example.com", user="testuser")
+
+    assert ssh_resource.uses_inherited_auth is True
+    command = " ".join(ssh_resource.get_ssh_base_command())
+    assert "-i " not in command
+    assert "PreferredAuthentications" not in command
+    assert "PubkeyAuthentication" not in command
+
+
+def test_both_credentials_are_still_rejected(tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    with pytest.raises(ValidationError, match="Cannot specify both"):
+        SSHConnectionResource(
+            host="example.com",
+            user="testuser",
+            key_path=str(key_path),
+            password="secret",
+        )
+
+
+def test_unconfigured_jump_host_is_handed_back_to_openssh():
+    """-J keeps the operator's own bastion settings from ~/.ssh/config."""
+    jump = SSHConnectionResource(
+        host="jump.example.com",
+        user="jumpuser",
+        host_key_checking="inherit",
+        batch_mode=None,
+    )
+    target = SSHConnectionResource(
+        host="target.example.com",
+        user="testuser",
+        password="secret",
+        jump_host=jump,
+    )
+
+    assert jump.defers_to_ssh_config is True
+    assert target.get_proxy_command_opts() == ["-J", "jumpuser@jump.example.com"]
+
+
+def test_configured_jump_host_still_uses_an_explicit_proxy_command(tmp_path):
+    jump_key = tmp_path / "jump_key"
+    jump_key.write_text("dummy-key")
+    jump = SSHConnectionResource(
+        host="jump.example.com", user="jumpuser", key_path=str(jump_key)
+    )
+    target = SSHConnectionResource(
+        host="target.example.com",
+        user="testuser",
+        password="secret",
+        jump_host=jump,
+    )
+
+    opts = target.get_proxy_command_opts()
+    assert opts[0] == "-o"
+    assert opts[1].startswith("ProxyCommand=")
+    assert str(jump_key) in opts[1]
+
+
+def test_batch_mode_failures_get_an_actionable_hint(tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    strict = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+    inheriting = strict.model_copy(update={"batch_mode": None})
+
+    hint = strict.auth_error_hint(
+        "testuser@example.com: Permission denied (publickey)."
+    )
+    assert "ssh-agent" in hint
+    assert inheriting.auth_error_hint("Permission denied (publickey).") == ""
+    assert strict.auth_error_hint("some unrelated failure") == ""

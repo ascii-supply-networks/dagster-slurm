@@ -38,6 +38,18 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_str(name: str, default: str | None = None) -> str | None:
+    """Read an optional string, treating a blank value as unset.
+
+    Writing `FOO=` in a .env file is the natural way to say "not configured",
+    so it must fall back to the default rather than reach the resource as "".
+    """
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip() or default
+
+
 LOCAL_RESOURCES_CONFIG: Dict[str, Any] = {
     "mode": ExecutionMode.LOCAL,
     "launchers": {
@@ -115,12 +127,11 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "user": str(dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter")),
         "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
         "key_path": dg.EnvVar("SLURM_EDGE_NODE_KEY_PATH").get_value(default=None),
-        "host_key_checking": str(
-            dg.EnvVar("SLURM_EDGE_NODE_HOST_KEY_CHECKING").get_value(default="strict")
+        # Blank means "unset": `FOO=` in a .env file must not fail validation.
+        "host_key_checking": _env_str(
+            "SLURM_EDGE_NODE_HOST_KEY_CHECKING", default="strict"
         ),
-        "known_hosts_file": dg.EnvVar(
-            "SLURM_EDGE_NODE_KNOWN_HOSTS_FILE"
-        ).get_value(default=None),
+        "known_hosts_file": _env_str("SLURM_EDGE_NODE_KNOWN_HOSTS_FILE"),
     },
     "slurm_queue_config": {
         "partition": "batch",
@@ -695,9 +706,7 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
         )
         if jump_host_key_checking:
             jump_config["host_key_checking"] = jump_host_key_checking
-        jump_known_hosts_file = os.environ.get(
-            "SLURM_EDGE_NODE_JUMP_KNOWN_HOSTS_FILE"
-        )
+        jump_known_hosts_file = os.environ.get("SLURM_EDGE_NODE_JUMP_KNOWN_HOSTS_FILE")
         if jump_known_hosts_file:
             jump_config["known_hosts_file"] = jump_known_hosts_file
 

@@ -3244,10 +3244,9 @@ rm -rf {pack_root_quoted}
                     "ControlMaster=no",
                 ]
             )
-            if self.slurm.ssh.uses_key_auth:
-                cmd.extend(self.slurm.ssh.get_key_auth_opts(batch_mode=True))
-        elif self.slurm.ssh.uses_key_auth:
-            cmd.extend(self.slurm.ssh.get_key_auth_opts(batch_mode=True))
+            cmd.extend(self.slurm.ssh.get_key_auth_opts())
+        else:
+            cmd.extend(self.slurm.ssh.get_auth_opts())
 
         cmd.append(f"{self.slurm.ssh.user}@{self.slurm.ssh.host}")
 
