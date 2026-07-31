@@ -783,6 +783,16 @@ class SlurmPipesClient(PipesClient):
             self.logger.debug(f"Could not check run cancel status: {exc}")
             return False
 
+    @staticmethod
+    def _pipes_session_closed(message_reader: Any) -> bool:
+        """Whether the external process has reported that it finished.
+
+        Only readers that actually parse Pipes messages expose this, so a
+        payload that never opens a Pipes session simply keeps the normal
+        polling cadence.
+        """
+        return getattr(message_reader, "closed_message", None) is not None
+
     def _raise_if_pipes_process_failed(
         self,
         message_reader: Any,
@@ -3102,6 +3112,7 @@ exit "$_dagster_slurm_workload_exit"
         # round. Start gently and back off while nothing changes; any state
         # transition resets the cadence so completion is still noticed quickly.
         poll_interval = self.slurm.status_poll_interval_seconds
+        pipes_closed_seen = False
 
         # Poll job status.
         # The outer try/finally handles cleanup.  Each iteration of the
@@ -3175,6 +3186,25 @@ exit "$_dagster_slurm_workload_exit"
                         poll_interval = self.slurm.next_status_poll_interval(
                             poll_interval
                         )
+
+                    # The Pipes session closes the moment the payload exits,
+                    # and that message arrives over the already-multiplexed
+                    # tail within milliseconds. Slurm only reflects it a beat
+                    # later, so once it lands the job is about to finish and
+                    # backing off would just add latency to a known-imminent
+                    # transition. Hold the cadence at the floor instead: this
+                    # narrows the window without adding a single extra
+                    # squeue call while the job is still working.
+                    if not pipes_closed_seen and self._pipes_session_closed(
+                        message_reader
+                    ):
+                        pipes_closed_seen = True
+                        self.logger.debug(
+                            f"Pipes session for job {job_id} reported 'closed'; "
+                            "polling at the floor until Slurm agrees."
+                        )
+                    if pipes_closed_seen:
+                        poll_interval = self.slurm.status_poll_interval_seconds
 
                     # Handle empty state
                     if not state:

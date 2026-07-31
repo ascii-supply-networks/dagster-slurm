@@ -1320,3 +1320,82 @@ def test_multiplexing_loss_mid_run_is_reported_to_dagster():
 
     ssh_pool.reporter("error", "SSH MULTIPLEXING FAILED for example.com")
     assert errors == ["SSH MULTIPLEXING FAILED for example.com"]
+
+
+def test_pipes_closed_detection_ignores_readers_without_the_signal():
+    """A payload that never opens a Pipes session keeps the normal cadence."""
+    client = SlurmPipesClient(
+        slurm_resource=_mock_slurm_resource(),
+        launcher=BashLauncher(),
+    )
+
+    assert client._pipes_session_closed(SimpleNamespace()) is False
+    assert client._pipes_session_closed(SimpleNamespace(closed_message=None)) is False
+    assert (
+        client._pipes_session_closed(
+            SimpleNamespace(closed_message={"method": "closed", "params": {}})
+        )
+        is True
+    )
+
+
+def test_status_polling_stops_backing_off_once_pipes_reports_closed(monkeypatch):
+    """The 'closed' message means the job is about to end - stop backing off.
+
+    Slurm reflects the exit a beat after the payload does, so continuing to
+    grow the interval only adds latency to a transition we already know is
+    imminent.
+    """
+    slurm = _mock_slurm_resource()
+    client = SlurmPipesClient(slurm_resource=slurm, launcher=BashLauncher())
+
+    states = iter(["RUNNING", "RUNNING", "RUNNING", "RUNNING", "COMPLETED"])
+    monkeypatch.setattr(client, "_get_job_state", lambda *_a, **_k: next(states))
+    monkeypatch.setattr(client, "_store_supervisor_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(client, "_is_run_canceling", lambda *a, **k: False)
+    monkeypatch.setattr(client, "_maybe_emit_final_logs", lambda *a, **k: None)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        client, "_interruptible_sleep", lambda seconds, job_id: sleeps.append(seconds)
+    )
+
+    # The payload reports 'closed' after the third status poll.
+    class Reader:
+        polls = 0
+        closed_message = None
+
+        def __getattribute__(self, name):
+            if name == "closed_message" and Reader.polls >= 3:
+                return {"method": "closed", "params": {}}
+            return object.__getattribute__(self, name)
+
+    reader = Reader()
+
+    real_state = client._get_job_state
+
+    def counting_state(*a, **k):
+        Reader.polls += 1
+        return real_state(*a, **k)
+
+    monkeypatch.setattr(client, "_get_job_state", counting_state)
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.threading.Thread",
+        lambda *a, **k: SimpleNamespace(
+            start=lambda: None, join=lambda timeout=None: None, is_alive=lambda: False
+        ),
+    )
+
+    client._wait_for_job_with_streaming(
+        1,
+        cast(Any, SimpleNamespace(run=lambda *a, **k: "")),
+        "/remote/run",
+        message_reader=reader,
+        poll_timeout=600,
+    )
+
+    floor = slurm.status_poll_interval_seconds
+    # It backed off at some point while the job was just running...
+    assert max(sleeps) > floor, sleeps
+    # ...and every wait after 'closed' arrived is back at the floor.
+    assert all(s == pytest.approx(floor) for s in sleeps[-2:]), sleeps
