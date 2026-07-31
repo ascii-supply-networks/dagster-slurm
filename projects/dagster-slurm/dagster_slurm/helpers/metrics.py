@@ -1,6 +1,7 @@
 """Slurm job metrics collection."""
 
 import re
+from typing import Optional
 from dataclasses import dataclass
 from dagster import get_dagster_logger
 
@@ -25,28 +26,40 @@ class SlurmMetricsCollector:
     def __init__(self):
         self.logger = get_dagster_logger()
 
+    #: sacct fields this collector parses, in order.
+    SACCT_FORMAT = "JobID,Elapsed,TotalCPU,MaxRSS,AllocNodes,AllocCPUS,State,ExitCode"
+
     def collect_job_metrics(
         self,
         job_id: int,
         ssh_pool,
+        sacct_output: Optional[str] = None,
     ) -> SlurmJobMetrics:
         """Query sacct for detailed job statistics.
 
         Args:
             job_id: Slurm job ID
             ssh_pool: SSH connection pool
+            sacct_output: Pre-fetched sacct output in ``SACCT_FORMAT``, so a
+                caller that already queried accounting does not pay a second
+                round trip to the login node.
 
         Returns:
             SlurmJobMetrics with detailed stats
         """
         # This provides raw data for the main script step, including memory (MaxRSS).
-        cmd = (
-            f"sacct -j {job_id}.batch -n -P "
-            f"--format=JobID,Elapsed,TotalCPU,MaxRSS,AllocNodes,AllocCPUS,State,ExitCode"
-        )
+        cmd = f"sacct -j {job_id}.batch -n -P --format={self.SACCT_FORMAT}"
 
         try:
-            output = ssh_pool.run(cmd).strip()
+            if sacct_output is None:
+                output = ssh_pool.run(cmd).strip()
+            else:
+                # Keep only the batch step row from the shared query.
+                output = "\n".join(
+                    line
+                    for line in sacct_output.strip().splitlines()
+                    if line.split("|", maxsplit=1)[0].strip() == f"{job_id}.batch"
+                )
 
             # Handle cases where the batch step might not exist or returns no output.
             if not output:

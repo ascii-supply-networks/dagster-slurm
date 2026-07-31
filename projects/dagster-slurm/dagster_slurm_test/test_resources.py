@@ -754,10 +754,14 @@ def test_final_log_fallback_shell_quotes_remote_paths():
         stderr_path="/remote/run dir/slurm;123.err",
     )
 
-    assert ssh_pool.commands == [
-        "cat '/remote/run dir/slurm;123.out' 2>/dev/null || true",
-        "cat '/remote/run dir/slurm;123.err' 2>/dev/null || true",
-    ]
+    # Both files are fetched in a single round trip...
+    assert len(ssh_pool.commands) == 1
+    command = ssh_pool.commands[0]
+    # ...and each path is still shell-quoted, so a space or a ';' in the run
+    # directory cannot break out of the command.
+    assert "cat '/remote/run dir/slurm;123.out' 2>/dev/null || true" in command
+    assert "cat '/remote/run dir/slurm;123.err' 2>/dev/null || true" in command
+    assert "; cat /remote" not in command
 
 
 @pytest.mark.parametrize(

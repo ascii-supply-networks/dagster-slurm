@@ -23,6 +23,7 @@ from dagster_slurm import (
 )
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.helpers.env_packaging import compute_env_cache_key
+from dagster_slurm.helpers.metrics import SlurmMetricsCollector
 from dagster_slurm.pipes_clients.slurm_pipes_client import (
     SlurmPipesClient,
     _remote_join_under_root,
@@ -95,6 +96,8 @@ class MessageReaderStub:
 
 
 class MetricsStub:
+    SACCT_FORMAT = SlurmMetricsCollector.SACCT_FORMAT
+
     def collect_job_metrics(self, *args, **kwargs):
         return SimpleNamespace(
             node_hours=0, cpu_efficiency=0, max_rss_mb=0, elapsed_seconds=0

@@ -638,7 +638,8 @@ class SlurmPipesClient(PipesClient):
                             job_id,
                             ssh_pool,
                         )
-                        self.logger.info(f"Job {job_id} completed successfully")
+                        # The polling loop already announced completion; saying
+                        # it again here just duplicates the line in the run log.
 
                         self._collect_and_emit_metrics(
                             job_id,
@@ -1264,17 +1265,39 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
     ) -> dict[str, dict[str, Any]]:
         """Return normalized parent/batch accounting rows for a finished job."""
-        output = ssh_pool.run(
-            f"sacct -j {job_id} -n -P --format=JobID,State,ExitCode 2>/dev/null || true"
+        return self._parse_accounting_rows(
+            self._query_final_accounting(job_id, ssh_pool)
+        )
+
+    def _query_final_accounting(self, job_id: int, ssh_pool: SSHConnectionPool) -> str:
+        """Fetch every accounting field the completion path needs, once."""
+        fmt = self.metrics_collector.SACCT_FORMAT
+        return ssh_pool.run(
+            f"sacct -j {job_id} -n -P --format={fmt} 2>/dev/null || true"
         ).strip()
+
+    @staticmethod
+    def _parse_accounting_rows(output: str) -> dict[str, dict[str, Any]]:
+        """Parse sacct rows keyed by JobID.
+
+        Accepts both the wide SACCT_FORMAT used by the shared completion query
+        and the narrow JobID|State|ExitCode layout, so callers and fixtures
+        that only supply the latter keep working.
+        """
         rows: dict[str, dict[str, Any]] = {}
         for line in output.splitlines():
             fields = [field.strip() for field in line.split("|")]
-            if len(fields) < 3 or not fields[0]:
+            if not fields or not fields[0]:
+                continue
+            if len(fields) >= 8:
+                state, exit_code = fields[6], fields[7]
+            elif len(fields) >= 3:
+                state, exit_code = fields[1], fields[2]
+            else:
                 continue
             rows[fields[0]] = {
-                "state": normalize_slurm_state(fields[1]),
-                "exit_code": fields[2],
+                "state": normalize_slurm_state(state),
+                "exit_code": exit_code,
             }
         return rows
 
@@ -1284,8 +1307,13 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
     ) -> Any:
         """Require final sacct rows to agree that the job really succeeded."""
-        metrics = self.metrics_collector.collect_job_metrics(job_id, ssh_pool)
-        rows = self._get_final_accounting_rows(job_id, ssh_pool)
+        # A single sacct query serves both the state/exit-code check and the
+        # metrics parse; they used to be two round trips for the same rows.
+        sacct_output = self._query_final_accounting(job_id, ssh_pool)
+        metrics = self.metrics_collector.collect_job_metrics(
+            job_id, ssh_pool, sacct_output=sacct_output
+        )
+        rows = self._parse_accounting_rows(sacct_output)
 
         parent_row = rows.get(str(job_id))
         batch_row = rows.get(f"{job_id}.batch")
@@ -2777,9 +2805,13 @@ exit "$_dagster_slurm_workload_exit"
                 dashboard_log_emitter,
             )
 
+        # Fetch both files in a single command: two round trips to a login
+        # node is two round trips, and this runs on every completed job.
+        fetched = self._read_remote_files(ssh_pool, [path for path, _, _ in log_paths])
+
         for path, stream, label in log_paths:
             try:
-                content = ssh_pool.run(f"cat {shlex.quote(path)} 2>/dev/null || true")
+                content = fetched.get(path, "")
                 if content.strip():
                     lines = content.splitlines()
                     for line in lines:
@@ -2803,6 +2835,45 @@ exit "$_dagster_slurm_workload_exit"
                 self.logger.debug(
                     f"Could not fetch final {label} for job {job_id}: {exc}"
                 )
+
+    @staticmethod
+    def _read_remote_files(
+        ssh_pool: SSHConnectionPool, paths: list[str]
+    ) -> dict[str, str]:
+        """Read several remote files in one SSH round trip.
+
+        Each file is framed by a delimiter that cannot occur in Slurm log text,
+        so one command replaces one `cat` per file.
+        """
+        if not paths:
+            return {}
+
+        marker = f"__DAGSTER_SLURM_FILE_{uuid.uuid4().hex}__"
+        script = "; ".join(
+            f"printf '%s\\n' {shlex.quote(marker + path)}; "
+            f"cat {shlex.quote(path)} 2>/dev/null || true"
+            for path in paths
+        )
+
+        try:
+            output = ssh_pool.run(script)
+        except Exception:
+            return {}
+
+        contents: dict[str, str] = {}
+        current: Optional[str] = None
+        buffer: list[str] = []
+        for line in output.splitlines():
+            if line.startswith(marker):
+                if current is not None:
+                    contents[current] = "\n".join(buffer)
+                current = line[len(marker) :]
+                buffer = []
+            elif current is not None:
+                buffer.append(line)
+        if current is not None:
+            contents[current] = "\n".join(buffer)
+        return contents
 
     def _schedule_async_cleanup(
         self, ssh_pool: SSHConnectionPool, run_dir: str
@@ -3355,8 +3426,12 @@ exit "$_dagster_slurm_workload_exit"
                                 f"Check logs above for stderr output.{timeout_hint}"
                             )
 
-                        pre_timeout_signal = self._read_pre_timeout_signal(
-                            ssh_pool, run_dir
+                        # Only worth a round trip when a signal was configured
+                        # at all - otherwise the marker cannot exist.
+                        pre_timeout_signal = (
+                            self._read_pre_timeout_signal(ssh_pool, run_dir)
+                            if self.slurm.queue.signal_before_timeout
+                            else None
                         )
                         if pre_timeout_signal:
                             # Not a failure: the workload finished its work after
