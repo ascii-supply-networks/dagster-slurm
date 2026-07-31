@@ -190,7 +190,7 @@ class SlurmResource(ConfigurableResource):
         ),
     )
     status_poll_max_interval_seconds: float = Field(
-        default=15.0,
+        default=5.0,
         gt=0,
         description=(
             "Upper bound for the status polling interval. The interval grows "

@@ -47,10 +47,12 @@ While a job runs, its state is polled over the shared connection. The interval s
 | Variable                         | Field                              | Default |
 | -------------------------------- | ---------------------------------- | ------- |
 | `SLURM_STATUS_POLL_INTERVAL`     | `status_poll_interval_seconds`     | `2.0`   |
-| `SLURM_STATUS_POLL_MAX_INTERVAL` | `status_poll_max_interval_seconds` | `15.0`  |
+| `SLURM_STATUS_POLL_MAX_INTERVAL` | `status_poll_max_interval_seconds` | `5.0`   |
 | `SLURM_STATUS_POLL_BACKOFF`      | `status_poll_backoff_factor`       | `1.5`   |
 
-Raise these if your site asks for fewer `squeue`/`sacct` queries; lower them if you need tighter completion latency and the site is happy with the load.
+Raise these if your site asks for fewer `squeue`/`sacct` queries; lower them if you need tighter completion latency and the site is happy with the load. At the defaults a four-hour job costs about 2,880 status queries instead of 14,400, and completion is never noticed more than `status_poll_max_interval_seconds` late.
+
+The sleep is clamped to the remaining `poll_timeout` budget, so backing off can never step over the deadline and report a job that finished in time as a timeout.
 
 ## How SSH settings interact with `~/.ssh/config`
 
