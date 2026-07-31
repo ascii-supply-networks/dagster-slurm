@@ -169,6 +169,8 @@ To mix Ray with other launchers, override `launcher=` per asset or per step.
 
 `port_strategy="random"` is the default. Each Ray node locks a 1,000-port block in `10000–29999`; the lock is shared across users on that node.
 
+It is the default because several Ray clusters routinely share a compute node — multiple assets in one run-scoped allocation, or simply another user's job — and Ray's own defaults would make them collide. `random` is the only strategy that actually *verifies* a block is free (via `flock` plus an `ss` listener check) rather than hoping a hash does not repeat.
+
 ```python
 from dagster_slurm import RayLauncher, RayPortConfig
 
@@ -177,7 +179,11 @@ RayLauncher(
 )
 ```
 
-Use one pool and block size cluster-wide, restricted to ports allowed between compute nodes. Set `lock_dir` to a node-local directory shared by all jobs if `/tmp` is private. Random allocation requires `flock`; `ss` also rejects blocks with active listeners. For site-assigned ports, use `port_strategy="fixed"` and set `ray_port`, `dashboard_port`, and `port_config`.
+Use one pool and block size cluster-wide, restricted to ports allowed between compute nodes. Set `lock_dir` to a node-local directory shared by all jobs if `/tmp` is private. For site-assigned ports, use `port_strategy="fixed"` and set `ray_port`, `dashboard_port`, and `port_config`.
+
+### Platform requirements
+
+Random allocation needs `flock`, which ships with `util-linux` and is therefore present on Linux compute nodes but **not** on macOS. Rather than fail, the startup script warns and falls back to `port_strategy="hash_jobid"` when `flock` is missing, so the same asset code still runs in local mode on a Mac. The fallback picks its block deterministically and does not verify it, so concurrent Ray clusters on that machine can collide — acceptable for a laptop, which is where it applies.
 
 ```python
 RayLauncher(network_interface="ib0")

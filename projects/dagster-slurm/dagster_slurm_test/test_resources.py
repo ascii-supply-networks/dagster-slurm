@@ -179,6 +179,56 @@ def test_launcher_override_merge_preserves_nested_ray_port_config():
     assert "No free Ray port block in 30000-31999" in script
 
 
+def test_launcher_override_merges_nested_port_config_fields():
+    """A nested override must not reset its siblings to class defaults.
+
+    model_dump(exclude_unset=True) is recursive, so overriding one field of
+    port_config used to replace the whole nested model - silently moving a
+    firewall-restricted 30000-31999 range back to the 10000-29999 default.
+    """
+    compute = ComputeResource(
+        mode=ExecutionMode.LOCAL,
+        default_launcher=RayLauncher(
+            port_config=RayPortConfig(
+                range_start=30000,
+                range_end=31999,
+                block_size=1000,
+            ),
+        ),
+    )
+
+    merged_launcher = cast(
+        RayLauncher,
+        compute._resolve_launcher(
+            RayLauncher(port_config=RayPortConfig(block_size=500))
+        ),
+    )
+
+    assert merged_launcher.port_config.block_size == 500
+    assert merged_launcher.port_config.range_start == 30000
+    assert merged_launcher.port_config.range_end == 31999
+
+
+def test_launcher_override_wins_over_nested_site_default():
+    """Explicitly set nested fields still take precedence over the default."""
+    compute = ComputeResource(
+        mode=ExecutionMode.LOCAL,
+        default_launcher=RayLauncher(
+            port_config=RayPortConfig(range_start=30000, range_end=31999),
+        ),
+    )
+
+    merged_launcher = cast(
+        RayLauncher,
+        compute._resolve_launcher(
+            RayLauncher(port_config=RayPortConfig(range_start=40000, range_end=41999))
+        ),
+    )
+
+    assert merged_launcher.port_config.range_start == 40000
+    assert merged_launcher.port_config.range_end == 41999
+
+
 def test_compute_resource_run_allocation_scope_requires_slurm_mode():
     """Run-owned allocations are only valid for the additive SLURM mode API."""
     with pytest.raises(ValueError, match="allocation_scope='run'"):

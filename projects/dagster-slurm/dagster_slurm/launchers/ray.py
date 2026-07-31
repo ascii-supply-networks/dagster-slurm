@@ -94,11 +94,16 @@ ray_client_server_port="{port_config.ray_client_server_port}"
 min_worker_port="{port_config.min_worker_port}"
 max_worker_port="{port_config.max_worker_port}"
 _ray_port_lock_fd=""
-if [[ "{port_strategy}" == "random" ]]; then
-    if ! command -v flock >/dev/null 2>&1; then
-        echo "ERROR: port_strategy=random requires flock (util-linux)" >&2
-        exit 1
-    fi
+_ray_port_strategy="{port_strategy}"
+# `flock` ships with util-linux, so it is present on Slurm compute nodes but
+# not on macOS. Degrade to the deterministic strategy instead of failing, so
+# the same asset code still runs locally during development.
+if [[ "$_ray_port_strategy" == "random" ]] && ! command -v flock >/dev/null 2>&1; then
+    echo "WARNING: port_strategy=random needs flock (util-linux), which is unavailable here." >&2
+    echo "WARNING: Falling back to port_strategy=hash_jobid; concurrent Ray clusters on this node may collide." >&2
+    _ray_port_strategy="hash_jobid"
+fi
+if [[ "$_ray_port_strategy" == "random" ]]; then
     _port_lock_root={shlex.quote(port_config.lock_dir)}
     if [[ ! -d "$_port_lock_root" ]]; then
         if (umask 000; mkdir "$_port_lock_root") 2>/dev/null; then
@@ -175,7 +180,7 @@ if [[ "{port_strategy}" == "random" ]]; then
         echo "ERROR: No free Ray port block in {port_config.range_start}-{port_config.range_end}" >&2
         exit 1
     fi
-elif [[ "{port_strategy}" == "hash_jobid" ]]; then
+elif [[ "$_ray_port_strategy" == "hash_jobid" ]]; then
     _port_seed="${{RAY_PORT_SEED:-${{SLURM_JOB_ID:-$$}}}}"
     if [[ ! "$_port_seed" =~ ^[0-9]+$ ]]; then
         _port_seed="$(printf '%s' "$_port_seed" | cksum)"
@@ -184,7 +189,7 @@ elif [[ "{port_strategy}" == "hash_jobid" ]]; then
     _port_slot=$(( _port_seed % {block_count} ))
     _port_base=$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))
 fi
-if [[ "{port_strategy}" != "fixed" ]]; then
+if [[ "$_ray_port_strategy" != "fixed" ]]; then
     port="$_port_base"
     node_manager_port=$(( _port_base + 1 ))
     object_manager_port=$(( _port_base + 2 ))
