@@ -1225,6 +1225,42 @@ def test_pre_timeout_marker_is_reported_on_failure(slurm_pipes_client):
     )
 
 
+def test_status_poll_never_sleeps_past_the_deadline():
+    """A job that finishes just inside poll_timeout must be seen, not timed out."""
+    bounded = SlurmPipesClient._bounded_poll_sleep
+
+    # Plenty of budget left: the backed-off interval is used as-is.
+    assert bounded(5.0, elapsed=10.0, poll_timeout=60.0) == 5.0
+
+    # Close to the deadline: the sleep shrinks so one more poll still happens
+    # before poll_timeout, instead of stepping straight over it.
+    assert bounded(5.0, elapsed=58.0, poll_timeout=60.0) == 1.75
+    assert bounded(15.0, elapsed=50.0, poll_timeout=60.0) == 9.75
+
+    # Never sleeps a negative or silly-small amount.
+    assert bounded(5.0, elapsed=59.9, poll_timeout=60.0) == 0.1
+    assert bounded(5.0, elapsed=61.0, poll_timeout=60.0) == 0.0
+
+
+def test_status_poll_cap_stays_responsive_by_default():
+    """The default cap has to survive short jobs, not just multi-hour ones."""
+    slurm = SlurmResource(
+        ssh=SSHConnectionResource(host="h", user="u", password="p"),
+        queue=SlurmQueueConfig(),
+    )
+
+    interval = slurm.status_poll_interval_seconds
+    elapsed = 0.0
+    for _ in range(40):
+        elapsed += interval
+        interval = slurm.next_status_poll_interval(interval)
+
+    # A four-hour job still drops from 14400 squeue calls to under 3000, while
+    # completion is never noticed more than the cap late.
+    assert slurm.status_poll_max_interval_seconds <= 5.0
+    assert interval == slurm.status_poll_max_interval_seconds
+
+
 def test_status_poll_interval_backs_off_and_is_capped():
     slurm = SlurmResource(
         ssh=SSHConnectionResource(host="h", user="u", password="p"),

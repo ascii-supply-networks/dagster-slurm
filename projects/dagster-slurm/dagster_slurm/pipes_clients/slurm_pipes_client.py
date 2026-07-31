@@ -1099,6 +1099,22 @@ class SlurmPipesClient(PipesClient):
         state = self._get_job_state(job_id, ssh_pool)
         return state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}
 
+    @staticmethod
+    def _bounded_poll_sleep(
+        poll_interval: float, elapsed: float, poll_timeout: float
+    ) -> float:
+        """Clamp a polling sleep so it cannot overshoot the deadline.
+
+        Backing off is only safe if the loop still gets a look at the job just
+        before poll_timeout. Otherwise a job that finished at t=57s with a 60s
+        budget is reported as a timeout it never actually hit, purely because
+        the next poll was scheduled for t=71s.
+        """
+        remaining = poll_timeout - elapsed
+        if remaining <= 0:
+            return 0.0
+        return max(0.1, min(poll_interval, remaining - 0.25))
+
     def _interruptible_sleep(self, seconds: float, job_id: int) -> None:
         """Sleep that catches async DagsterExecutionInterruptedError.
 
@@ -3247,7 +3263,12 @@ exit "$_dagster_slurm_workload_exit"
                         self.logger.debug(
                             f"Job {job_id} is completing, waiting for terminal state..."
                         )
-                        self._interruptible_sleep(poll_interval, job_id)
+                        self._interruptible_sleep(
+                            self._bounded_poll_sleep(
+                                poll_interval, time.time() - start_time, poll_timeout
+                            ),
+                            job_id,
+                        )
                         continue
 
                     if state in TERMINAL_STATES:
@@ -3325,7 +3346,12 @@ exit "$_dagster_slurm_workload_exit"
                         self.logger.info(f"Job {job_id} completed successfully")
                         break
 
-                    self._interruptible_sleep(poll_interval, job_id)
+                    self._interruptible_sleep(
+                        self._bounded_poll_sleep(
+                            poll_interval, time.time() - start_time, poll_timeout
+                        ),
+                        job_id,
+                    )
                     continue
 
                 except Exception as exc:
