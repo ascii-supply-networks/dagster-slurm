@@ -282,6 +282,8 @@ class SlurmPipesClient(PipesClient):
 
         try:
             with ssh_pool:
+                self._report_ssh_multiplexing_failure(context, ssh_pool)
+
                 # Store control path for log streaming
                 self._control_path = ssh_pool.control_path
 
@@ -728,6 +730,30 @@ class SlurmPipesClient(PipesClient):
             self._sigterm_received = False
 
         return PipesClientCompletedInvocation(session)
+
+    def _report_ssh_multiplexing_failure(
+        self,
+        context: AssetExecutionContext,
+        ssh_pool: SSHConnectionPool,
+    ) -> None:
+        """Surface unsafe one-off SSH fallback prominently in Dagster logs."""
+        if ssh_pool.multiplexing_active:
+            return
+
+        reason = ssh_pool.fallback_reason or "unknown ControlMaster startup failure"
+        message = (
+            "SSH MULTIPLEXING FAILED for "
+            f"{self.slurm.ssh.host}. Dagster is falling back to one-off SSH "
+            "connections. Frequent Slurm polling and log streaming may overload "
+            "the HPC login node's SSH capacity and could cause the account to be "
+            f"blocked. Stop the run and fix ControlMaster configuration. Reason: {reason}"
+        )
+        context_log = getattr(context, "log", None)
+        log_error = getattr(context_log, "error", None)
+        if callable(log_error):
+            log_error(message)
+        else:
+            self.logger.error(message)
 
     def _is_run_canceling(self, op_context: Optional[OpExecutionContext]) -> bool:
         """Check if the Dagster run is being cancelled by the user.

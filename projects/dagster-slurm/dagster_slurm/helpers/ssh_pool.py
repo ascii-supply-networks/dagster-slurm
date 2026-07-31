@@ -69,6 +69,16 @@ class SSHConnectionPool:
 
         return str(control_path)
 
+    @property
+    def multiplexing_active(self) -> bool:
+        """Whether commands are using the pool's ControlMaster connection."""
+        return self._master_started and not self._fallback_mode
+
+    @property
+    def fallback_reason(self) -> str | None:
+        """Why the pool is using one-off SSH connections, if known."""
+        return self._fallback_reason
+
     def __enter__(self):
         """Start SSH ControlMaster."""
         self.logger.debug("Starting SSH ControlMaster...")
@@ -79,6 +89,7 @@ class SSHConnectionPool:
                 self.config.host,
             )
             self._fallback_mode = True
+            self._fallback_reason = "SSH control socket path is unavailable"
             return self
 
         if self.config.uses_password_auth or (
@@ -90,6 +101,7 @@ class SSHConnectionPool:
                 self.config.host,
             )
             self._fallback_mode = True
+            self._fallback_reason = "password-based authentication is configured for the target or jump host"
             self.control_path = None
             return self
 
