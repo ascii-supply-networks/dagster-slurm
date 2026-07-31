@@ -1,11 +1,22 @@
 import os
+import re
 from typing import Optional
 
 import dagster as dg
 from dagster import ConfigurableResource
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, model_validator
 
 from .ssh import SSHConnectionResource
+
+_SIGNAL_BEFORE_TIMEOUT_RE = re.compile(
+    r"^(?P<signal>(?:SIG)?[A-Za-z][A-Za-z0-9_+]*|[0-9]+)@(?P<seconds>[1-9][0-9]*)$"
+)
+_SLURM_TIME_LIMIT_RE = re.compile(
+    r"^(?:(?P<days>[0-9]+)-)?"
+    r"(?P<first>[0-9]+)"
+    r"(?::(?P<second>[0-9]+))?"
+    r"(?::(?P<third>[0-9]+))?$"
+)
 
 
 def _optional_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
@@ -24,6 +35,77 @@ def _optional_env(var_name: str, default: Optional[str] = None) -> Optional[str]
     return cleaned
 
 
+def _parse_signal_before_timeout(value: str) -> tuple[str, int]:
+    normalized = value.strip().upper()
+    match = _SIGNAL_BEFORE_TIMEOUT_RE.fullmatch(normalized)
+    if match is None:
+        raise ValueError(
+            "signal_before_timeout must use SIGNAL@SECONDS, for example "
+            "'TERM@120' or 'USR1@300'"
+        )
+    return normalized, int(match.group("seconds"))
+
+
+def normalize_signal_before_timeout(value: str) -> str:
+    """Validate and normalize a Slurm pre-timeout signal."""
+    return _parse_signal_before_timeout(value)[0]
+
+
+def _slurm_time_limit_seconds(value: str) -> int:
+    """Parse a Slurm time limit into seconds."""
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("time_limit cannot be empty")
+
+    match = _SLURM_TIME_LIMIT_RE.fullmatch(normalized)
+    if match is None:
+        raise ValueError(f"Invalid Slurm time_limit: {value!r}")
+
+    days_value = match.group("days")
+    first = int(match.group("first"))
+    second_value = match.group("second")
+    third_value = match.group("third")
+
+    if days_value is not None:
+        days = int(days_value)
+        hours = first
+        minutes = int(second_value or 0)
+        seconds = int(third_value or 0)
+        if hours >= 24 or minutes >= 60 or seconds >= 60:
+            raise ValueError(f"Invalid Slurm time_limit: {value!r}")
+        return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+    if second_value is None:
+        return first * 60
+    if third_value is None:
+        seconds = int(second_value)
+        if seconds >= 60:
+            raise ValueError(f"Invalid Slurm time_limit: {value!r}")
+        return first * 60 + seconds
+
+    hours = first
+    minutes = int(second_value)
+    seconds = int(third_value)
+    if minutes >= 60 or seconds >= 60:
+        raise ValueError(f"Invalid Slurm time_limit: {value!r}")
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def validate_signal_before_timeout(value: str | None, time_limit: str) -> str | None:
+    """Validate a pre-timeout signal against its Slurm walltime."""
+    if value is None:
+        return None
+
+    normalized, lead_seconds = _parse_signal_before_timeout(value)
+    walltime_seconds = _slurm_time_limit_seconds(time_limit)
+    if lead_seconds >= walltime_seconds:
+        raise ValueError(
+            f"signal_before_timeout lead time ({lead_seconds}s) must be shorter "
+            f"than time_limit ({time_limit})"
+        )
+    return normalized
+
+
 class SlurmQueueConfig(dg.ConfigurableResource):
     """Default Slurm job submission parameters.
     These can be overridden per-asset via metadata or function arguments.
@@ -34,6 +116,13 @@ class SlurmQueueConfig(dg.ConfigurableResource):
     )
     num_nodes: int = Field(default=1, description="Number of nodes")
     time_limit: str = Field(default="00:30:00", description="Job time limit (HH:MM:SS)")
+    signal_before_timeout: Optional[str] = Field(
+        default=None,
+        description=(
+            "Signal sent to the batch shell before walltime, for example 'TERM@120'. "
+            "Slurm may deliver it up to 60 seconds early."
+        ),
+    )
     cpus: int = Field(default=2, description="CPUs per task")
     gpus_per_node: int = Field(default=0, description="GPUs per node")
     mem: Optional[str] = Field(
@@ -54,6 +143,11 @@ class SlurmQueueConfig(dg.ConfigurableResource):
         default=None,
         description="Accounting project/charge code (required on many systems)",
     )
+
+    @model_validator(mode="after")
+    def _validate_signal_before_timeout(self) -> "SlurmQueueConfig":
+        validate_signal_before_timeout(self.signal_before_timeout, self.time_limit)
+        return self
 
 
 class SlurmResource(ConfigurableResource):
@@ -97,6 +191,7 @@ class SlurmResource(ConfigurableResource):
                 qos=_optional_env("SLURM_QOS"),
                 reservation=_optional_env("SLURM_RESERVATION"),
                 account=_optional_env("SLURM_ACCOUNT"),
+                signal_before_timeout=_optional_env("SLURM_SIGNAL_BEFORE_TIMEOUT"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
         )
@@ -117,6 +212,7 @@ class SlurmResource(ConfigurableResource):
                 qos=_optional_env("SLURM_QOS"),
                 reservation=_optional_env("SLURM_RESERVATION"),
                 account=_optional_env("SLURM_ACCOUNT"),
+                signal_before_timeout=_optional_env("SLURM_SIGNAL_BEFORE_TIMEOUT"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
         )

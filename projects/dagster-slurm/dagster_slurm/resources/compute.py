@@ -21,7 +21,7 @@ from .session import (
     SlurmRunAllocationConfig,
     SlurmSessionResource,
 )
-from .slurm import SlurmResource
+from .slurm import SlurmResource, validate_signal_before_timeout
 
 
 def _deep_merge_payload(
@@ -457,6 +457,7 @@ class ComputeResource(ConfigurableResource):
                     slurm=self.slurm,
                     num_nodes=shape["num_nodes"],
                     time_limit=shape["time_limit"],
+                    signal_before_timeout=shape["signal_before_timeout"],
                     partition=shape["partition"],
                     gpus_per_node=shape["gpus_per_node"],
                     cpus_per_task=shape["cpus_per_task"],
@@ -482,6 +483,15 @@ class ComputeResource(ConfigurableResource):
 
         cfg = self.run_allocation
         queue = self.slurm.queue
+        time_limit = cfg.time_limit or queue.time_limit
+        signal_before_timeout = validate_signal_before_timeout(
+            (
+                cfg.signal_before_timeout
+                if cfg.signal_before_timeout is not None
+                else queue.signal_before_timeout
+            ),
+            time_limit,
+        )
         return {
             "num_nodes": cfg.num_nodes or queue.num_nodes or 1,
             "gpus_per_node": (
@@ -494,7 +504,8 @@ class ComputeResource(ConfigurableResource):
             "mem_per_cpu": (
                 cfg.mem_per_cpu if cfg.mem_per_cpu is not None else queue.mem_per_cpu
             ),
-            "time_limit": cfg.time_limit or queue.time_limit,
+            "time_limit": time_limit,
+            "signal_before_timeout": signal_before_timeout,
             "partition": cfg.partition or queue.partition or None,
             "qos": cfg.qos or queue.qos,
             "account": cfg.account or queue.account,
@@ -888,6 +899,7 @@ class ComputeResource(ConfigurableResource):
                 - mem: str (e.g., "32G")
                 - gpus_per_node: int
                 - time_limit: str (e.g., "02:00:00")
+                - signal_before_timeout: str (e.g., "TERM@120")
             resource_requirements: Resource requirements for cluster reuse (session mode)
                 - cpus: int
                 - gpus: int

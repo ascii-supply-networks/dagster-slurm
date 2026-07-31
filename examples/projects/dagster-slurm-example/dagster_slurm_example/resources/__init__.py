@@ -609,6 +609,7 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
     _apply_queue_field("SLURM_SUPERCOMPUTER_PARTITION", "partition")
     _apply_queue_field("SLURM_SUPERCOMPUTER_QOS", "qos")
     _apply_queue_field("SLURM_SUPERCOMPUTER_RESERVATION", "reservation")
+    _apply_queue_field("SLURM_SIGNAL_BEFORE_TIMEOUT", "signal_before_timeout")
 
     allocation_scope = os.environ.get("SLURM_ALLOCATION_SCOPE", "").strip().lower()
     if allocation_scope in {"run", "run_scoped", "run-scoped"}:

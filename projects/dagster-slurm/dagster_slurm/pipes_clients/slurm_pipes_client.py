@@ -44,7 +44,7 @@ from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..launchers.ray import RayLauncher
 from ..resources.session import SlurmSessionResource, SlurmStepExecutionResult
-from ..resources.slurm import SlurmResource
+from ..resources.slurm import SlurmResource, validate_signal_before_timeout
 
 _TAG_JOB_ID = "dagster_slurm/job_id"
 _TAG_RUN_DIR = "dagster_slurm/run_dir"
@@ -2339,6 +2339,138 @@ rm -rf {pack_root_quoted}
             run_dir=run_dir,
         )
 
+    def _resolve_signal_before_timeout(
+        self,
+        extra_slurm_opts: Optional[Dict[str, Any]],
+    ) -> str | None:
+        """Resolve and validate the effective pre-timeout signal."""
+        time_limit: Any = self.slurm.queue.time_limit
+        signal_before_timeout: Any = self.slurm.queue.signal_before_timeout
+        if extra_slurm_opts:
+            time_limit = extra_slurm_opts.get("time_limit", time_limit)
+            signal_before_timeout = extra_slurm_opts.get(
+                "signal_before_timeout",
+                signal_before_timeout,
+            )
+
+        normalized_time_limit = (
+            str(time_limit).strip() if time_limit is not None else ""
+        )
+        if not normalized_time_limit:
+            raise ValueError("time_limit cannot be empty")
+
+        normalized_signal = (
+            str(signal_before_timeout).strip()
+            if signal_before_timeout is not None
+            else None
+        )
+        return validate_signal_before_timeout(
+            normalized_signal or None,
+            normalized_time_limit,
+        )
+
+    _PRE_TIMEOUT_MARKER = ".dagster_slurm_pre_timeout_signal"
+
+    @classmethod
+    def _pre_timeout_marker_path(cls, run_dir: str) -> str:
+        """Path the supervisor writes when Slurm's pre-timeout signal fires."""
+        return f"{run_dir}/{cls._PRE_TIMEOUT_MARKER}"
+
+    def _read_pre_timeout_signal(
+        self, ssh_pool: SSHConnectionPool, run_dir: str
+    ) -> Optional[str]:
+        """Return the pre-timeout signal the workload received, if any."""
+        marker = self._pre_timeout_marker_path(run_dir)
+        try:
+            output = ssh_pool.run(f"cat {shlex.quote(marker)} 2>/dev/null || true")
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            self.logger.debug(f"Could not read pre-timeout marker: {exc}")
+            return None
+        return output.strip() or None
+
+    @staticmethod
+    def _build_pre_timeout_supervisor_script(
+        workload_script_path: str,
+        signal_before_timeout: str,
+        marker_path: str,
+    ) -> str | None:
+        """Build a wrapper that forwards Slurm's pre-timeout signal to the workload.
+
+        Slurm's ``B:`` signal targets only the batch shell, so the wrapper
+        forwards it to an isolated workload process group and waits for signal
+        handlers to flush checkpoints.
+
+        The wrapper deliberately does *not* decide the outcome. "Exited 0 after
+        the signal" covers both a job that finished all of its work with time to
+        spare and one that flushed a partial checkpoint and gave up, and nothing
+        at this level can tell them apart. Forcing a failure turned the first
+        case into a false failure that discarded a complete, materialised run.
+        The real exit code is propagated instead, and the signal is recorded in a
+        marker file so the Dagster side can report it; whether the work actually
+        finished is settled by the Pipes session.
+
+        Untrappable signals already make the batch job fail without supervision.
+        """
+        signal_name = signal_before_timeout.split("@", maxsplit=1)[0]
+        signal_token = signal_name.removeprefix("SIG")
+        untrappable_numbers = {signal.SIGKILL.value, signal.SIGSTOP.value}
+        if signal_token in {"KILL", "STOP"} or (
+            signal_token.isdigit() and int(signal_token) in untrappable_numbers
+        ):
+            return None
+
+        quoted_signal = shlex.quote(signal_name)
+        quoted_workload_path = shlex.quote(workload_script_path)
+        quoted_marker_path = shlex.quote(marker_path)
+        return f"""#!/bin/bash
+set -uo pipefail
+
+_dagster_slurm_signal={quoted_signal}
+_dagster_slurm_signal_received=0
+_dagster_slurm_workload_pid=""
+_dagster_slurm_isolated_group=0
+
+_dagster_slurm_forward_signal() {{
+  _dagster_slurm_signal_received=1
+  # Recorded for the Dagster side; the exit code stays the workload's own.
+  printf '%s\n' "$_dagster_slurm_signal" > {quoted_marker_path} 2>/dev/null || true
+  echo "Dagster Slurm workload received pre-timeout signal $_dagster_slurm_signal; forwarding it and preserving the workload exit code." >&2
+  if [[ -z "$_dagster_slurm_workload_pid" ]]; then
+    return
+  fi
+
+  if [[ "$_dagster_slurm_isolated_group" -eq 1 ]]; then
+    kill -s "$_dagster_slurm_signal" -- "-$_dagster_slurm_workload_pid" 2>/dev/null || true
+  else
+    kill -s "$_dagster_slurm_signal" "$_dagster_slurm_workload_pid" 2>/dev/null || true
+  fi
+}}
+
+trap _dagster_slurm_forward_signal "$_dagster_slurm_signal"
+
+if command -v setsid >/dev/null 2>&1; then
+  setsid bash {quoted_workload_path} &
+  _dagster_slurm_isolated_group=1
+else
+  bash {quoted_workload_path} &
+fi
+_dagster_slurm_workload_pid=$!
+
+_dagster_slurm_workload_exit=0
+while true; do
+  wait "$_dagster_slurm_workload_pid"
+  _dagster_slurm_wait_exit=$?
+  if ! kill -0 "$_dagster_slurm_workload_pid" 2>/dev/null; then
+    _dagster_slurm_workload_exit=$_dagster_slurm_wait_exit
+    break
+  fi
+done
+
+trap - "$_dagster_slurm_signal"
+
+exit "$_dagster_slurm_workload_exit"
+"""
+
     def _execute_standalone(
         self,
         execution_plan,
@@ -2413,12 +2545,23 @@ rm -rf {pack_root_quoted}
         if not job_script_content.strip():
             raise ValueError("Execution plan generated empty script content")
 
+        auxiliary_scripts = dict(getattr(execution_plan, "auxiliary_scripts", {}))
+        signal_before_timeout = self._resolve_signal_before_timeout(extra_slurm_opts)
+        if signal_before_timeout:
+            workload_script_name = "dagster_slurm_workload.sh"
+            workload_script_path = f"{run_dir}/{workload_script_name}"
+            supervisor_script = self._build_pre_timeout_supervisor_script(
+                workload_script_path,
+                signal_before_timeout,
+                self._pre_timeout_marker_path(run_dir),
+            )
+            if supervisor_script is not None:
+                auxiliary_scripts[workload_script_name] = job_script_content
+                job_script_content = supervisor_script
+
         self.logger.debug(
             f"Writing job script ({len(job_script_content)} bytes) to {script_path}"
         )
-
-        # Check if execution plan has auxiliary scripts (Ray head/worker scripts)
-        auxiliary_scripts = getattr(execution_plan, "auxiliary_scripts", {})
 
         try:
             # Write main job script to local temp file
@@ -2641,6 +2784,7 @@ rm -rf {pack_root_quoted}
                 - partition: str
                 - qos: str
                 - reservation: str
+                - signal_before_timeout: str (e.g., "TERM@120")
 
         Returns:
             Complete sbatch command string
@@ -2690,11 +2834,15 @@ rm -rf {pack_root_quoted}
             return str(value)
 
         partition = _normalize_optional(partition)
+        time_limit = _normalize_optional(time_limit)
         mem = _normalize_optional(mem)
         mem_per_cpu = _normalize_optional(mem_per_cpu)
         qos = _normalize_optional(qos)
         reservation = _normalize_optional(reservation)
         account = _normalize_optional(account)
+        if time_limit is None:
+            raise ValueError("time_limit cannot be empty")
+        signal_before_timeout = self._resolve_signal_before_timeout(extra_opts)
 
         if gpus_per_node and not mem_override and not mem_per_cpu:
             # GPU partitions usually enforce fixed memory per GPU and reject explicit --mem.
@@ -2708,6 +2856,8 @@ rm -rf {pack_root_quoted}
             sbatch_opts.append(f"-p {partition}")
 
         sbatch_opts.append(f"-t {time_limit}")
+        if signal_before_timeout:
+            sbatch_opts.append(f"--signal=B:{signal_before_timeout}")
         sbatch_opts.append(f"-c {cpus}")
         if mem_per_cpu:
             sbatch_opts.append(f"--mem-per-cpu={mem_per_cpu}")
@@ -3085,10 +3235,39 @@ rm -rf {pack_root_quoted}
                                 sys.stderr.write(f"  Failed to read stderr: {e}\n")
                                 sys.stderr.flush()
 
+                            pre_timeout_signal = self._read_pre_timeout_signal(
+                                ssh_pool, run_dir
+                            )
+                            timeout_hint = ""
+                            if pre_timeout_signal:
+                                timeout_hint = (
+                                    f" The workload received the pre-timeout signal "
+                                    f"{pre_timeout_signal} before failing, so it most "
+                                    "likely ran out of walltime; raise time_limit or "
+                                    "checkpoint and resume."
+                                )
                             raise RuntimeError(
                                 f"Job {job_id} did not complete successfully. Final state: {state}. "
-                                f"Check logs above for stderr output."
+                                f"Check logs above for stderr output.{timeout_hint}"
                             )
+
+                        pre_timeout_signal = self._read_pre_timeout_signal(
+                            ssh_pool, run_dir
+                        )
+                        if pre_timeout_signal:
+                            # Not a failure: the workload finished its work after
+                            # being warned. Surface it so a run that is regularly
+                            # this close to its walltime gets a bigger time_limit.
+                            message = (
+                                f"Job {job_id} completed successfully, but only after "
+                                f"receiving the pre-timeout signal {pre_timeout_signal}. "
+                                "It finished within the walltime margin - consider "
+                                "raising time_limit before it starts being cut off."
+                            )
+                            if op_context is not None:
+                                op_context.log.warning(message)
+                            else:
+                                self.logger.warning(message)
 
                         self.logger.info(f"Job {job_id} completed successfully")
                         break

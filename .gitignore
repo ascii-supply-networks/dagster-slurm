@@ -1273,3 +1273,4 @@ slides/dist-scipy2026/
 docs/static/slides-scipy2026/
 .devenv/
 examples/z_tmp/
+/zz_tmp/
