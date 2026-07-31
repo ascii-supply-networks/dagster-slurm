@@ -656,18 +656,12 @@ class SSHMessageReader(PipesMessageReader):
         """
         base_cmd = [
             "ssh",
+            *self.ssh_config.get_common_ssh_opts(
+                server_alive_interval=15,
+                server_alive_count_max=3,
+            ),
             "-p",
             str(self.ssh_config.port),
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
         ]
 
         # Use ControlMaster if available (required for password auth)
@@ -720,9 +714,6 @@ class SSHMessageReader(PipesMessageReader):
                     "Password authentication requires ControlMaster. "
                     "Pass control_path to SSHMessageReader constructor."
                 )
-
-        # Add extra options
-        base_cmd.extend(self.ssh_config.extra_opts)
 
         # Add target
         base_cmd.append(f"{self.ssh_config.user}@{self.ssh_config.host}")

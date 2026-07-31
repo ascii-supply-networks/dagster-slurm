@@ -55,23 +55,7 @@ def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
 
     remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
 
-    ssh_cmd = [
-        "ssh",
-        "-p",
-        str(ssh_resource.port),
-        "-i",
-        ssh_resource.key_path,
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "LogLevel=ERROR",
-        f"{ssh_resource.user}@{ssh_resource.host}",
-        remote_cmd,
-    ]
+    ssh_cmd = [*ssh_resource.get_ssh_base_command(), remote_cmd]
 
     result = subprocess.run(ssh_cmd, capture_output=True, text=True)
     return result.stdout, result.stderr, result.returncode

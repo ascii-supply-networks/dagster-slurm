@@ -1,8 +1,12 @@
 import os
 import re
+import shlex
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
 from dagster_slurm.helpers import ssh_pool as ssh_pool_module
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.ssh import SSHConnectionResource
@@ -13,6 +17,167 @@ class DummyResult:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def _resolved_ssh_config(command: list[str]) -> dict[str, str]:
+    result = subprocess.run(
+        ["ssh", "-G", "-F", "/dev/null", *command[1:]],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {
+        key: value
+        for line in result.stdout.splitlines()
+        for key, _, value in [line.partition(" ")]
+    }
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_checking"),
+    [
+        ("off", "false"),
+        ("accept-new", "accept-new"),
+        ("strict", "true"),
+    ],
+)
+def test_host_key_modes_are_applied_by_openssh(
+    tmp_path,
+    mode,
+    expected_checking,
+):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    known_hosts_path = tmp_path / "known_hosts"
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        key_path=str(key_path),
+        host_key_checking=mode,
+        known_hosts_file=(str(known_hosts_path) if mode != "off" else None),
+    )
+
+    resolved = _resolved_ssh_config(ssh_resource.get_ssh_base_command())
+
+    assert resolved["stricthostkeychecking"] == expected_checking
+    assert resolved["userknownhostsfile"] == (
+        str(known_hosts_path) if mode != "off" else "/dev/null"
+    )
+
+
+def test_host_key_checking_defaults_to_strict_in_openssh(tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        key_path=str(key_path),
+    )
+
+    resolved = _resolved_ssh_config(ssh_resource.get_ssh_base_command())
+
+    assert resolved["stricthostkeychecking"] == "true"
+    assert resolved["userknownhostsfile"] == str(Path.home() / ".ssh" / "known_hosts")
+
+
+def test_extra_opts_override_host_key_defaults_in_openssh(tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    known_hosts_path = tmp_path / "caller_known_hosts"
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        key_path=str(key_path),
+        host_key_checking="off",
+        extra_opts=[
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={known_hosts_path}",
+        ],
+    )
+
+    resolved = _resolved_ssh_config(ssh_resource.get_ssh_base_command())
+
+    assert resolved["stricthostkeychecking"] == "true"
+    assert resolved["userknownhostsfile"] == str(known_hosts_path)
+
+
+def test_jump_host_policy_is_applied_by_openssh(tmp_path):
+    target_key_path = tmp_path / "target_key"
+    target_key_path.write_text("dummy-key")
+    jump_key_path = tmp_path / "jump_key"
+    jump_key_path.write_text("dummy-key")
+    jump_known_hosts_path = tmp_path / "jump_known_hosts"
+    jump = SSHConnectionResource(
+        host="jump.example.com",
+        user="jumpuser",
+        key_path=str(jump_key_path),
+        host_key_checking="accept-new",
+        known_hosts_file=str(jump_known_hosts_path),
+    )
+    target = SSHConnectionResource(
+        host="target.example.com",
+        user="targetuser",
+        key_path=str(target_key_path),
+        jump_host=jump,
+    )
+
+    target_config = _resolved_ssh_config(target.get_ssh_base_command())
+    jump_command = shlex.split(target_config["proxycommand"])
+    jump_command[jump_command.index("%h:%p")] = "target.example.com:22"
+    jump_config = _resolved_ssh_config(jump_command)
+
+    assert jump_config["hostname"] == "jump.example.com"
+    assert jump_config["stricthostkeychecking"] == "accept-new"
+    assert jump_config["userknownhostsfile"] == str(jump_known_hosts_path)
+    assert jump_config["identityfile"] == str(jump_key_path)
+
+
+def test_host_key_policy_loads_from_environment(monkeypatch, tmp_path):
+    known_hosts_path = tmp_path / "known_hosts"
+    monkeypatch.setenv("TEST_SSH_HOST", "example.com")
+    monkeypatch.setenv("TEST_SSH_USER", "testuser")
+    monkeypatch.setenv("TEST_SSH_PASSWORD", "secret")
+    monkeypatch.setenv("TEST_SSH_HOST_KEY_CHECKING", "strict")
+    monkeypatch.setenv("TEST_SSH_KNOWN_HOSTS_FILE", str(known_hosts_path))
+
+    ssh_resource = SSHConnectionResource.from_env(prefix="TEST_SSH")
+
+    assert ssh_resource.host_key_checking == "strict"
+    assert ssh_resource.known_hosts_file == str(known_hosts_path)
+
+
+def test_empty_known_hosts_file_is_rejected():
+    with pytest.raises(ValidationError, match="known_hosts_file cannot be empty"):
+        SSHConnectionResource(
+            host="example.com",
+            user="testuser",
+            password="secret",
+            known_hosts_file=" ",
+        )
+
+
+def test_host_key_failures_include_actionable_guidance(monkeypatch):
+    ssh_resource = SSHConnectionResource(
+        host="example.com",
+        user="testuser",
+        password="secret",
+        host_key_checking="strict",
+    )
+
+    def fail_with_host_key_error(*_args, **_kwargs):
+        return DummyResult(returncode=255, stderr="Host key verification failed.")
+
+    monkeypatch.setattr(
+        SSHConnectionPool,
+        "_run_with_password",
+        staticmethod(fail_with_host_key_error),
+    )
+
+    with SSHConnectionPool(ssh_resource) as pool:
+        with pytest.raises(RuntimeError, match="Add the verified key"):
+            pool.run("true")
 
 
 def test_control_master_fallback_key_auth(monkeypatch, tmp_path):

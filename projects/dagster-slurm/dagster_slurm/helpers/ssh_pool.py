@@ -99,17 +99,12 @@ class SSHConnectionPool:
             f"ControlPath={self.control_path}",
             "-o",
             "ControlPersist=10m",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
         ]
 
         try:
             cmd = [
                 "ssh",
+                *self.config.get_common_ssh_opts(),
                 "-M",
                 "-N",
                 "-f",
@@ -120,7 +115,6 @@ class SSHConnectionPool:
             cmd.extend(self.config.get_proxy_command_opts())
             if self.config.uses_key_auth:
                 cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
-            cmd.extend(self.config.extra_opts)
             cmd.append(f"{self.config.user}@{self.config.host}")
 
             if self.config.uses_password_auth or (
@@ -137,7 +131,10 @@ class SSHConnectionPool:
                 stderr = completed.stderr
 
             if returncode != 0:
-                raise RuntimeError(f"Failed to start SSH master: {stderr.strip()}")
+                raise RuntimeError(
+                    "Failed to start SSH master: "
+                    f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}"
+                )
 
             self._master_started = True
             auth_method = "key" if self.config.uses_key_auth else "password"
@@ -297,25 +294,19 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 ssh_cmd = [
                     "ssh",
+                    *self.config.get_common_ssh_opts(),
                     "-p",
                     str(self.config.port),
                     "-o",
                     f"ControlPath={self.control_path}",
                     "-o",
                     "ControlMaster=no",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
                 ]
                 if self.config.uses_key_auth:
                     ssh_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
                 if needs_tty:
                     ssh_cmd.append("-tt")
                 ssh_cmd.extend(self.config.get_proxy_command_opts())
-                ssh_cmd.extend(self.config.extra_opts)
                 ssh_cmd.extend(
                     [
                         f"{self.config.user}@{self.config.host}",
@@ -325,14 +316,9 @@ class SSHConnectionPool:
             else:
                 ssh_cmd = [
                     "ssh",
+                    *self.config.get_common_ssh_opts(),
                     "-p",
                     str(self.config.port),
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
                 ]
                 if self.config.uses_key_auth:
                     ssh_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
@@ -348,7 +334,6 @@ class SSHConnectionPool:
                 if needs_tty:
                     ssh_cmd.append("-tt")
                 ssh_cmd.extend(self.config.get_proxy_command_opts())
-                ssh_cmd.extend(self.config.extra_opts)
                 ssh_cmd.extend(
                     [
                         f"{self.config.user}@{self.config.host}",
@@ -397,7 +382,7 @@ class SSHConnectionPool:
                 raise RuntimeError(
                     f"SSH command failed (exit {returncode}): {cmd}\n"
                     f"stdout: {stdout}\n"
-                    f"stderr: {stderr}"
+                    f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}"
                 )
 
             return stdout
@@ -435,6 +420,7 @@ class SSHConnectionPool:
             if self._master_started and not self._fallback_mode:
                 scp_cmd = [
                     "scp",
+                    *self.config.get_common_ssh_opts(),
                     "-C",  # Enable compression (critical for large files!)
                     "-P",
                     str(self.config.port),
@@ -442,27 +428,16 @@ class SSHConnectionPool:
                     f"ControlPath={self.control_path}",
                     "-o",
                     "ControlMaster=no",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
                 ]
                 if self.config.uses_key_auth:
                     scp_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
             else:
                 scp_cmd = [
                     "scp",
+                    *self.config.get_common_ssh_opts(),
                     "-C",  # Enable compression (critical for large files!)
                     "-P",
                     str(self.config.port),
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
                 ]
                 if self.config.uses_key_auth:
                     scp_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
@@ -477,7 +452,6 @@ class SSHConnectionPool:
                     )
 
             scp_cmd.extend(self.config.get_proxy_command_opts())
-            scp_cmd.extend(self.config.extra_opts)
             scp_cmd.extend(
                 [
                     local_path,
@@ -515,5 +489,5 @@ class SSHConnectionPool:
             raise RuntimeError(
                 f"SCP upload failed: {local_path} -> {remote_path}\n"
                 f"stdout: {stdout}\n"
-                f"stderr: {stderr}"
+                f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}"
             )

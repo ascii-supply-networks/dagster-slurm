@@ -3226,14 +3226,9 @@ rm -rf {pack_root_quoted}
 
         cmd = [
             "ssh",
+            *self.slurm.ssh.get_common_ssh_opts(),
             "-p",
             str(self.slurm.ssh.port),
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
         ]
 
         # Include proxy jump options if configured
@@ -3254,8 +3249,6 @@ rm -rf {pack_root_quoted}
         elif self.slurm.ssh.uses_key_auth:
             cmd.extend(self.slurm.ssh.get_key_auth_opts(batch_mode=True))
 
-        if self.slurm.ssh.extra_opts:
-            cmd.extend([opt for opt in self.slurm.ssh.extra_opts if opt is not None])
         cmd.append(f"{self.slurm.ssh.user}@{self.slurm.ssh.host}")
 
         # Tail command - wait for file to appear, then follow

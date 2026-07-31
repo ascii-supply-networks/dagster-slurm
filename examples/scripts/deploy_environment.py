@@ -92,6 +92,10 @@ def main():
             key_path=key_path,
             password=password,
             extra_opts=extra_opts,
+            host_key_checking=os.getenv(
+                "SLURM_EDGE_NODE_HOST_KEY_CHECKING", "strict"
+            ),
+            known_hosts_file=os.getenv("SLURM_EDGE_NODE_KNOWN_HOSTS_FILE") or None,
         )
         auth_method = "key-based" if key_path else "password-based"
         logger.info(f"Loaded SSH configuration for {ssh_config.user}@{ssh_config.host} (using {auth_method} auth).")

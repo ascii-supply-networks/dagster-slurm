@@ -54,6 +54,7 @@ DOCKER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "port": 2223,
         "user": dg.EnvVar("SLURM_EDGE_NODE_USER"),
         "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD"),
+        "host_key_checking": "off",
     },
     "slurm_queue_config": {
         "num_nodes": 2,
@@ -114,6 +115,12 @@ SUPERCOMPUTER_SLURM_BASE_CONFIG: Dict[str, Any] = {
         "user": str(dg.EnvVar("SLURM_EDGE_NODE_USER").get_value(default="submitter")),
         "password": dg.EnvVar("SLURM_EDGE_NODE_PASSWORD").get_value(default=None),
         "key_path": dg.EnvVar("SLURM_EDGE_NODE_KEY_PATH").get_value(default=None),
+        "host_key_checking": str(
+            dg.EnvVar("SLURM_EDGE_NODE_HOST_KEY_CHECKING").get_value(default="strict")
+        ),
+        "known_hosts_file": dg.EnvVar(
+            "SLURM_EDGE_NODE_KNOWN_HOSTS_FILE"
+        ).get_value(default=None),
     },
     "slurm_queue_config": {
         "partition": "batch",
@@ -647,6 +654,13 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
         else:
             ssh_cfg["key_path"] = ssh_cfg.get("key_path")
 
+    host_key_checking = os.environ.get("SLURM_EDGE_NODE_HOST_KEY_CHECKING")
+    if host_key_checking:
+        ssh_cfg["host_key_checking"] = host_key_checking
+    known_hosts_file = os.environ.get("SLURM_EDGE_NODE_KNOWN_HOSTS_FILE")
+    if known_hosts_file:
+        ssh_cfg["known_hosts_file"] = known_hosts_file
+
     # Optional: configure a jump host using SLURM_EDGE_NODE_JUMP_* variables.
     target_host = ssh_cfg.get("host")
     jump_host_env = os.environ.get("SLURM_EDGE_NODE_JUMP_HOST")
@@ -676,6 +690,16 @@ def get_resources() -> Dict[str, ComputeResource]:  # noqa: C901
         jump_force_tty = os.environ.get("SLURM_EDGE_NODE_JUMP_FORCE_TTY")
         if jump_force_tty:
             jump_config["force_tty"] = jump_force_tty.lower() in {"1", "true", "yes"}
+        jump_host_key_checking = os.environ.get(
+            "SLURM_EDGE_NODE_JUMP_HOST_KEY_CHECKING"
+        )
+        if jump_host_key_checking:
+            jump_config["host_key_checking"] = jump_host_key_checking
+        jump_known_hosts_file = os.environ.get(
+            "SLURM_EDGE_NODE_JUMP_KNOWN_HOSTS_FILE"
+        )
+        if jump_known_hosts_file:
+            jump_config["known_hosts_file"] = jump_known_hosts_file
 
         ssh_cfg["jump_host"] = jump_config
     else:
