@@ -199,6 +199,9 @@ def test_control_master_fallback_key_auth(monkeypatch, tmp_path):
 
     def fake_run(cmd, *args, **kwargs):
         commands.append(cmd)
+        if "-O" in cmd:
+            # No live master behind the control socket
+            return DummyResult(returncode=255, stderr="No such file or directory")
         if "-M" in cmd:
             # Simulate ControlMaster failure
             return DummyResult(returncode=255, stderr="ControlMaster not permitted")
@@ -227,7 +230,9 @@ def test_control_master_fallback_key_auth(monkeypatch, tmp_path):
 
     # Ensure fallback commands do not rely on ControlPath
     fallback_calls = [
-        cmd for cmd in commands if cmd and cmd[0] == "ssh" and "-M" not in cmd
+        cmd
+        for cmd in commands
+        if cmd and cmd[0] == "ssh" and "-M" not in cmd and "-O" not in cmd
     ]
     assert any("-o" in cmd for cmd in fallback_calls)
     assert not any("ControlPath" in " ".join(cmd) for cmd in fallback_calls)
@@ -588,6 +593,197 @@ def test_batch_mode_failures_get_an_actionable_hint(tmp_path):
     assert strict.auth_error_hint("some unrelated failure") == ""
 
 
+def _key_auth_resource(tmp_path, *, port: int = 22, host: str = "example.com"):
+    key_path = tmp_path / "id_test"
+    if not key_path.exists():
+        key_path.write_text("dummy-key")
+        os.chmod(key_path, 0o600)
+    return SSHConnectionResource(
+        host=host,
+        port=port,
+        user="testuser",
+        key_path=str(key_path),
+    )
+
+
+def _master_lifecycle_stub(commands: list[list[str]], state: dict):
+    """Fake ``subprocess.run`` that models an OpenSSH ControlMaster."""
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        if "-O" in cmd:
+            if "exit" in cmd:
+                state["alive"] = False
+                return DummyResult(returncode=0)
+            return DummyResult(returncode=0 if state["alive"] else 255)
+        if "-M" in cmd:
+            if not state.get("spawn_ok", True):
+                return DummyResult(returncode=255, stderr="connection refused")
+            state["alive"] = True
+            return DummyResult(returncode=0)
+        return DummyResult(returncode=0, stdout="ok\n")
+
+    return fake_run
+
+
+def test_control_socket_is_shared_per_target(monkeypatch, tmp_path):
+    """The socket name must not be random, or every pool re-handshakes."""
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+
+    resource = _key_auth_resource(tmp_path)
+    first = SSHConnectionPool(resource).control_path
+    second = SSHConnectionPool(resource).control_path
+
+    assert first is not None
+    assert first == second
+    assert first.endswith("cm-testuser@example.com:22")
+
+    other_port = SSHConnectionPool(_key_auth_resource(tmp_path, port=2222)).control_path
+    assert other_port != first
+
+
+def test_password_auth_has_no_control_socket(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    resource = SSHConnectionResource(host="example.com", user="testuser", password="s")
+
+    assert resource.supports_multiplexing is False
+    assert resource.control_socket_path() is None
+    assert SSHConnectionPool(resource).control_path is None
+
+
+def test_live_master_is_reused_instead_of_respawned(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    commands: list[list[str]] = []
+    state = {"alive": True}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)) as pool:
+        assert pool.multiplexing_active is True
+
+    assert not [cmd for cmd in commands if "-M" in cmd]
+
+
+def test_exit_leaves_master_alive_for_the_next_caller(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    commands: list[list[str]] = []
+    state = {"alive": False}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)):
+        pass
+
+    assert len([cmd for cmd in commands if "-M" in cmd]) == 1
+    assert not [cmd for cmd in commands if "-O" in cmd and "exit" in cmd]
+    assert state["alive"] is True
+
+
+def test_master_shutdown_can_be_forced_via_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CLOSE_MASTER_ON_EXIT", "1")
+    commands: list[list[str]] = []
+    state = {"alive": False}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)):
+        pass
+
+    assert [cmd for cmd in commands if "-O" in cmd and "exit" in cmd]
+    assert state["alive"] is False
+
+
+def test_nested_context_does_not_start_a_second_master(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    commands: list[list[str]] = []
+    state = {"alive": False}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    with pool:
+        with pool:
+            assert pool.multiplexing_active is True
+        assert pool.multiplexing_active is True
+
+    assert len([cmd for cmd in commands if "-M" in cmd]) == 1
+
+
+def test_dead_master_is_restarted_before_the_next_command(monkeypatch, tmp_path):
+    """A stale socket makes OpenSSH reconnect silently - detect and heal it."""
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    commands: list[list[str]] = []
+    state = {"alive": False}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    pool.MASTER_CHECK_INTERVAL_SECONDS = 0.0
+
+    with pool:
+        assert len([cmd for cmd in commands if "-M" in cmd]) == 1
+        state["alive"] = False  # master died mid-run
+        assert pool.run("true") == "ok\n"
+
+        assert len([cmd for cmd in commands if "-M" in cmd]) == 2
+        assert pool.multiplexing_active is True
+
+
+def test_unrecoverable_master_loss_is_reported_loudly(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    commands: list[list[str]] = []
+    state = {"alive": False, "spawn_ok": True}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    reported: list[tuple[str, str]] = []
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    pool.MASTER_CHECK_INTERVAL_SECONDS = 0.0
+
+    with pool:
+        pool.reporter = lambda level, message: reported.append((level, message))
+        state["alive"] = False
+        state["spawn_ok"] = False
+
+        assert pool.run("true") == "ok\n"
+
+    assert pool.multiplexing_active is False
+    assert pool.multiplexing_unsupported is False
+    assert len(reported) == 1
+    level, message = reported[0]
+    assert level == "error"
+    assert "SSH MULTIPLEXING FAILED" in message
+    assert "could cause the account to be blocked" in message
+
+
+def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
+    """Helper commands outside the pool must multiplex too."""
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    resource = _key_auth_resource(tmp_path)
+
+    resolved = _resolved_ssh_config(resource.get_ssh_base_command())
+
+    assert resolved["controlmaster"] == "auto"
+    assert resolved["controlpath"].endswith("cm-testuser@example.com:22")
+
+    scp_command = resource.get_scp_base_command()
+    assert "ControlMaster=auto" in " ".join(scp_command)
+
+
+def test_pooled_commands_never_promote_themselves_to_master(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+    commands: list[list[str]] = []
+    state = {"alive": True}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)) as pool:
+        pool.run("true")
+
+    pooled = [
+        cmd
+        for cmd in commands
+        if cmd and cmd[0] == "ssh" and "-M" not in cmd and "-O" not in cmd
+    ]
+    assert pooled
+    for cmd in pooled:
+        assert "ControlMaster=no" in cmd
+
+
 def test_password_auth_is_reported_as_unsupported_not_failed():
     """Password auth cannot be multiplexed - that is not a ControlMaster failure.
 
@@ -615,37 +811,6 @@ def test_password_auth_is_reported_as_unsupported_not_failed():
     assert "password-based authentication" in message
 
 
-def test_control_master_failure_is_still_reported_as_an_error(monkeypatch, tmp_path):
-    """A key-auth deployment that cannot start a master really is broken."""
-    key_path = tmp_path / "id_test"
-    key_path.write_text("dummy-key")
-    os.chmod(key_path, 0o600)
-    ssh_resource = SSHConnectionResource(
-        host="example.com", user="testuser", key_path=str(key_path)
-    )
-
-    def fake_run(cmd, *args, **kwargs):
-        if "-M" in cmd:
-            return DummyResult(returncode=255, stderr="ControlMaster not permitted")
-        return DummyResult(returncode=0, stdout="ok\n")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    reports: list[tuple[str, str]] = []
-    pool = SSHConnectionPool(ssh_resource)
-    pool.reporter = lambda level, message: reports.append((level, message))
-    with pool:
-        pass
-
-    assert pool.multiplexing_unsupported is False
-    assert len(reports) == 1
-    level, message = reports[0]
-    assert level == "error"
-    assert "SSH MULTIPLEXING FAILED" in message
-    assert "could cause the account to be blocked" in message
-    assert "ControlMaster not permitted" in message
-
-
 def test_pool_reports_its_own_state_without_a_reporter(caplog):
     """Sensors, session setup and hetjob submission report without extra wiring.
 
@@ -666,18 +831,12 @@ def test_pool_reports_its_own_state_without_a_reporter(caplog):
 
 
 def test_healthy_pool_describes_no_degradation(monkeypatch, tmp_path):
-    key_path = tmp_path / "id_test"
-    key_path.write_text("dummy-key")
-    os.chmod(key_path, 0o600)
-    ssh_resource = SSHConnectionResource(
-        host="example.com", user="testuser", key_path=str(key_path)
-    )
-    monkeypatch.setattr(
-        subprocess, "run", lambda *a, **k: DummyResult(returncode=0, stdout="ok\n")
-    )
+    commands: list[list[str]] = []
+    state = {"alive": True}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
 
     reports: list[tuple[str, str]] = []
-    pool = SSHConnectionPool(ssh_resource)
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
     pool.reporter = lambda level, message: reports.append((level, message))
     with pool:
         assert pool.multiplexing_active is True

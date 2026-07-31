@@ -45,10 +45,13 @@ def normalize_slurm_state(state: str) -> str:
 
 
 def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
-    """Run SSH command via connection pool, return (stdout, stderr, returncode).
+    """Run a one-off SSH command, returning (stdout, stderr, returncode).
 
-    Note: This is a legacy function for compatibility.
-    New code should use SSHConnectionPool directly.
+    The command joins the shared ControlMaster socket via
+    ``get_ssh_base_command``, so it reuses an existing master and starts one if
+    none is running. Note: this is a legacy helper kept for compatibility. New
+    code should use SSHConnectionPool directly, which also health-checks the
+    master.
     """
     import shlex
     import subprocess
