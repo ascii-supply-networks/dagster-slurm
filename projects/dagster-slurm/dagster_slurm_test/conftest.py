@@ -1,9 +1,10 @@
 """Pytest configuration and fixtures."""
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
-from typing import Type
+from typing import Iterator, Type
 import base64
 
 
@@ -94,6 +95,30 @@ def _prepare_docker_slurm_paths():
         capture_output=True,
         text=True,
     )
+
+
+@pytest.fixture(autouse=True)
+def isolated_ssh_control_dir(monkeypatch) -> Iterator[Path]:
+    """Point the SSH control socket directory at a short, per-test path.
+
+    Unix domain sockets cap out near 104 bytes, and pytest's ``tmp_path`` is
+    already ~90 characters deep on CI runners (TMPDIR is /home/runner/work/_temp
+    there, not /tmp). Using it would push every control socket over the limit,
+    silently disabling the multiplexing these tests exist to verify.
+
+    Autouse, so tests that build SSH commands indirectly are covered too and
+    none of them write sockets into the developer's real ~/.ssh/dagster-slurm.
+
+    The base directory is chosen explicitly rather than from TMPDIR, which is
+    itself long on some CI images and would reintroduce the same problem.
+    """
+    base = Path("/tmp") if os.path.isdir("/tmp") else Path(tempfile.gettempdir())
+    directory = Path(tempfile.mkdtemp(prefix="dsctl", dir=str(base)))
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(directory))
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 @pytest.fixture

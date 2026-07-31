@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 from dagster_slurm.helpers import ssh_pool as ssh_pool_module
+from dagster_slurm.helpers.ssh_control import control_socket_path
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.ssh import SSHConnectionResource
 
@@ -628,7 +630,6 @@ def _master_lifecycle_stub(commands: list[list[str]], state: dict):
 
 def test_control_socket_is_shared_per_target(monkeypatch, tmp_path):
     """The socket name must not be random, or every pool re-handshakes."""
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
 
     resource = _key_auth_resource(tmp_path)
     first = SSHConnectionPool(resource).control_path
@@ -643,7 +644,6 @@ def test_control_socket_is_shared_per_target(monkeypatch, tmp_path):
 
 
 def test_password_auth_has_no_control_socket(tmp_path, monkeypatch):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     resource = SSHConnectionResource(host="example.com", user="testuser", password="s")
 
     assert resource.supports_multiplexing is False
@@ -652,7 +652,6 @@ def test_password_auth_has_no_control_socket(tmp_path, monkeypatch):
 
 
 def test_live_master_is_reused_instead_of_respawned(monkeypatch, tmp_path):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     commands: list[list[str]] = []
     state = {"alive": True}
     monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
@@ -664,7 +663,6 @@ def test_live_master_is_reused_instead_of_respawned(monkeypatch, tmp_path):
 
 
 def test_exit_leaves_master_alive_for_the_next_caller(monkeypatch, tmp_path):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     commands: list[list[str]] = []
     state = {"alive": False}
     monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
@@ -678,7 +676,6 @@ def test_exit_leaves_master_alive_for_the_next_caller(monkeypatch, tmp_path):
 
 
 def test_master_shutdown_can_be_forced_via_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     monkeypatch.setenv("DAGSTER_SLURM_SSH_CLOSE_MASTER_ON_EXIT", "1")
     commands: list[list[str]] = []
     state = {"alive": False}
@@ -692,7 +689,6 @@ def test_master_shutdown_can_be_forced_via_env(monkeypatch, tmp_path):
 
 
 def test_nested_context_does_not_start_a_second_master(monkeypatch, tmp_path):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     commands: list[list[str]] = []
     state = {"alive": False}
     monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
@@ -708,7 +704,6 @@ def test_nested_context_does_not_start_a_second_master(monkeypatch, tmp_path):
 
 def test_dead_master_is_restarted_before_the_next_command(monkeypatch, tmp_path):
     """A stale socket makes OpenSSH reconnect silently - detect and heal it."""
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     commands: list[list[str]] = []
     state = {"alive": False}
     monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
@@ -726,7 +721,6 @@ def test_dead_master_is_restarted_before_the_next_command(monkeypatch, tmp_path)
 
 
 def test_unrecoverable_master_loss_is_reported_loudly(monkeypatch, tmp_path):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     commands: list[list[str]] = []
     state = {"alive": False, "spawn_ok": True}
     monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
@@ -753,7 +747,6 @@ def test_unrecoverable_master_loss_is_reported_loudly(monkeypatch, tmp_path):
 
 def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
     """Helper commands outside the pool must multiplex too."""
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     resource = _key_auth_resource(tmp_path)
 
     resolved = _resolved_ssh_config(resource.get_ssh_base_command())
@@ -766,7 +759,6 @@ def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
 
 
 def test_pooled_commands_never_promote_themselves_to_master(monkeypatch, tmp_path):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
     commands: list[list[str]] = []
     state = {"alive": True}
     monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
@@ -843,3 +835,35 @@ def test_healthy_pool_describes_no_degradation(monkeypatch, tmp_path):
 
     assert pool.describe_multiplexing() is None
     assert reports == []
+
+
+def test_overlong_control_dir_is_reported_not_silently_ignored(monkeypatch, caplog):
+    """Losing multiplexing must never be silent - that is the whole point.
+
+    Unix sockets cap out near 104 bytes. A deep DAGSTER_SLURM_SSH_CONTROL_DIR
+    used to disable multiplexing without a word, which is precisely the failure
+    this package is meant to make impossible to miss.
+    """
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", "/tmp/" + ("d" * 120))
+
+    with caplog.at_level(logging.WARNING):
+        path = control_socket_path("testuser", "example.com", 22)
+
+    assert path is None
+    assert any("cannot be multiplexed" in record.message for record in caplog.records)
+
+
+def test_long_but_usable_control_dir_falls_back_to_a_digest(monkeypatch):
+    """A long-but-workable directory keeps multiplexing via a shortened name."""
+    directory = "/tmp/" + ("d" * 75)
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", directory)
+
+    try:
+        path = control_socket_path("testuser", "example.com", 22)
+        assert path is not None
+        assert path.startswith(f"{directory}/cm-")
+        assert len(path) < 100
+        # The readable name would not have fit, so a digest is used instead.
+        assert "@" not in path
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)

@@ -205,10 +205,9 @@ def test_local_message_reader_uses_configurable_closed_drain_timeout(tmp_path):
 
 
 def test_ssh_message_reader_tail_multiplexes_and_keeps_proxy_jump(
-    monkeypatch, tmp_path
+    isolated_ssh_control_dir, tmp_path
 ):
     """A tail without ControlMaster (or ProxyJump) is a direct login-node hit."""
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
 
     jump_key = tmp_path / "jump_key"
     jump_key.write_text("dummy-key")
@@ -233,7 +232,7 @@ def test_ssh_message_reader_tail_multiplexes_and_keeps_proxy_jump(
     joined = " ".join(cmd)
     assert "ProxyCommand=" in joined
     assert "ControlMaster=auto" in joined
-    assert f"ControlPath={tmp_path / 'control'}/cm-" in joined
+    assert f"ControlPath={isolated_ssh_control_dir}/cm-" in joined
 
 
 def test_ssh_message_reader_tracks_the_pool_control_path(tmp_path):

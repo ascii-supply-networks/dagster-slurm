@@ -25,6 +25,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from dagster import get_dagster_logger
+
 CONTROL_DIR_ENV = "DAGSTER_SLURM_SSH_CONTROL_DIR"
 CONTROL_PERSIST_ENV = "DAGSTER_SLURM_SSH_CONTROL_PERSIST"
 
@@ -34,6 +36,11 @@ DEFAULT_CONTROL_PERSIST = "10m"
 # AF_UNIX socket paths are capped near 104 bytes on macOS and 108 on Linux.
 # Stay well below the lower bound so OpenSSH never silently refuses the socket.
 MAX_CONTROL_PATH_LENGTH = 100
+
+#: Hex characters kept from the target digest when the readable socket name is
+#: too long. 48 bits is far more than enough to keep distinct hosts apart, and
+#: a shorter name leaves more headroom for deep control directories.
+DIGEST_LENGTH = 12
 
 _control_dir_ready: set[str] = set()
 
@@ -81,14 +88,34 @@ def control_socket_path(user: str, host: str, port: int) -> Optional[str]:
     """
     directory = ensure_control_dir()
     if directory is None:
+        get_dagster_logger().warning(
+            "Could not prepare the SSH control directory %s, so connections to "
+            "%s@%s cannot be multiplexed. Set %s to a writable directory.",
+            control_dir(),
+            user,
+            host,
+            CONTROL_DIR_ENV,
+        )
         return None
 
     target = f"{user}@{host}:{port}"
     path = directory / f"cm-{target}"
     if len(str(path)) >= MAX_CONTROL_PATH_LENGTH:
-        digest = hashlib.sha256(target.encode()).hexdigest()[:16]
+        digest = hashlib.sha256(target.encode()).hexdigest()[:DIGEST_LENGTH]
         path = directory / f"cm-{digest}"
     if len(str(path)) >= MAX_CONTROL_PATH_LENGTH:
+        # Silently giving up here would disable multiplexing exactly where it
+        # is hardest to notice, so say so instead.
+        get_dagster_logger().warning(
+            "SSH control socket path would exceed %s characters under %s, so "
+            "connections to %s@%s cannot be multiplexed. Point %s at a shorter "
+            "directory path.",
+            MAX_CONTROL_PATH_LENGTH,
+            directory,
+            user,
+            host,
+            CONTROL_DIR_ENV,
+        )
         return None
 
     return str(path)
