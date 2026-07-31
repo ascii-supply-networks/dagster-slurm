@@ -37,6 +37,9 @@ class FakePool:
         self.uploads: list[tuple[str, str]] = []
         self.control_path = "/tmp/ctrl"
         self.payload_exists = payload_exists
+        self.multiplexing_active = True
+        self.fallback_reason: str | None = None
+        self.on_multiplexing_lost = None
 
     def __enter__(self):
         return self
