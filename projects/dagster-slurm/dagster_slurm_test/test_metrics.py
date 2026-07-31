@@ -41,7 +41,9 @@ def test_parse_exit_code():
 
 def test_collect_and_emit_metrics_skips_contexts_without_output_metadata():
     class FakeMetricsCollector(SlurmMetricsCollector):
-        def collect_job_metrics(self, job_id: int, ssh_pool) -> SlurmJobMetrics:
+        def collect_job_metrics(
+            self, job_id: int, ssh_pool, sacct_output: str | None = None
+        ) -> SlurmJobMetrics:
             return SlurmJobMetrics(
                 job_id=job_id,
                 elapsed_seconds=123.0,
