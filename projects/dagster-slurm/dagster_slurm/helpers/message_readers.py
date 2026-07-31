@@ -16,6 +16,10 @@ from dagster_pipes import PipesDefaultMessageWriter
 if TYPE_CHECKING:  # pragma: no cover
     from .ssh_pool import SSHConnectionPool
 
+#: Upper bound for the degraded polling fallback, which pays a full SSH
+#: connection per round. Keeps log latency bounded without hammering SSH.
+MAX_FALLBACK_POLL_SECONDS = 15.0
+
 
 class _ClosedMessageTracker:
     """Track 'closed' messages to allow draining trailing stdio."""
@@ -193,20 +197,28 @@ class SSHMessageReader(PipesMessageReader):
         reconnect_interval: float = 2.0,
         max_reconnect_attempts: int = 10,
         ssh_pool: Optional["SSHConnectionPool"] = None,
+        max_reconnect_interval: float = 60.0,
+        healthy_session_seconds: float = 30.0,
     ):
         """Args:
         remote_path: Path to messages.jsonl on remote host
         ssh_config: SSHConnectionResource instance
         control_path: Path to ControlMaster socket (required for password auth)
-        reconnect_interval: Seconds to wait before reconnecting
-        max_reconnect_attempts: Maximum reconnection attempts.
+        reconnect_interval: Seconds to wait before the first reconnect
+        max_reconnect_attempts: Maximum consecutive failed reconnection attempts.
+        max_reconnect_interval: Upper bound for the exponential reconnect backoff.
+        healthy_session_seconds: Minimum lifetime for a tail session to count as
+            healthy. Shorter sessions keep incrementing the failure counter so a
+            flapping connection backs off instead of reconnecting forever.
 
         """
         self.remote_path = remote_path
         self.ssh_config = ssh_config
-        self.control_path = control_path
+        self._control_path = control_path
         self.reconnect_interval = reconnect_interval
         self.max_reconnect_attempts = max_reconnect_attempts
+        self.max_reconnect_interval = max_reconnect_interval
+        self.healthy_session_seconds = healthy_session_seconds
         self.logger = get_dagster_logger()
         self._proc: Optional[subprocess.Popen[str]] = None
         self._pexpect_child: Optional[Any] = None
@@ -219,6 +231,19 @@ class SSHMessageReader(PipesMessageReader):
         self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
         self._closed_message: Optional[Dict[str, Any]] = None
         self._closed_exception: Optional[Dict[str, Any]] = None
+
+    @property
+    def control_path(self) -> Optional[str]:
+        """Current ControlMaster socket, tracking the pool when one is attached.
+
+        The pool drops its socket when the master dies, and a reader still
+        pointing at the stale path would reconnect over a private connection
+        on every retry.
+        """
+        pool = self._ssh_pool
+        if pool is not None:
+            return getattr(pool, "control_path", self._control_path)
+        return self._control_path
 
     @contextmanager
     def read_messages(self, handler) -> Iterator[dict]:
@@ -305,6 +330,13 @@ class SSHMessageReader(PipesMessageReader):
             if isinstance(exception, dict):
                 self._closed_exception = exception
 
+    def _reconnect_delay(self, reconnect_count: int) -> float:
+        """Exponentially back off reconnects so a flapping tail cannot storm SSH."""
+        if reconnect_count <= 0:
+            return self.reconnect_interval
+        delay = self.reconnect_interval * (2 ** min(reconnect_count - 1, 6))
+        return min(delay, self.max_reconnect_interval)
+
     def _read_loop_with_reconnect(self, handler):
         """Read loop that automatically reconnects on failure.
 
@@ -318,6 +350,7 @@ class SSHMessageReader(PipesMessageReader):
         tracker = getattr(self, "_closed_tracker", _ClosedMessageTracker())
 
         while not self._stop_flag.is_set():
+            attempt_started = time.monotonic()
             try:
                 # Start tail process
                 ssh_cmd_optional = self._build_ssh_tail_command()
@@ -348,7 +381,6 @@ class SSHMessageReader(PipesMessageReader):
                 if self._requires_password_auth() and not self.control_path:
                     child = self._spawn_tail_with_password(ssh_cmd)
                     self._pexpect_child = child
-                    reconnect_count = 0
                     message_count = 0
 
                     for line in self._iter_pexpect_lines(child):
@@ -415,8 +447,6 @@ class SSHMessageReader(PipesMessageReader):
                         bufsize=1,
                     )
 
-                # Reset reconnect counter on successful start
-                reconnect_count = 0
                 message_count = 0
 
                 if self._proc and self._proc.stdout:
@@ -481,14 +511,28 @@ class SSHMessageReader(PipesMessageReader):
                     # )
                     break
 
-                # Unexpected exit - try to reconnect
-                if message_count > 0:
-                    # We received messages, so connection was working
+                # Unexpected exit - try to reconnect.  Progress alone is not
+                # enough to clear the failure counter: a tail that dies right
+                # after emitting a line would otherwise reconnect forever, and
+                # each reconnect is a full SSH handshake when the master is gone.
+                session_seconds = time.monotonic() - attempt_started
+                if (
+                    message_count > 0
+                    and session_seconds >= self.healthy_session_seconds
+                ):
                     self.logger.info(
-                        f"Tail process exited (code {return_code}). "
-                        f"Read {message_count} messages. Reconnecting..."
+                        f"Tail process exited (code {return_code}) after "
+                        f"{session_seconds:.0f}s. Read {message_count} messages. "
+                        "Reconnecting..."
                     )
-                    reconnect_count = 0  # Reset since we made progress
+                    reconnect_count = 0
+                elif message_count > 0:
+                    self.logger.warning(
+                        f"Tail process exited (code {return_code}) after only "
+                        f"{session_seconds:.0f}s. Read {message_count} messages. "
+                        "Treating the connection as unstable."
+                    )
+                    reconnect_count += 1
                 else:
                     # No messages received
                     self.logger.warning(
@@ -506,8 +550,9 @@ class SSHMessageReader(PipesMessageReader):
 
                 # Wait before reconnecting
                 if not self._stop_flag.is_set():
-                    self.logger.debug(f"Reconnecting in {self.reconnect_interval}s...")
-                    self._stop_flag.wait(self.reconnect_interval)
+                    delay = self._reconnect_delay(reconnect_count)
+                    self.logger.debug(f"Reconnecting in {delay}s...")
+                    self._stop_flag.wait(delay)
 
                 if tracker.maybe_flush(handler):
                     self._stop_flag.set()
@@ -528,7 +573,7 @@ class SSHMessageReader(PipesMessageReader):
                     break
 
                 if not self._stop_flag.is_set():
-                    self._stop_flag.wait(self.reconnect_interval)
+                    self._stop_flag.wait(self._reconnect_delay(reconnect_count))
 
                 if tracker.maybe_flush(handler):
                     self._stop_flag.set()
@@ -557,6 +602,9 @@ class SSHMessageReader(PipesMessageReader):
         quoted_path = shlex.quote(self.remote_path)
         next_line = self._fallback_next_line
         message_count = 0
+        # Each poll is a full SSH connection while the master is unavailable,
+        # so idle polling backs off instead of hammering the login node.
+        idle_rounds = 0
 
         self.logger.debug(
             "Polling %s for Pipes messages via SSH pool fallback",
@@ -618,8 +666,15 @@ class SSHMessageReader(PipesMessageReader):
                                 f"Error handling message: {e}", exc_info=True
                             )
                     next_line += processed_lines
+                    idle_rounds = 0
+                else:
+                    idle_rounds += 1
+            else:
+                idle_rounds += 1
 
-            self._stop_flag.wait(self.reconnect_interval)
+            self._stop_flag.wait(
+                min(self._reconnect_delay(idle_rounds), MAX_FALLBACK_POLL_SECONDS)
+            )
 
             if tracker.maybe_flush(handler):
                 self._stop_flag.set()
@@ -654,6 +709,13 @@ class SSHMessageReader(PipesMessageReader):
             List of command arguments for subprocess.Popen
 
         """
+        control_path = self.control_path
+
+        # Without a master, password auth would need an interactive prompt per
+        # reconnect; polling through the pool is cheaper and non-interactive.
+        if not control_path and self._requires_password_auth() and self._ssh_pool:
+            return None
+
         base_cmd = [
             "ssh",
             *self.ssh_config.get_common_ssh_opts(
@@ -662,24 +724,23 @@ class SSHMessageReader(PipesMessageReader):
             ),
             "-p",
             str(self.ssh_config.port),
+            # Reuse the pool's master when healthy, otherwise attach to (or
+            # start) the shared socket instead of opening a private connection.
+            *self.ssh_config.get_multiplexing_opts(
+                create=control_path is None,
+                control_path=control_path,
+            ),
         ]
 
-        # Use ControlMaster if available (required for password auth)
-        if self.control_path:
-            base_cmd.extend(
-                [
-                    "-o",
-                    f"ControlPath={self.control_path}",
-                    "-o",
-                    "ControlMaster=no",
-                ]
-            )
-            base_cmd.extend(self.ssh_config.get_key_auth_opts())
-            self.logger.debug(f"Using ControlMaster: {self.control_path}")
-        else:
-            if self._requires_password_auth() and self._ssh_pool:
-                return None
-            base_cmd.extend(self.ssh_config.get_auth_opts())
+        # ProxyJump options were previously omitted here, so jump-host setups
+        # bypassed the bastion entirely once the master was unavailable.
+        base_cmd.extend(self.ssh_config.get_proxy_command_opts())
+
+        # Covers key, password and inherited auth, and honours batch_mode.
+        base_cmd.extend(self.ssh_config.get_auth_opts())
+
+        if control_path:
+            self.logger.debug(f"Using ControlMaster: {control_path}")
 
         # Add target
         base_cmd.append(f"{self.ssh_config.user}@{self.ssh_config.host}")
