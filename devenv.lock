@@ -3,17 +3,17 @@
     "devenv": {
       "locked": {
         "dir": "src/modules",
-        "lastModified": 1778705847,
-        "narHash": "sha256-EQnZCy7r4VMO6KDoytxHBa0mFbM1D9g1kaDfs/s0YZA=",
+        "lastModified": 1785262761,
+        "narHash": "sha256-9ewHcbuOk7wvBRBM28g06MkjcEIWyqoD04QZKouiRKI=",
         "owner": "cachix",
         "repo": "devenv",
-        "rev": "ea3d94ac9d6bf6a1313773170122ca4e2ef5a0be",
+        "rev": "ffce215a42d09c6375c3d60dd9c4110438fc4d87",
         "type": "github"
       },
       "original": {
         "dir": "src/modules",
         "owner": "cachix",
-        "ref": "v2.1.2",
+        "ref": "v2.2",
         "repo": "devenv",
         "type": "github"
       }
@@ -82,16 +82,16 @@
     "stax-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784633401,
-        "narHash": "sha256-UBEj5osih4JzSqXtNI5pr+31XCvUfRuyiw/dv0dETug=",
+        "lastModified": 1785442580,
+        "narHash": "sha256-S6tUd7qXfShuBEohSZ/hxU5B7gucOlaHjBxPPvuxsMQ=",
         "owner": "cesarferreira",
         "repo": "stax",
-        "rev": "9fbc6572e0c98933d9655c0afa63d4e88450a48b",
+        "rev": "7de79991d024979b847f1443179532cc9fd646da",
         "type": "github"
       },
       "original": {
         "owner": "cesarferreira",
-        "ref": "v0.97.1",
+        "ref": "v0.102.0",
         "repo": "stax",
         "type": "github"
       }
