@@ -113,8 +113,7 @@ class SSHConnectionPool:
             ]
             cmd.extend(base_opts)
             cmd.extend(self.config.get_proxy_command_opts())
-            if self.config.uses_key_auth:
-                cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
+            cmd.extend(self.config.get_key_auth_opts())
             cmd.append(f"{self.config.user}@{self.config.host}")
 
             if self.config.uses_password_auth or (
@@ -133,11 +132,11 @@ class SSHConnectionPool:
             if returncode != 0:
                 raise RuntimeError(
                     "Failed to start SSH master: "
-                    f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}"
+                    f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
                 )
 
             self._master_started = True
-            auth_method = "key" if self.config.uses_key_auth else "password"
+            auth_method = "key" if self.config.uses_key_auth else "inherited"
             self.logger.debug(f"SSH ControlMaster started ({auth_method} auth)")
         except Exception as exc:
             self._fallback_mode = True
@@ -302,8 +301,7 @@ class SSHConnectionPool:
                     "-o",
                     "ControlMaster=no",
                 ]
-                if self.config.uses_key_auth:
-                    ssh_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
+                ssh_cmd.extend(self.config.get_key_auth_opts())
                 if needs_tty:
                     ssh_cmd.append("-tt")
                 ssh_cmd.extend(self.config.get_proxy_command_opts())
@@ -320,17 +318,7 @@ class SSHConnectionPool:
                     "-p",
                     str(self.config.port),
                 ]
-                if self.config.uses_key_auth:
-                    ssh_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
-                else:
-                    ssh_cmd.extend(
-                        [
-                            "-o",
-                            "NumberOfPasswordPrompts=3",
-                            "-o",
-                            "PreferredAuthentications=password,keyboard-interactive",
-                        ]
-                    )
+                ssh_cmd.extend(self.config.get_auth_opts())
                 if needs_tty:
                     ssh_cmd.append("-tt")
                 ssh_cmd.extend(self.config.get_proxy_command_opts())
@@ -382,7 +370,7 @@ class SSHConnectionPool:
                 raise RuntimeError(
                     f"SSH command failed (exit {returncode}): {cmd}\n"
                     f"stdout: {stdout}\n"
-                    f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}"
+                    f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
                 )
 
             return stdout
@@ -429,8 +417,7 @@ class SSHConnectionPool:
                     "-o",
                     "ControlMaster=no",
                 ]
-                if self.config.uses_key_auth:
-                    scp_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
+                scp_cmd.extend(self.config.get_key_auth_opts())
             else:
                 scp_cmd = [
                     "scp",
@@ -439,17 +426,7 @@ class SSHConnectionPool:
                     "-P",
                     str(self.config.port),
                 ]
-                if self.config.uses_key_auth:
-                    scp_cmd.extend(self.config.get_key_auth_opts(batch_mode=True))
-                else:
-                    scp_cmd.extend(
-                        [
-                            "-o",
-                            "PreferredAuthentications=password,keyboard-interactive",
-                            "-o",
-                            "NumberOfPasswordPrompts=3",
-                        ]
-                    )
+                scp_cmd.extend(self.config.get_auth_opts())
 
             scp_cmd.extend(self.config.get_proxy_command_opts())
             scp_cmd.extend(
@@ -489,5 +466,5 @@ class SSHConnectionPool:
             raise RuntimeError(
                 f"SCP upload failed: {local_path} -> {remote_path}\n"
                 f"stdout: {stdout}\n"
-                f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}"
+                f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
             )

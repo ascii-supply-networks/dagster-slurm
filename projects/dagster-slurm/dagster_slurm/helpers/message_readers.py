@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
 
 import shlex
 
@@ -674,46 +674,12 @@ class SSHMessageReader(PipesMessageReader):
                     "ControlMaster=no",
                 ]
             )
-            if self.ssh_config.uses_key_auth:
-                base_cmd.extend(self.ssh_config.get_key_auth_opts(batch_mode=True))
+            base_cmd.extend(self.ssh_config.get_key_auth_opts())
             self.logger.debug(f"Using ControlMaster: {self.control_path}")
-        elif self.ssh_config.uses_key_auth:
-            # Key auth - add key
-            base_cmd.extend(self.ssh_config.get_key_auth_opts(batch_mode=True))
         else:
-            if self._requires_password_auth():
-                if self._ssh_pool:
-                    return None
-                base_cmd.extend(
-                    [
-                        "-o",
-                        "PreferredAuthentications=password,keyboard-interactive",
-                        "-o",
-                        "NumberOfPasswordPrompts=3",
-                    ]
-                )
-            elif self.ssh_config.uses_key_auth:
-                key_path_opt = self.ssh_config.key_path
-                if not key_path_opt:
-                    raise RuntimeError(
-                        "SSH key authentication requires key_path to be set"
-                    )
-                key_path = cast(str, key_path_opt)
-                base_cmd.extend(
-                    [
-                        "-i",
-                        key_path,
-                        "-o",
-                        "IdentitiesOnly=yes",
-                        "-o",
-                        "BatchMode=yes",
-                    ]
-                )
-            else:
-                raise RuntimeError(
-                    "Password authentication requires ControlMaster. "
-                    "Pass control_path to SSHMessageReader constructor."
-                )
+            if self._requires_password_auth() and self._ssh_pool:
+                return None
+            base_cmd.extend(self.ssh_config.get_auth_opts())
 
         # Add target
         base_cmd.append(f"{self.ssh_config.user}@{self.ssh_config.host}")
@@ -737,11 +703,18 @@ class SSHMessageReader(PipesMessageReader):
             f"SSHMessageReader: {self.ssh_config.user}@{self.ssh_config.host}:"
             f"{self.remote_path}\n"
             f"ControlPath: {self.control_path or 'not set'}\n"
-            f"Auth method: {'key' if self.ssh_config.uses_key_auth else 'password'}\n\n"
+            f"Auth method: {self._auth_method_label()}\n\n"
             f"Check if the remote process is writing messages to the file:\n"
             f"  ssh {self.ssh_config.user}@{self.ssh_config.host} -p {self.ssh_config.port} "
             f"'cat {self.remote_path}'"
         )
+
+    def _auth_method_label(self) -> str:
+        if self.ssh_config.uses_key_auth:
+            return "key"
+        if self.ssh_config.uses_password_auth:
+            return "password"
+        return "inherited from ~/.ssh/config"
 
     def _requires_password_auth(self) -> bool:
         if self.ssh_config.uses_password_auth:

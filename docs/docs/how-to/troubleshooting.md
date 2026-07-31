@@ -21,6 +21,27 @@ Streaming ... via polling fallback (ControlMaster unavailable)
 
 This is expected and no changes are required unless you notice missing output.
 
+## How SSH settings interact with `~/.ssh/config`
+
+OpenSSH always prefers a command-line `-o` over anything in a config file, so every option `SSHConnectionResource` emits **overrides** your `~/.ssh/config` for that connection. This is deliberate: a Dagster daemon should behave the same on your laptop, a colleague's machine, and a CI runner, rather than depending on whatever happens to be in the operator's home directory.
+
+Where that is not what you want, each setting can be handed back to OpenSSH:
+
+| Setting         | Explicit (default)                                                                  | Deferred                                                         |
+| --------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Host-key policy | `host_key_checking="strict"` emits `StrictHostKeyChecking` and `UserKnownHostsFile` | `host_key_checking="inherit"` emits neither                      |
+| Authentication  | `key_path=...` or `password=...`                                                    | leave both unset — `ssh-agent`, `IdentityFile` and friends apply |
+| Prompting       | `batch_mode=True` emits `BatchMode=yes`                                             | `batch_mode=None` emits nothing                                  |
+| Jump host       | a `jump_host` with any of the above set becomes an explicit `ProxyCommand`          | a `jump_host` with none of them set becomes plain `ssh -J`       |
+
+A jump host is only rebuilt as an explicit `ProxyCommand` when the resource actually configures something for it — that is what makes the bastion's own key and host-key policy apply. If you configure nothing beyond host, user and port, it falls back to `-J` and your own bastion settings keep working.
+
+`extra_opts` is applied *before* the generated options, and OpenSSH takes the first value it sees, so it overrides anything above.
+
+:::caution BatchMode and key passphrases
+The default `batch_mode=True` refuses every interactive prompt, which is what a non-interactive daemon needs — otherwise a hidden passphrase prompt would hang the run forever. A passphrase-protected key therefore fails with `Permission denied` unless it is loaded into `ssh-agent`. Set `batch_mode=None` if you need OpenSSH to ask.
+:::
+
 ## Keep or delete remote run directories
 
 Every successful run now schedules an asynchronous cleanup on the edge node:
