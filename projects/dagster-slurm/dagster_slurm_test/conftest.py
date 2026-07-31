@@ -29,6 +29,18 @@ from loguru import logger
 
 DOCKER_SLURM_DEPLOYMENT_BASE_PATH = "/home/submitter/pipelines/deployments"
 DOCKER_SLURM_TEST_REMOTE_BASE = "/home/submitter/dagster_ci_runs"
+INTEGRATION_DAGSTER_HOME = (
+    Path(__file__).resolve().parents[3] / "zz_tmp" / "dagster_home"
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_integration_dagster_home(request, monkeypatch) -> None:
+    """Keep integration-run Dagster state inside the repository."""
+    if request.node.get_closest_marker("needs_slurm_docker") is None:
+        return
+    INTEGRATION_DAGSTER_HOME.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("DAGSTER_HOME", str(INTEGRATION_DAGSTER_HOME))
 
 
 def _docker_slurm_env(key_path: Path | None = None) -> Dict[str, str]:
@@ -45,6 +57,7 @@ def _docker_slurm_env(key_path: Path | None = None) -> Dict[str, str]:
         "SLURM_EDGE_NODE_JUMP_KEY": "",
         "SLURM_EDGE_NODE_OPTS_EXTRA": "",
         "SLURM_EDGE_NODE_HOST_KEY_CHECKING": "off",
+        "DAGSTER_HOME": str(INTEGRATION_DAGSTER_HOME),
         "SLURM_DEPLOYMENT_BASE_PATH": DOCKER_SLURM_DEPLOYMENT_BASE_PATH,
         "SLURM_SUPERCOMPUTER_SITE": "",
         "SLURM_SUPERCOMPUTER_PARTITION": "",
@@ -154,6 +167,7 @@ def slurm_compute_resource() -> ComputeResource:
         port=2223,
         user="submitter",
         password="submitter",
+        host_key_checking="off",
     )
 
     slurm = SlurmResource(
@@ -181,6 +195,7 @@ def slurm_resource_for_testing() -> SlurmResource:
         port=2223,
         user="submitter",
         password="submitter",
+        host_key_checking="off",
     )
 
     return SlurmResource(

@@ -20,7 +20,7 @@ from dagster import (
     get_dagster_logger,
 )
 from loguru import logger
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, model_validator
 
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
@@ -31,7 +31,11 @@ from ..launchers.ray import (
     _render_ray_port_assignments,
     _render_ray_process_cleanup,
 )
-from ..resources.slurm import SlurmResource
+from ..resources.slurm import (
+    SlurmResource,
+    normalize_signal_before_timeout,
+    validate_signal_before_timeout,
+)
 
 _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
 _REMOTE_LOCK_POLL_SECONDS = 2
@@ -179,6 +183,10 @@ class SlurmRunAllocationConfig(Config):
         default=None,
         description="Maximum allocation time, for example '04:00:00'.",
     )
+    signal_before_timeout: Optional[str] = Field(
+        default=None,
+        description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
+    )
     partition: Optional[str] = Field(
         default=None,
         description="Slurm partition override for the allocation.",
@@ -197,6 +205,17 @@ class SlurmRunAllocationConfig(Config):
         default="after_run",
         description="When to release the allocation. Only after_run is supported.",
     )
+
+    @model_validator(mode="after")
+    def _validate_signal_before_timeout(self) -> "SlurmRunAllocationConfig":
+        if self.time_limit is None and self.signal_before_timeout is not None:
+            normalize_signal_before_timeout(self.signal_before_timeout)
+        elif self.time_limit is not None:
+            validate_signal_before_timeout(
+                self.signal_before_timeout,
+                self.time_limit,
+            )
+        return self
 
 
 @dataclass(frozen=True)
@@ -228,6 +247,10 @@ class SlurmSessionResource(ConfigurableResource):
     slurm: "SlurmResource" = Field(description="Slurm cluster configuration")
     num_nodes: int = Field(default=2, description="Nodes in allocation")
     time_limit: str = Field(default="04:00:00", description="Max allocation time")
+    signal_before_timeout: Optional[str] = Field(
+        default=None,
+        description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
+    )
     partition: Optional[str] = Field(default=None, description="Override partition")
     max_concurrent_jobs: int = Field(default=10, description="Max concurrent srun jobs")
     enable_health_checks: bool = Field(
@@ -265,6 +288,19 @@ class SlurmSessionResource(ConfigurableResource):
     constraint: Optional[str] = Field(
         default=None, description="Constraint override for the session allocation"
     )
+
+    @model_validator(mode="after")
+    def _validate_signal_before_timeout(self) -> "SlurmSessionResource":
+        self._effective_signal_before_timeout()
+        return self
+
+    def _effective_signal_before_timeout(self) -> str | None:
+        return validate_signal_before_timeout(
+            self.signal_before_timeout
+            if self.signal_before_timeout is not None
+            else self.slurm.queue.signal_before_timeout,
+            self.time_limit,
+        )
 
     # Private attributes for state management
     _allocation: Optional["SlurmAllocation"] = PrivateAttr(default=None)
@@ -482,6 +518,9 @@ class SlurmSessionResource(ConfigurableResource):
             f"#SBATCH --time={self.time_limit}",
             "#SBATCH --output=allocation_%j.log",
         ]
+        signal_before_timeout = self._effective_signal_before_timeout()
+        if signal_before_timeout:
+            script_lines.append(f"#SBATCH --signal=B:{signal_before_timeout}")
 
         if partition:
             script_lines.append(f"#SBATCH --partition={partition}")

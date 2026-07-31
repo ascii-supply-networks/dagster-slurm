@@ -1,6 +1,8 @@
 """Tests for resources."""
 
+import os
 import shlex
+import signal
 import subprocess
 import threading
 import time
@@ -40,6 +42,7 @@ def _mock_slurm_resource(
     *,
     gpus_per_node: int = 0,
     remote_base: str = "/tmp/dagster_test",
+    signal_before_timeout: str | None = None,
 ) -> SlurmResource:
     ssh = SSHConnectionResource(
         host="localhost",
@@ -55,9 +58,54 @@ def _mock_slurm_resource(
             cpus=2,
             mem="1G",
             gpus_per_node=gpus_per_node,
+            signal_before_timeout=signal_before_timeout,
         ),
         remote_base=remote_base,
     )
+
+
+class _RecordingAllocationSSHPool:
+    def __init__(self, job_id: int):
+        self.job_id = job_id
+        self.commands: list[str] = []
+        self.writes: list[tuple[str, str]] = []
+
+    def write_file(self, content: str, remote_path: str) -> None:
+        self.writes.append((remote_path, content))
+
+    def run(self, cmd: str) -> str:
+        self.commands.append(cmd)
+        if ".allocation.lock" in cmd and "printf acquired" in cmd:
+            return "acquired"
+        if cmd.startswith("sbatch "):
+            return f"Submitted batch job {self.job_id}"
+        if cmd.startswith("cat ") and "nodes.txt" in cmd:
+            return "c1\n"
+        return ""
+
+
+def _render_allocation_script(
+    session: SlurmSessionResource,
+    monkeypatch,
+    *,
+    run_id: str,
+    job_id: int,
+) -> tuple[str, _RecordingAllocationSSHPool]:
+    ssh_pool = _RecordingAllocationSSHPool(job_id)
+    object.__setattr__(session, "_ssh_pool", cast(SSHConnectionPool, ssh_pool))
+    monkeypatch.setattr(session, "_resolve_run_id", lambda context: run_id)
+    monkeypatch.setattr(session, "_log_estimated_start_time", lambda job_id: None)
+    monkeypatch.setattr(
+        session,
+        "_wait_for_allocation_start",
+        lambda job_id, working_dir, timeout: None,
+    )
+
+    allocation = session._create_allocation(build_init_resource_context())
+
+    assert allocation.slurm_job_id == job_id
+    assert ssh_pool.writes
+    return ssh_pool.writes[0][1], ssh_pool
 
 
 @pytest.fixture
@@ -337,121 +385,44 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
 
 
 def test_slurm_session_allocation_honors_zero_gpu_override(monkeypatch):
-    class FakeSSHPool:
-        def __init__(self):
-            self.commands: list[str] = []
-            self.writes: list[tuple[str, str]] = []
-
-        def write_file(self, content: str, remote_path: str):
-            self.writes.append((remote_path, content))
-
-        def run(self, cmd: str):
-            self.commands.append(cmd)
-            if ".allocation.lock" in cmd and "printf acquired" in cmd:
-                return "acquired"
-            if cmd.startswith("sbatch "):
-                return "Submitted batch job 123"
-            if cmd.startswith("cat ") and "nodes.txt" in cmd:
-                return "c1\n"
-            return ""
-
     session = SlurmSessionResource(
         slurm=_mock_slurm_resource(gpus_per_node=4),
         gpus_per_node=0,
     )
-    fake_ssh_pool = FakeSSHPool()
-    object.__setattr__(session, "_ssh_pool", cast(SSHConnectionPool, fake_ssh_pool))
-    monkeypatch.setattr(session, "_resolve_run_id", lambda context: "run_with_no_gpus")
-    monkeypatch.setattr(session, "_log_estimated_start_time", lambda job_id: None)
-    monkeypatch.setattr(
+    allocation_script, _ = _render_allocation_script(
         session,
-        "_wait_for_allocation_start",
-        lambda job_id, working_dir, timeout: None,
+        monkeypatch,
+        run_id="run_with_no_gpus",
+        job_id=123,
     )
 
-    allocation = session._create_allocation(build_init_resource_context())
-
-    assert allocation.slurm_job_id == 123
-    assert fake_ssh_pool.writes
-    allocation_script = fake_ssh_pool.writes[0][1]
     assert "#SBATCH --gres=gpu:" not in allocation_script
 
 
 def test_slurm_session_allocation_inherits_queue_gpu_default(monkeypatch):
-    class FakeSSHPool:
-        def __init__(self):
-            self.commands: list[str] = []
-            self.writes: list[tuple[str, str]] = []
-
-        def write_file(self, content: str, remote_path: str):
-            self.writes.append((remote_path, content))
-
-        def run(self, cmd: str):
-            self.commands.append(cmd)
-            if ".allocation.lock" in cmd and "printf acquired" in cmd:
-                return "acquired"
-            if cmd.startswith("sbatch "):
-                return "Submitted batch job 124"
-            if cmd.startswith("cat ") and "nodes.txt" in cmd:
-                return "c1\n"
-            return ""
-
     session = SlurmSessionResource(slurm=_mock_slurm_resource(gpus_per_node=4))
-    fake_ssh_pool = FakeSSHPool()
-    object.__setattr__(session, "_ssh_pool", cast(SSHConnectionPool, fake_ssh_pool))
-    monkeypatch.setattr(session, "_resolve_run_id", lambda context: "run_with_gpus")
-    monkeypatch.setattr(session, "_log_estimated_start_time", lambda job_id: None)
-    monkeypatch.setattr(
+    allocation_script, _ = _render_allocation_script(
         session,
-        "_wait_for_allocation_start",
-        lambda job_id, working_dir, timeout: None,
+        monkeypatch,
+        run_id="run_with_gpus",
+        job_id=124,
     )
 
-    allocation = session._create_allocation(build_init_resource_context())
-
-    assert allocation.slurm_job_id == 124
-    assert fake_ssh_pool.writes
-    allocation_script = fake_ssh_pool.writes[0][1]
     assert "#SBATCH --gres=gpu:4" in allocation_script
 
 
 def test_slurm_session_allocation_quotes_remote_working_dir_paths(monkeypatch):
-    class FakeSSHPool:
-        def __init__(self):
-            self.commands: list[str] = []
-            self.writes: list[tuple[str, str]] = []
-
-        def write_file(self, content: str, remote_path: str):
-            self.writes.append((remote_path, content))
-
-        def run(self, cmd: str):
-            self.commands.append(cmd)
-            if ".allocation.lock" in cmd and "printf acquired" in cmd:
-                return "acquired"
-            if cmd.startswith("sbatch "):
-                return "Submitted batch job 125"
-            if cmd.startswith("cat ") and "nodes.txt" in cmd:
-                return "c1\n"
-            return ""
-
     remote_base = "/remote/base dir;touch pwned"
     run_id = "run_with_spaces"
     expected_working_dir = f"{remote_base}/allocations/dagster_{run_id}"
     session = SlurmSessionResource(slurm=_mock_slurm_resource(remote_base=remote_base))
-    fake_ssh_pool = FakeSSHPool()
-    object.__setattr__(session, "_ssh_pool", cast(SSHConnectionPool, fake_ssh_pool))
-    monkeypatch.setattr(session, "_resolve_run_id", lambda context: run_id)
-    monkeypatch.setattr(session, "_log_estimated_start_time", lambda job_id: None)
-    monkeypatch.setattr(
+    allocation_script, fake_ssh_pool = _render_allocation_script(
         session,
-        "_wait_for_allocation_start",
-        lambda job_id, working_dir, timeout: None,
+        monkeypatch,
+        run_id=run_id,
+        job_id=125,
     )
 
-    allocation = session._create_allocation(build_init_resource_context())
-
-    assert allocation.slurm_job_id == 125
-    allocation_script = fake_ssh_pool.writes[0][1]
     assert "#SBATCH --output=allocation_%j.log" in allocation_script
     assert f"working_dir={shlex.quote(expected_working_dir)}" in allocation_script
     assert 'hostname > "${working_dir}/head_node.txt"' in allocation_script
@@ -472,6 +443,157 @@ def test_slurm_session_allocation_quotes_remote_working_dir_paths(monkeypatch):
         f"cat {shlex.quote(f'{expected_working_dir}/nodes.txt')}"
         in fake_ssh_pool.commands
     )
+
+
+def test_asset_sbatch_command_emits_pre_timeout_signal(slurm_pipes_client):
+    command = slurm_pipes_client._build_sbatch_command(
+        job_name="checkpointing",
+        working_dir="/remote/run",
+        output_file="/remote/run/stdout",
+        error_file="/remote/run/stderr",
+        script_path="/remote/run/job.sh",
+        extra_opts={
+            "time_limit": "90",
+            "signal_before_timeout": "usr1@3600",
+        },
+    )
+
+    assert "--signal=B:USR1@3600" in shlex.split(command)
+
+
+def test_pre_timeout_signal_flushes_checkpoint_but_returns_nonzero(
+    slurm_pipes_client,
+    tmp_path: Path,
+):
+    ready_path = tmp_path / "ready"
+    checkpoint_path = tmp_path / "checkpoint"
+    workload_path = tmp_path / "workload.sh"
+    workload_path.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                "set -uo pipefail",
+                f"trap 'printf flushed > {shlex.quote(str(checkpoint_path))}; exit 0' USR1",
+                f"touch {shlex.quote(str(ready_path))}",
+                "while true; do sleep 0.05; done",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    marker_path = tmp_path / "signal_marker"
+    supervisor = slurm_pipes_client._build_pre_timeout_supervisor_script(
+        str(workload_path),
+        "USR1@120",
+        str(marker_path),
+    )
+    assert supervisor is not None
+    supervisor_path = tmp_path / "supervisor.sh"
+    supervisor_path.write_text(supervisor, encoding="utf-8")
+
+    process = subprocess.Popen(["bash", str(supervisor_path)])
+    deadline = time.monotonic() + 5
+    while not ready_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready_path.exists()
+
+    os.kill(process.pid, signal.SIGUSR1)
+    return_code = process.wait(timeout=5)
+
+    assert checkpoint_path.read_text(encoding="utf-8") == "flushed"
+    # The signal is recorded, but the workload's own exit code is preserved:
+    # "exited 0 after the signal" cannot distinguish a job that finished from
+    # one that gave up, so the Pipes session settles it instead.
+    assert return_code == 0
+    assert marker_path.read_text(encoding="utf-8").strip() == "USR1"
+
+
+def test_standalone_job_uses_pre_timeout_supervisor(
+    slurm_pipes_client,
+    monkeypatch,
+):
+    class RecordingSSHPool:
+        def __init__(self):
+            self.uploads: dict[str, str] = {}
+
+        def upload_file(self, local_path: str, remote_path: str) -> None:
+            self.uploads[remote_path] = Path(local_path).read_text(encoding="utf-8")
+
+        def run(self, command: str) -> str:
+            if command.startswith("sbatch "):
+                return "Submitted batch job 12345"
+            return ""
+
+    ssh_pool = RecordingSSHPool()
+    monkeypatch.setattr(
+        slurm_pipes_client,
+        "_wait_for_job_with_streaming",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(slurm_pipes_client, "_store_job_tags", lambda *args: None)
+    monkeypatch.setattr(
+        slurm_pipes_client,
+        "_store_supervisor_heartbeat",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        slurm_pipes_client,
+        "_log_estimated_start_time",
+        lambda *args: None,
+    )
+
+    slurm_pipes_client._execute_standalone(
+        execution_plan=ExecutionPlan(
+            kind=RuntimeVariant.SHELL,
+            payload=["#!/bin/bash", "echo workload"],
+            environment={},
+            resources={},
+        ),
+        run_dir="/remote/run",
+        ssh_pool=cast(SSHConnectionPool, ssh_pool),
+        message_reader=SimpleNamespace(),
+        extra_slurm_opts={"signal_before_timeout": "USR1@120"},
+    )
+
+    assert "_dagster_slurm_forward_signal" in ssh_pool.uploads["/remote/run/job.sh"]
+    assert (
+        ssh_pool.uploads["/remote/run/dagster_slurm_workload.sh"]
+        == "#!/bin/bash\necho workload"
+    )
+
+
+def test_untrappable_pre_timeout_signal_needs_no_supervisor(slurm_pipes_client):
+    assert (
+        slurm_pipes_client._build_pre_timeout_supervisor_script(
+            "/remote/workload.sh",
+            "KILL@120",
+            "/remote/run/.dagster_slurm_pre_timeout_signal",
+        )
+        is None
+    )
+
+
+def test_run_allocation_script_inherits_pre_timeout_signal(monkeypatch):
+    session = SlurmSessionResource(
+        slurm=_mock_slurm_resource(signal_before_timeout="TERM@120"),
+        time_limit="00:10:00",
+    )
+
+    allocation_script, _ = _render_allocation_script(
+        session,
+        monkeypatch,
+        run_id="run_with_signal",
+        job_id=126,
+    )
+
+    assert "#SBATCH --signal=B:TERM@120" in allocation_script
+
+
+def test_pre_timeout_signal_must_fit_within_walltime():
+    with pytest.raises(ValueError, match="must be shorter than time_limit"):
+        SlurmQueueConfig(
+            time_limit="00:02:00",
+            signal_before_timeout="TERM@120",
+        )
 
 
 def test_remote_lock_does_not_steal_stale_locks():
@@ -921,3 +1043,124 @@ def test_persistent_ray_cluster_start_is_remote_lock_safe(
 
     assert addresses == ["node-a:6379", "node-a:6379"]
     assert len(starts) == 1
+
+
+def _run_pre_timeout_supervisor(
+    slurm_pipes_client,
+    tmp_path: Path,
+    workload_body: list[str],
+    *,
+    send_signal: bool,
+) -> tuple[int, str | None]:
+    """Run the supervisor around a workload and report (exit code, marker)."""
+    ready_path = tmp_path / "ready"
+    workload_path = tmp_path / "workload.sh"
+    marker_path = tmp_path / "signal_marker"
+    workload_path.write_text(
+        "\n".join(
+            ["#!/bin/bash", "set -uo pipefail", f"touch {shlex.quote(str(ready_path))}"]
+            + workload_body
+        ),
+        encoding="utf-8",
+    )
+    supervisor = slurm_pipes_client._build_pre_timeout_supervisor_script(
+        str(workload_path), "USR1@120", str(marker_path)
+    )
+    assert supervisor is not None
+    supervisor_path = tmp_path / "supervisor.sh"
+    supervisor_path.write_text(supervisor, encoding="utf-8")
+
+    process = subprocess.Popen(["bash", str(supervisor_path)])
+    deadline = time.monotonic() + 5
+    while not ready_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready_path.exists()
+
+    if send_signal:
+        os.kill(process.pid, signal.SIGUSR1)
+
+    return_code = process.wait(timeout=10)
+    marker = (
+        marker_path.read_text(encoding="utf-8").strip()
+        if marker_path.exists()
+        else None
+    )
+    return return_code, marker
+
+
+def test_workload_finishing_after_the_signal_is_not_a_failure(
+    slurm_pipes_client, tmp_path: Path
+):
+    """A job that completes all its work inside the walltime margin succeeded.
+
+    Slurm may deliver the pre-timeout signal up to 60s earlier than requested,
+    so a job sized close to its walltime routinely finishes after being warned.
+    Forcing a failure there discarded complete, materialised runs.
+    """
+    return_code, marker = _run_pre_timeout_supervisor(
+        slurm_pipes_client,
+        tmp_path,
+        ['trap "" USR1', "sleep 0.4", "exit 0"],
+        send_signal=True,
+    )
+
+    assert return_code == 0
+    assert marker == "USR1"
+
+
+def test_workload_exit_code_survives_the_signal(slurm_pipes_client, tmp_path: Path):
+    """A specific failure code must not be replaced by 128+signum."""
+    return_code, marker = _run_pre_timeout_supervisor(
+        slurm_pipes_client,
+        tmp_path,
+        ['trap "exit 3" USR1', "sleep 5 & wait"],
+        send_signal=True,
+    )
+
+    assert return_code == 3
+    assert marker == "USR1"
+
+
+def test_workload_ignoring_the_signal_still_fails(slurm_pipes_client, tmp_path: Path):
+    """An unhandled signal kills the workload, which stays a failure."""
+    return_code, marker = _run_pre_timeout_supervisor(
+        slurm_pipes_client,
+        tmp_path,
+        ["sleep 30"],
+        send_signal=True,
+    )
+
+    assert return_code == 128 + signal.SIGUSR1
+    assert marker == "USR1"
+
+
+def test_no_marker_is_written_without_a_signal(slurm_pipes_client, tmp_path: Path):
+    return_code, marker = _run_pre_timeout_supervisor(
+        slurm_pipes_client,
+        tmp_path,
+        ["exit 0"],
+        send_signal=False,
+    )
+
+    assert return_code == 0
+    assert marker is None
+
+
+def test_pre_timeout_marker_is_reported_on_failure(slurm_pipes_client):
+    """A timed-out job should say so instead of just "did not complete"."""
+    pool = SimpleNamespace(run=lambda cmd, timeout=None: "TERM\n")
+
+    assert (
+        slurm_pipes_client._read_pre_timeout_signal(
+            cast(SSHConnectionPool, pool), "/remote/run"
+        )
+        == "TERM"
+    )
+
+    empty_pool = SimpleNamespace(run=lambda cmd, timeout=None: "")
+    assert (
+        slurm_pipes_client._read_pre_timeout_signal(
+            cast(SSHConnectionPool, empty_pool), "/remote/run"
+        )
+        is None
+    )
