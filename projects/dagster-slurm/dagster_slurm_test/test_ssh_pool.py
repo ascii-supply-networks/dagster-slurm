@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shlex
@@ -585,3 +586,101 @@ def test_batch_mode_failures_get_an_actionable_hint(tmp_path):
     assert "ssh-agent" in hint
     assert inheriting.auth_error_hint("Permission denied (publickey).") == ""
     assert strict.auth_error_hint("some unrelated failure") == ""
+
+
+def test_password_auth_is_reported_as_unsupported_not_failed():
+    """Password auth cannot be multiplexed - that is not a ControlMaster failure.
+
+    The early return happens before ControlMaster is ever attempted, so calling
+    it a failure was both untrue and unactionable: there is no ControlMaster
+    configuration to fix, and it fired on every run of such a deployment.
+    """
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", password="secret"
+    )
+    reports: list[tuple[str, str]] = []
+
+    pool = SSHConnectionPool(ssh_resource)
+    pool.reporter = lambda level, message: reports.append((level, message))
+    with pool:
+        pass
+
+    assert pool.multiplexing_unsupported is True
+    assert pool.multiplexing_active is False
+    assert len(reports) == 1
+    level, message = reports[0]
+    assert level == "warning"
+    assert "SSH MULTIPLEXING FAILED" not in message
+    assert "Stop the run" not in message
+    assert "password-based authentication" in message
+
+
+def test_control_master_failure_is_still_reported_as_an_error(monkeypatch, tmp_path):
+    """A key-auth deployment that cannot start a master really is broken."""
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    os.chmod(key_path, 0o600)
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+
+    def fake_run(cmd, *args, **kwargs):
+        if "-M" in cmd:
+            return DummyResult(returncode=255, stderr="ControlMaster not permitted")
+        return DummyResult(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    reports: list[tuple[str, str]] = []
+    pool = SSHConnectionPool(ssh_resource)
+    pool.reporter = lambda level, message: reports.append((level, message))
+    with pool:
+        pass
+
+    assert pool.multiplexing_unsupported is False
+    assert len(reports) == 1
+    level, message = reports[0]
+    assert level == "error"
+    assert "SSH MULTIPLEXING FAILED" in message
+    assert "could cause the account to be blocked" in message
+    assert "ControlMaster not permitted" in message
+
+
+def test_pool_reports_its_own_state_without_a_reporter(caplog):
+    """Sensors, session setup and hetjob submission report without extra wiring.
+
+    They create a pool and never call back into the Pipes client, so the report
+    has to come from the pool itself or it would never be emitted at all.
+    """
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", password="secret"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with SSHConnectionPool(ssh_resource):
+            pass
+
+    assert any(
+        "SSH multiplexing is unavailable" in record.message for record in caplog.records
+    )
+
+
+def test_healthy_pool_describes_no_degradation(monkeypatch, tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    os.chmod(key_path, 0o600)
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: DummyResult(returncode=0, stdout="ok\n")
+    )
+
+    reports: list[tuple[str, str]] = []
+    pool = SSHConnectionPool(ssh_resource)
+    pool.reporter = lambda level, message: reports.append((level, message))
+    with pool:
+        assert pool.multiplexing_active is True
+
+    assert pool.describe_multiplexing() is None
+    assert reports == []

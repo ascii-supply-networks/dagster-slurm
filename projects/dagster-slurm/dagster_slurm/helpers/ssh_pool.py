@@ -6,13 +6,31 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional, Pattern, Union, cast
+from typing import Callable, Optional, Pattern, Union, cast
 
 from dagster import get_dagster_logger
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..resources.ssh import SSHConnectionResource
+
+#: ControlMaster was expected to work and did not. Actionable, and serious.
+MULTIPLEXING_FAILED_MESSAGE = (
+    "SSH MULTIPLEXING FAILED for {host}. Dagster is falling back to one-off SSH "
+    "connections. Frequent Slurm polling and log streaming may overload the HPC "
+    "login node's SSH capacity and could cause the account to be blocked. "
+    "Stop the run and fix ControlMaster configuration. Reason: {reason}"
+)
+
+#: ControlMaster cannot apply to this configuration at all. Still worth saying,
+#: because the connection load is real, but nothing is broken and there is no
+#: ControlMaster configuration to fix.
+MULTIPLEXING_UNSUPPORTED_MESSAGE = (
+    "SSH multiplexing is unavailable for {host} because {reason}. OpenSSH cannot "
+    "share a connection that may still need to answer a password prompt, so every "
+    "command opens its own connection. HPC sites rate-limit that, so prefer "
+    "key-based authentication where the site allows it."
+)
 
 
 class SSHConnectionPool:
@@ -31,7 +49,12 @@ class SSHConnectionPool:
         self._master_started = False
         self._fallback_mode = False
         self._fallback_reason: Optional[str] = None
+        self._fallback_unsupported = False
         self._lock = threading.RLock()
+        #: Optional (level, message) sink. When unset the pool logs the state
+        #: itself, so every caller - sensors, session and hetjob setup included
+        #: - reports it without having to remember to.
+        self.reporter: Optional[Callable[[str, str], None]] = None
 
     def _collect_passwords(self) -> list[str]:
         passwords: list[str] = []
@@ -79,6 +102,50 @@ class SSHConnectionPool:
         """Why the pool is using one-off SSH connections, if known."""
         return self._fallback_reason
 
+    @property
+    def multiplexing_unsupported(self) -> bool:
+        """Whether multiplexing is impossible here rather than broken.
+
+        Password authentication cannot be multiplexed by OpenSSH at all, so
+        reporting it as a ControlMaster *failure* would be both untrue and
+        unactionable - and would fire on every single run of such a deployment.
+        """
+        return self._fallback_unsupported
+
+    def describe_multiplexing(self) -> Optional[tuple[str, str]]:
+        """Return (log level, message) describing a degraded state, if any."""
+        if not self._fallback_mode:
+            return None
+        reason = self._fallback_reason or "unknown ControlMaster startup failure"
+        if self._fallback_unsupported:
+            return (
+                "warning",
+                MULTIPLEXING_UNSUPPORTED_MESSAGE.format(
+                    host=self.config.host, reason=reason
+                ),
+            )
+        return (
+            "error",
+            MULTIPLEXING_FAILED_MESSAGE.format(host=self.config.host, reason=reason),
+        )
+
+    def _report_multiplexing_state(self) -> None:
+        """Report a degraded connection once, however the pool was created."""
+        state = self.describe_multiplexing()
+        if state is None:
+            return
+        level, message = state
+        if self.reporter is not None:
+            try:
+                self.reporter(level, message)
+                return
+            except Exception as exc:  # pragma: no cover - reporting must not fail
+                self.logger.debug(f"Multiplexing reporter failed: {exc}")
+        if level == "error":
+            self.logger.error(message)
+        else:
+            self.logger.warning(message)
+
     def __enter__(self):
         """Start SSH ControlMaster."""
         self.logger.debug("Starting SSH ControlMaster...")
@@ -90,6 +157,7 @@ class SSHConnectionPool:
             )
             self._fallback_mode = True
             self._fallback_reason = "SSH control socket path is unavailable"
+            self._report_multiplexing_state()
             return self
 
         if self.config.uses_password_auth or (
@@ -101,8 +169,10 @@ class SSHConnectionPool:
                 self.config.host,
             )
             self._fallback_mode = True
+            self._fallback_unsupported = True
             self._fallback_reason = "password-based authentication is configured for the target or jump host"
             self.control_path = None
+            self._report_multiplexing_state()
             return self
 
         # Build master connection command
@@ -154,11 +224,7 @@ class SSHConnectionPool:
             self._fallback_mode = True
             self._fallback_reason = str(exc)
             self.control_path = None
-            self.logger.warning(
-                "SSH ControlMaster unavailable (%s). Falling back to direct SSH "
-                "connections; performance may be reduced but functionality remains.",
-                exc,
-            )
+            self._report_multiplexing_state()
 
         return self
 

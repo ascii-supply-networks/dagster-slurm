@@ -254,6 +254,7 @@ class SlurmPipesClient(PipesClient):
 
         # Setup SSH connection pool
         ssh_pool = SSHConnectionPool(self.slurm.ssh)
+        self._attach_multiplexing_reporter(context, ssh_pool)
         self._ssh_pool = ssh_pool
         run_dir = None
         job_id = None
@@ -282,8 +283,6 @@ class SlurmPipesClient(PipesClient):
 
         try:
             with ssh_pool:
-                self._report_ssh_multiplexing_failure(context, ssh_pool)
-
                 # Store control path for log streaming
                 self._control_path = ssh_pool.control_path
 
@@ -731,29 +730,30 @@ class SlurmPipesClient(PipesClient):
 
         return PipesClientCompletedInvocation(session)
 
-    def _report_ssh_multiplexing_failure(
+    def _attach_multiplexing_reporter(
         self,
         context: AssetExecutionContext,
         ssh_pool: SSHConnectionPool,
     ) -> None:
-        """Surface unsafe one-off SSH fallback prominently in Dagster logs."""
-        if ssh_pool.multiplexing_active:
+        """Route the pool's connection-state report to this asset's logs.
+
+        The pool reports the state itself, so sensors, session setup and hetjob
+        submission are covered without repeating this call. Attaching a reporter
+        only changes *where* the message goes, so a run sees it on the step
+        rather than only in the daemon log.
+        """
+        if not hasattr(ssh_pool, "reporter"):
             return
 
-        reason = ssh_pool.fallback_reason or "unknown ControlMaster startup failure"
-        message = (
-            "SSH MULTIPLEXING FAILED for "
-            f"{self.slurm.ssh.host}. Dagster is falling back to one-off SSH "
-            "connections. Frequent Slurm polling and log streaming may overload "
-            "the HPC login node's SSH capacity and could cause the account to be "
-            f"blocked. Stop the run and fix ControlMaster configuration. Reason: {reason}"
-        )
-        context_log = getattr(context, "log", None)
-        log_error = getattr(context_log, "error", None)
-        if callable(log_error):
-            log_error(message)
-        else:
-            self.logger.error(message)
+        def report(level: str, message: str) -> None:
+            context_log = getattr(context, "log", None)
+            log_method = getattr(context_log, level, None)
+            if callable(log_method):
+                log_method(message)
+                return
+            getattr(self.logger, level, self.logger.error)(message)
+
+        ssh_pool.reporter = report
 
     def _is_run_canceling(self, op_context: Optional[OpExecutionContext]) -> bool:
         """Check if the Dagster run is being cancelled by the user.

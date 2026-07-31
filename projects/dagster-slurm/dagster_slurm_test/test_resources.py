@@ -668,48 +668,63 @@ def test_run_allocation_scope_rejects_disabled_session_execution():
         )
 
 
-def test_control_master_failure_is_loud_in_dagster_context():
+def test_multiplexing_report_is_routed_to_the_asset_log():
+    """The pool reports; the client only decides where the message lands."""
+    client = SlurmPipesClient(
+        slurm_resource=_mock_slurm_resource(),
+        launcher=BashLauncher(),
+    )
+    errors: list[str] = []
+    warnings: list[str] = []
+    context = SimpleNamespace(
+        log=SimpleNamespace(error=errors.append, warning=warnings.append)
+    )
+    ssh_pool = SimpleNamespace(reporter=None)
+
+    client._attach_multiplexing_reporter(
+        cast(Any, context),
+        cast(SSHConnectionPool, ssh_pool),
+    )
+    assert callable(ssh_pool.reporter)
+
+    ssh_pool.reporter("error", "SSH MULTIPLEXING FAILED for example.com")
+    ssh_pool.reporter("warning", "SSH multiplexing is unavailable for example.com")
+
+    assert errors == ["SSH MULTIPLEXING FAILED for example.com"]
+    assert warnings == ["SSH multiplexing is unavailable for example.com"]
+
+
+def test_healthy_pool_reports_nothing():
     client = SlurmPipesClient(
         slurm_resource=_mock_slurm_resource(),
         launcher=BashLauncher(),
     )
     errors: list[str] = []
     context = SimpleNamespace(log=SimpleNamespace(error=errors.append))
-    ssh_pool = SimpleNamespace(
-        multiplexing_active=False,
-        fallback_reason="ControlMaster not permitted",
-    )
-
-    client._report_ssh_multiplexing_failure(
+    ssh_pool = SSHConnectionPool(_mock_slurm_resource().ssh)
+    client._attach_multiplexing_reporter(
         cast(Any, context),
-        cast(SSHConnectionPool, ssh_pool),
+        ssh_pool,
     )
 
-    assert len(errors) == 1
-    assert "SSH MULTIPLEXING FAILED" in errors[0]
-    assert "may overload the HPC login node's SSH capacity" in errors[0]
-    assert "could cause the account to be blocked" in errors[0]
-    assert "ControlMaster not permitted" in errors[0]
-
-
-def test_active_control_master_does_not_emit_dagster_error():
-    client = SlurmPipesClient(
-        slurm_resource=_mock_slurm_resource(),
-        launcher=BashLauncher(),
-    )
-    errors: list[str] = []
-    context = SimpleNamespace(log=SimpleNamespace(error=errors.append))
-    ssh_pool = SimpleNamespace(
-        multiplexing_active=True,
-        fallback_reason=None,
-    )
-
-    client._report_ssh_multiplexing_failure(
-        cast(Any, context),
-        cast(SSHConnectionPool, ssh_pool),
-    )
-
+    # A pool that never degrades has nothing to describe.
+    ssh_pool._fallback_mode = False
+    assert ssh_pool.describe_multiplexing() is None
     assert errors == []
+
+
+def test_attaching_a_reporter_tolerates_test_doubles():
+    """Pool stubs without a reporter attribute must not break submission."""
+    client = SlurmPipesClient(
+        slurm_resource=_mock_slurm_resource(),
+        launcher=BashLauncher(),
+    )
+    context = SimpleNamespace(log=SimpleNamespace(error=lambda _message: None))
+
+    client._attach_multiplexing_reporter(
+        cast(Any, context),
+        cast(SSHConnectionPool, SimpleNamespace()),
+    )
 
 
 def test_final_log_fallback_shell_quotes_remote_paths():
