@@ -8,6 +8,8 @@ from typing import Literal
 from dagster import ConfigurableResource
 from pydantic import Field, field_validator, model_validator
 
+from ..helpers.ssh_control import control_socket_path, multiplexing_opts
+
 HostKeyChecking = Literal["off", "accept-new", "strict", "inherit"]
 
 
@@ -204,6 +206,50 @@ class SSHConnectionResource(ConfigurableResource):
         )
 
     @property
+    def supports_multiplexing(self) -> bool:
+        """Whether SSH ControlMaster can be used for this connection.
+
+        Password prompts cannot be answered by a multiplexed client, so
+        interactive authentication (on the target or on the jump host) forces
+        one-off connections.
+        """
+        if self.uses_password_auth:
+            return False
+        if self.jump_host and self.jump_host.uses_password_auth:
+            return False
+        return True
+
+    @property
+    def multiplexing_unsupported_reason(self) -> str | None:
+        """Explain why ControlMaster is unavailable, if it is."""
+        if self.supports_multiplexing:
+            return None
+        return "password-based authentication is configured for the target or jump host"
+
+    def control_socket_path(self) -> str | None:
+        """Return the shared ControlMaster socket path for this connection."""
+        if not self.supports_multiplexing:
+            return None
+        return control_socket_path(self.user, self.host, self.port)
+
+    def get_multiplexing_opts(
+        self,
+        *,
+        create: bool = True,
+        control_path: str | None = None,
+    ) -> list[str]:
+        """Build ControlMaster options pointing at the shared control socket.
+
+        Args:
+            create: Allow the command to become the master when none exists.
+                Callers that manage the master themselves pass False.
+            control_path: Override the socket path (used by the connection pool).
+
+        """
+        path = control_path if control_path is not None else self.control_socket_path()
+        return multiplexing_opts(path, create=create)
+
+    @property
     def requires_tty(self) -> bool:
         """Return True when the resource explicitly requires a TTY."""
         if self.force_tty:
@@ -317,6 +363,9 @@ class SSHConnectionResource(ConfigurableResource):
         command = [
             "ssh",
             *jump.get_common_ssh_opts(),
+            # Multiplex the jump hop as well, otherwise every fallback command
+            # re-authenticates against the bastion.
+            *jump.get_multiplexing_opts(create=True),
             "-p",
             str(jump.port),
             *jump.get_key_auth_opts(),
@@ -508,6 +557,9 @@ class SSHConnectionResource(ConfigurableResource):
         return [
             "ssh",
             *base_opts,
+            # Attach to (or create) the shared control socket so one-off
+            # commands never pay a full handshake of their own.
+            *self.get_multiplexing_opts(create=True),
             *proxy_opts,
             "-p",
             str(self.port),
@@ -523,6 +575,7 @@ class SSHConnectionResource(ConfigurableResource):
         return [
             "scp",
             *base_opts,
+            *self.get_multiplexing_opts(create=True),
             *proxy_opts,
             "-P",
             str(self.port),
