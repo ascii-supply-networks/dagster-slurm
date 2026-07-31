@@ -1110,6 +1110,37 @@ class SlurmPipesClient(PipesClient):
         state = self._get_job_state(job_id, ssh_pool)
         return state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}
 
+    def _await_stream_quiescence(
+        self,
+        streamed_lines: dict,
+        streamed_lock: Any,
+        job_id: int,
+        *,
+        timeout: float,
+        interval: float = 0.05,
+    ) -> None:
+        """Wait until the log-streaming threads stop producing new lines.
+
+        Two consecutive quiet samples mean the tail has drained. Bounded by
+        `timeout` so a stuck stream cannot hold the step open.
+        """
+        deadline = time.time() + timeout
+        quiet_samples = 0
+        with streamed_lock:
+            previous = sum(streamed_lines.values())
+
+        while time.time() < deadline:
+            self._interruptible_sleep(interval, job_id)
+            with streamed_lock:
+                current = sum(streamed_lines.values())
+            if current == previous:
+                quiet_samples += 1
+                if quiet_samples >= 2:
+                    return
+            else:
+                quiet_samples = 0
+                previous = current
+
     @staticmethod
     def _bounded_poll_sleep(
         poll_interval: float, elapsed: float, poll_timeout: float
@@ -3377,8 +3408,16 @@ exit "$_dagster_slurm_workload_exit"
                             f"Job {job_id} reached terminal state: {state}"
                         )
 
-                        # Give streaming threads time to catch up
-                        self._interruptible_sleep(2, job_id)
+                        # Let the log-streaming threads catch up. Waiting for
+                        # them to go quiet returns as soon as the tail has
+                        # drained, instead of spending a flat two seconds on
+                        # every job that finishes.
+                        self._await_stream_quiescence(
+                            streamed_lines,
+                            streamed_lock,
+                            job_id,
+                            timeout=2.0,
+                        )
 
                         if state in {"CANCELLED", "PREEMPTED"}:
                             self.logger.warning(f"Job {job_id} was {state}")

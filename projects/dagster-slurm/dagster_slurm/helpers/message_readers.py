@@ -271,17 +271,16 @@ class SSHMessageReader(PipesMessageReader):
                 PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: True,
             }
 
-            # Wait for messages - keep reader alive while job runs
-            # The reader will stop when we set the stop flag
-            time.sleep(1.0)
+            # Keep the reader alive until the payload says it is done. Once
+            # 'closed' has been parsed there is nothing further to wait for,
+            # so this returns immediately in the normal case instead of
+            # spending a flat second on every single job.
+            self._await_closed(timeout=1.0)
 
         finally:
-            # Signal stop
-            # self.logger.debug("Stopping message reader...")
+            # Drain before signalling stop, again bounded rather than flat.
+            self._await_closed(timeout=1.0)
             self._stop_flag.set()
-
-            # Give time for final messages to be flushed
-            time.sleep(1.0)
 
             # Terminate tail process
             if self._proc:
@@ -310,6 +309,23 @@ class SSHMessageReader(PipesMessageReader):
                 self._closed_tracker.maybe_flush(handler, force=True)
 
             self.logger.debug("Message reader stopped")
+
+    def _await_closed(self, timeout: float, interval: float = 0.02) -> bool:
+        """Wait until the reader has parsed the payload's 'closed' message.
+
+        Returns True as soon as it lands, so a job whose payload already
+        finished does not pay a fixed shutdown delay. Falls through after
+        `timeout` for payloads that never open a Pipes session.
+        """
+        if self._closed_message is not None:
+            return True
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._closed_message is not None:
+                return True
+            if self._stop_flag.wait(interval):
+                break
+        return self._closed_message is not None
 
     @property
     def closed_message(self) -> Optional[Dict[str, Any]]:
