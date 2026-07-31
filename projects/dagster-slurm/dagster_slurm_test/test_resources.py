@@ -668,6 +668,50 @@ def test_run_allocation_scope_rejects_disabled_session_execution():
         )
 
 
+def test_control_master_failure_is_loud_in_dagster_context():
+    client = SlurmPipesClient(
+        slurm_resource=_mock_slurm_resource(),
+        launcher=BashLauncher(),
+    )
+    errors: list[str] = []
+    context = SimpleNamespace(log=SimpleNamespace(error=errors.append))
+    ssh_pool = SimpleNamespace(
+        multiplexing_active=False,
+        fallback_reason="ControlMaster not permitted",
+    )
+
+    client._report_ssh_multiplexing_failure(
+        cast(Any, context),
+        cast(SSHConnectionPool, ssh_pool),
+    )
+
+    assert len(errors) == 1
+    assert "SSH MULTIPLEXING FAILED" in errors[0]
+    assert "may overload the HPC login node's SSH capacity" in errors[0]
+    assert "could cause the account to be blocked" in errors[0]
+    assert "ControlMaster not permitted" in errors[0]
+
+
+def test_active_control_master_does_not_emit_dagster_error():
+    client = SlurmPipesClient(
+        slurm_resource=_mock_slurm_resource(),
+        launcher=BashLauncher(),
+    )
+    errors: list[str] = []
+    context = SimpleNamespace(log=SimpleNamespace(error=errors.append))
+    ssh_pool = SimpleNamespace(
+        multiplexing_active=True,
+        fallback_reason=None,
+    )
+
+    client._report_ssh_multiplexing_failure(
+        cast(Any, context),
+        cast(SSHConnectionPool, ssh_pool),
+    )
+
+    assert errors == []
+
+
 def test_final_log_fallback_shell_quotes_remote_paths():
     slurm = _mock_slurm_resource()
     client = SlurmPipesClient(slurm_resource=slurm, launcher=BashLauncher())

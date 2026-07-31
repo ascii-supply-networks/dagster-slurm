@@ -213,6 +213,8 @@ def test_control_master_fallback_key_auth(monkeypatch, tmp_path):
 
     with pool:
         assert pool._fallback_mode is True
+        assert pool.multiplexing_active is False
+        assert "ControlMaster not permitted" in (pool.fallback_reason or "")
         assert pool.control_path is None
 
         output = pool.run("echo fallback")
@@ -259,6 +261,8 @@ def test_control_master_failure_password_fallback(monkeypatch, tmp_path):
 
     with pool:
         assert pool._fallback_mode is True
+        assert pool.multiplexing_active is False
+        assert "password-based authentication" in (pool.fallback_reason or "")
         output = pool.run("echo hi")
         assert output == "ok\n"
 
