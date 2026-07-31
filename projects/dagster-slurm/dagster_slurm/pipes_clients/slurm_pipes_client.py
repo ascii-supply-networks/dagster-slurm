@@ -76,6 +76,12 @@ class _JoinableThread(Protocol):
 _TerminableProcessT = TypeVar("_TerminableProcessT", bound=_TerminableProcess)
 
 
+#: Log polling cadence used only when ControlMaster is unavailable and each
+#: round costs a full SSH connection.
+_FALLBACK_STREAM_POLL_SECONDS = 1.0
+_FALLBACK_STREAM_POLL_MAX_SECONDS = 15.0
+
+
 def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
     """Join a remote path and keep it inside the remote pack workspace root."""
     if posixpath.isabs(relative_path):
@@ -173,7 +179,6 @@ class SlurmPipesClient(PipesClient):
         self.pack_platform = pack_platform
         self.logger = get_dagster_logger()
         self.metrics_collector = SlurmMetricsCollector()
-        self._control_path = None
         self._current_job_id = None
         self._ssh_pool = None
         self._cancellation_requested = False
@@ -283,9 +288,6 @@ class SlurmPipesClient(PipesClient):
 
         try:
             with ssh_pool:
-                # Store control path for log streaming
-                self._control_path = ssh_pool.control_path
-
                 remote_base = self._get_remote_base(run_id, ssh_pool)
                 op_ctx = context.op_execution_context
 
@@ -730,6 +732,16 @@ class SlurmPipesClient(PipesClient):
 
         return PipesClientCompletedInvocation(session)
 
+    @property
+    def _control_path(self) -> Optional[str]:
+        """Live ControlMaster socket, or None once the pool degraded.
+
+        Read through to the pool so log-streaming commands started later never
+        keep pointing at a socket the pool has already abandoned.
+        """
+        pool = self._ssh_pool
+        return getattr(pool, "control_path", None) if pool is not None else None
+
     def _attach_multiplexing_reporter(
         self,
         context: AssetExecutionContext,
@@ -739,8 +751,8 @@ class SlurmPipesClient(PipesClient):
 
         The pool reports the state itself, so sensors, session setup and hetjob
         submission are covered without repeating this call. Attaching a reporter
-        only changes *where* the message goes, so a run sees it on the step
-        rather than only in the daemon log.
+        only changes *where* the message goes - including a master lost mid-run,
+        which travels the same path as one that never started.
         """
         if not hasattr(ssh_pool, "reporter"):
             return
@@ -2972,6 +2984,9 @@ exit "$_dagster_slurm_workload_exit"
                 if tail_cmd is None:
                     next_line = 1
                     quoted_path = shlex.quote(remote_path)
+                    # Every poll is a full SSH connection in this mode, so an
+                    # idle log file must not be polled once per second.
+                    poll_interval = _FALLBACK_STREAM_POLL_SECONDS
                     self.logger.debug(
                         "Streaming %s via polling fallback (ControlMaster unavailable)",
                         remote_path,
@@ -2990,22 +3005,26 @@ exit "$_dagster_slurm_workload_exit"
                                 )
                             break
 
-                        if output:
-                            lines = output.splitlines()
-                            if lines:
-                                for line in lines:
-                                    if not line.strip():
-                                        continue
-                                    dashboard_log_emitter.process_line(line)
-                                    output_stream.write(f"{prefix}{line}\n")
-                                output_stream.flush()
-                                with streamed_lock:
-                                    streamed_lines[stream_key] += sum(
-                                        1 for line in lines if line.strip()
-                                    )
-                                next_line += len(lines)
+                        lines = output.splitlines() if output else []
+                        if lines:
+                            for line in lines:
+                                if not line.strip():
+                                    continue
+                                dashboard_log_emitter.process_line(line)
+                                output_stream.write(f"{prefix}{line}\n")
+                            output_stream.flush()
+                            with streamed_lock:
+                                streamed_lines[stream_key] += sum(
+                                    1 for line in lines if line.strip()
+                                )
+                            next_line += len(lines)
+                            poll_interval = _FALLBACK_STREAM_POLL_SECONDS
+                        else:
+                            poll_interval = min(
+                                poll_interval * 2, _FALLBACK_STREAM_POLL_MAX_SECONDS
+                            )
 
-                        stop_streaming.wait(1.0)
+                        stop_streaming.wait(poll_interval)
                     return
 
                 with stream_processes_lock:
@@ -3063,6 +3082,10 @@ exit "$_dagster_slurm_workload_exit"
         start_time = time.time()
         last_state = None
         state_check_count = 0
+        # Status polling costs one SSH command plus a squeue/sacct query per
+        # round. Start gently and back off while nothing changes; any state
+        # transition resets the cadence so completion is still noticed quickly.
+        poll_interval = self.slurm.status_poll_interval_seconds
 
         # Poll job status.
         # The outer try/finally handles cleanup.  Each iteration of the
@@ -3130,8 +3153,12 @@ exit "$_dagster_slurm_workload_exit"
                             )
                         last_state = state
                         state_check_count = 0
+                        poll_interval = self.slurm.status_poll_interval_seconds
                     else:
                         state_check_count += 1
+                        poll_interval = self.slurm.next_status_poll_interval(
+                            poll_interval
+                        )
 
                     # Handle empty state
                     if not state:
@@ -3220,7 +3247,7 @@ exit "$_dagster_slurm_workload_exit"
                         self.logger.debug(
                             f"Job {job_id} is completing, waiting for terminal state..."
                         )
-                        self._interruptible_sleep(1, job_id)
+                        self._interruptible_sleep(poll_interval, job_id)
                         continue
 
                     if state in TERMINAL_STATES:
@@ -3298,7 +3325,7 @@ exit "$_dagster_slurm_workload_exit"
                         self.logger.info(f"Job {job_id} completed successfully")
                         break
 
-                    self._interruptible_sleep(1, job_id)
+                    self._interruptible_sleep(poll_interval, job_id)
                     continue
 
                 except Exception as exc:
@@ -3429,29 +3456,30 @@ exit "$_dagster_slurm_workload_exit"
             if requires_password or jump_requires_password:
                 return None
 
+        control_path = self._control_path
         cmd = [
             "ssh",
-            *self.slurm.ssh.get_common_ssh_opts(),
+            # A `tail -F` connection idles between log lines; without keepalives
+            # a firewall can drop it and force an endless reconnect loop.
+            *self.slurm.ssh.get_common_ssh_opts(
+                server_alive_interval=30,
+                server_alive_count_max=6,
+            ),
             "-p",
             str(self.slurm.ssh.port),
+            # Share the pool's master when it is healthy, otherwise attach to
+            # (or start) the shared socket rather than opening a private one.
+            *self.slurm.ssh.get_multiplexing_opts(
+                create=control_path is None,
+                control_path=control_path,
+            ),
         ]
 
         # Include proxy jump options if configured
         cmd.extend(self.slurm.ssh.get_proxy_command_opts())
 
-        # Use ControlMaster if available
-        if self._control_path:
-            cmd.extend(
-                [
-                    "-o",
-                    f"ControlPath={self._control_path}",
-                    "-o",
-                    "ControlMaster=no",
-                ]
-            )
-            cmd.extend(self.slurm.ssh.get_key_auth_opts())
-        else:
-            cmd.extend(self.slurm.ssh.get_auth_opts())
+        # ControlMaster options are already set above; only auth is left.
+        cmd.extend(self.slurm.ssh.get_auth_opts())
 
         cmd.append(f"{self.slurm.ssh.user}@{self.slurm.ssh.host}")
 

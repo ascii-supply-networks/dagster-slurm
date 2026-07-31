@@ -5,21 +5,52 @@ title: Troubleshooting connectivity & logs
 
 The `dagster-slurm` presets hide most SSH and Slurm plumbing, but a few deployment-specific quirks are worth calling out. The tips below keep log streaming responsive, explain how to retain run artefacts for inspection, and silence noisy shells in the Docker sandbox.
 
-## Log streaming without ControlMaster
+## SSH connection multiplexing
 
-Some HPC centres (e.g. VSC-5) disable SSH ControlMaster sockets. When that happens the Dagster code location automatically falls back to password-aware connections and polls the remote log files. You still get live output, but a few tweaks make the experience smoother:
+Supervising a Slurm job is chatty: status polling, log tailing and Pipes message reading all talk to the login node. Without multiplexing every one of those would be a separate DNS lookup, TCP handshake and authentication. HPC centres rate-limit — and increasingly block — accounts that do this, so `dagster-slurm` funnels **every** SSH and SCP invocation through a single shared OpenSSH ControlMaster connection per `user@host:port`.
 
-- Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your site restricts socket paths. The default is `~/.ssh/dagster-slurm`; point it to a writable directory on shared machines.
-- Leave `SLURM_EDGE_NODE_FORCE_TTY=false` unless your cluster explicitly requires a TTY. Password-based sessions request one automatically.
-- If you rely on jump hosts or OTP prompts, prefer a local `~/.ssh/config` entry. The same configuration is reused by the Pipes log tailer.
+The socket lives at `~/.ssh/dagster-slurm/cm-<user>@<host>:<port>` and is deliberately **not** per-process: a master started by one Dagster step, sensor tick or CLI helper is reused by the next one. It is left running after a run finishes and expires on its own via `ControlPersist`.
 
-When the connection falls back to polling, Dagster prints a debug line such as:
+| Variable                                 | Default                | Purpose                                                                                                 |
+| ---------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DAGSTER_SLURM_SSH_CONTROL_DIR`          | `~/.ssh/dagster-slurm` | Where control sockets are stored. Point it at a writable directory if your site restricts socket paths. |
+| `DAGSTER_SLURM_SSH_CONTROL_PERSIST`      | `10m`                  | How long an idle master stays alive after the last command.                                             |
+| `DAGSTER_SLURM_SSH_CLOSE_MASTER_ON_EXIT` | unset                  | Set to `1` to tear the master down when a run ends instead of leaving it for reuse.                     |
+
+Note that these command-line options take precedence over `~/.ssh/config`, so a `ControlPath` entry there will not change what `dagster-slurm` does — it only affects SSH commands you run yourself.
+
+### When multiplexing is unavailable
+
+Password-based authentication (on the target or on a jump host) cannot be multiplexed, because a shared connection has nowhere to answer a prompt. In that case Dagster falls back to one-off connections and polls the remote log files instead of tailing them, printing a debug line such as:
 
 ```
 Streaming ... via polling fallback (ControlMaster unavailable)
 ```
 
-This is expected and no changes are required unless you notice missing output.
+Use key-based authentication wherever possible. If the master fails to start, or dies mid-run and cannot be restarted, Dagster logs a run-level error:
+
+```
+SSH MULTIPLEXING FAILED for <host>. Dagster is falling back to one-off SSH connections. ...
+```
+
+Treat that as actionable: stop the run and fix the SSH configuration before the connection rate becomes a problem for the site.
+
+Other tips:
+
+- Leave `SLURM_EDGE_NODE_FORCE_TTY=false` unless your cluster explicitly requires a TTY. Password-based sessions request one automatically.
+- If you rely on jump hosts or OTP prompts, prefer a local `~/.ssh/config` entry. The same configuration is reused by the Pipes log tailer.
+
+## Slurm status polling cadence
+
+While a job runs, its state is polled over the shared connection. The interval starts at `status_poll_interval_seconds` and backs off by `status_poll_backoff_factor` up to `status_poll_max_interval_seconds` for as long as the state stays unchanged; any state transition resets it, so completion is still noticed promptly.
+
+| Variable                         | Field                              | Default |
+| -------------------------------- | ---------------------------------- | ------- |
+| `SLURM_STATUS_POLL_INTERVAL`     | `status_poll_interval_seconds`     | `2.0`   |
+| `SLURM_STATUS_POLL_MAX_INTERVAL` | `status_poll_max_interval_seconds` | `15.0`  |
+| `SLURM_STATUS_POLL_BACKOFF`      | `status_poll_backoff_factor`       | `1.5`   |
+
+Raise these if your site asks for fewer `squeue`/`sacct` queries; lower them if you need tighter completion latency and the site is happy with the load.
 
 ## How SSH settings interact with `~/.ssh/config`
 

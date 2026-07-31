@@ -19,6 +19,25 @@ _SLURM_TIME_LIMIT_RE = re.compile(
 )
 
 
+def _status_poll_env() -> dict[str, float]:
+    """Read Slurm status polling cadence overrides from the environment."""
+    env_by_field = {
+        "status_poll_interval_seconds": "SLURM_STATUS_POLL_INTERVAL",
+        "status_poll_max_interval_seconds": "SLURM_STATUS_POLL_MAX_INTERVAL",
+        "status_poll_backoff_factor": "SLURM_STATUS_POLL_BACKOFF",
+    }
+    overrides: dict[str, float] = {}
+    for field, var_name in env_by_field.items():
+        raw = os.getenv(var_name, "").strip()
+        if not raw:
+            continue
+        try:
+            overrides[field] = float(raw)
+        except ValueError:
+            raise ValueError(f"{var_name} must be a number, got: {raw!r}") from None
+    return overrides
+
+
 def _optional_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
     """Return an optional string from the environment.
 
@@ -161,7 +180,45 @@ class SlurmResource(ConfigurableResource):
         default=None,
         description="Base directory on remote system (default: ~/pipelines/<run_id>)",
     )
+    status_poll_interval_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "Seconds between the first Slurm status checks of a job. Each check "
+            "is an SSH command plus a squeue/sacct query on the login node, so "
+            "HPC sites usually ask for more than one per second."
+        ),
+    )
+    status_poll_max_interval_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        description=(
+            "Upper bound for the status polling interval. The interval grows "
+            "while the job state stays unchanged and resets on every change."
+        ),
+    )
+    status_poll_backoff_factor: float = Field(
+        default=1.5,
+        ge=1.0,
+        description="Growth factor applied to the status polling interval.",
+    )
     _auth_provider: Optional[object] = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _validate_status_polling(self) -> "SlurmResource":
+        if self.status_poll_max_interval_seconds < self.status_poll_interval_seconds:
+            raise ValueError(
+                "status_poll_max_interval_seconds must be >= "
+                "status_poll_interval_seconds"
+            )
+        return self
+
+    def next_status_poll_interval(self, current: float) -> float:
+        """Return the next status polling interval after an unchanged state."""
+        return min(
+            current * self.status_poll_backoff_factor,
+            self.status_poll_max_interval_seconds,
+        )
 
     def set_auth_provider(self, provider: object) -> "SlurmResource":
         self._auth_provider = provider
@@ -194,6 +251,7 @@ class SlurmResource(ConfigurableResource):
                 signal_before_timeout=_optional_env("SLURM_SIGNAL_BEFORE_TIMEOUT"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
+            **_status_poll_env(),
         )
 
     @classmethod
@@ -215,4 +273,5 @@ class SlurmResource(ConfigurableResource):
                 signal_before_timeout=_optional_env("SLURM_SIGNAL_BEFORE_TIMEOUT"),
             ),
             remote_base=os.getenv("SLURM_REMOTE_BASE", "/home/submitter"),
+            **_status_poll_env(),
         )

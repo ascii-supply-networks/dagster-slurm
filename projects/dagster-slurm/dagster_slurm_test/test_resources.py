@@ -1223,3 +1223,64 @@ def test_pre_timeout_marker_is_reported_on_failure(slurm_pipes_client):
         )
         is None
     )
+
+
+def test_status_poll_interval_backs_off_and_is_capped():
+    slurm = SlurmResource(
+        ssh=SSHConnectionResource(host="h", user="u", password="p"),
+        queue=SlurmQueueConfig(),
+        status_poll_interval_seconds=2.0,
+        status_poll_max_interval_seconds=8.0,
+        status_poll_backoff_factor=2.0,
+    )
+
+    assert slurm.next_status_poll_interval(2.0) == 4.0
+    assert slurm.next_status_poll_interval(4.0) == 8.0
+    assert slurm.next_status_poll_interval(8.0) == 8.0
+
+
+def test_status_poll_max_interval_must_not_be_below_the_floor():
+    with pytest.raises(Exception, match="status_poll_max_interval_seconds"):
+        SlurmResource(
+            ssh=SSHConnectionResource(host="h", user="u", password="p"),
+            queue=SlurmQueueConfig(),
+            status_poll_interval_seconds=10.0,
+            status_poll_max_interval_seconds=5.0,
+        )
+
+
+def test_status_poll_cadence_reads_environment(monkeypatch):
+    monkeypatch.setenv("SLURM_SSH_HOST", "example.com")
+    monkeypatch.setenv("SLURM_SSH_USER", "testuser")
+    monkeypatch.setenv("SLURM_SSH_PASSWORD", "secret")
+    monkeypatch.setenv("SLURM_STATUS_POLL_INTERVAL", "5")
+    monkeypatch.setenv("SLURM_STATUS_POLL_MAX_INTERVAL", "30")
+    monkeypatch.setenv("SLURM_STATUS_POLL_BACKOFF", "2")
+
+    slurm = SlurmResource.from_env()
+
+    assert slurm.status_poll_interval_seconds == 5.0
+    assert slurm.status_poll_max_interval_seconds == 30.0
+    assert slurm.status_poll_backoff_factor == 2.0
+
+
+def test_multiplexing_loss_mid_run_is_reported_to_dagster():
+    """A master lost mid-run escalates through the same reporter as a failed start."""
+    client = SlurmPipesClient(
+        slurm_resource=_mock_slurm_resource(),
+        launcher=BashLauncher(),
+    )
+    errors: list[str] = []
+    context = SimpleNamespace(log=SimpleNamespace(error=errors.append))
+    ssh_pool = SimpleNamespace(reporter=None)
+
+    client._attach_multiplexing_reporter(
+        cast(Any, context),
+        cast(SSHConnectionPool, ssh_pool),
+    )
+
+    assert errors == []
+    assert callable(ssh_pool.reporter)
+
+    ssh_pool.reporter("error", "SSH MULTIPLEXING FAILED for example.com")
+    assert errors == ["SSH MULTIPLEXING FAILED for example.com"]
