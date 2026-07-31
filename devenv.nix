@@ -23,14 +23,14 @@
   };
   selectedPython = pythonPackages.${pythonVersion} or (throw "Unsupported Python version: ${pythonVersion}");
   ghStack = pkgs.gh-stack.overrideAttrs (old: {
-    version = "0.0.8";
+    version = "0.1.0";
     src = pkgs.fetchFromGitHub {
       owner = "github";
       repo = "gh-stack";
-      tag = "v0.0.8";
-      hash = "sha256-N0S/zQ+JsFAKzC780m3lwiZgsCoCjtcWgDB/MJy6jYU=";
+      tag = "v0.1.0";
+      hash = "sha256-48JkOeqbvHlCZ2u3LnwJymw55xMQWLTPJLDbV44clGI=";
     };
-    vendorHash = "sha256-CxsHRC5AbApxcsavyaBmoPtTUHy5jlaQ7BLvgE6mJJ4=";
+    vendorHash = "sha256-0Xtr/MOpX4u5GnbRdNxKPA0GpSzi8PIbVc9MmP05De4=";
     nativeCheckInputs = (old.nativeCheckInputs or []) ++ [pkgs.gitMinimal];
   });
 
