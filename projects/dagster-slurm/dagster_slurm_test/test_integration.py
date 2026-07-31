@@ -311,11 +311,17 @@ with open_dagster_pipes() as context:
 
 
 @pytest.mark.needs_slurm_docker
-def test_pre_timeout_signal_flushes_checkpoint_and_fails_slurm_job(
+def test_pre_timeout_signal_is_delivered_and_preserves_the_exit_code(
     slurm_resource_for_testing,
     slurm_cluster_ready,
 ):
-    """A successful signal handler must not turn an overrun into success."""
+    """Slurm's B: signal reaches the workload, which still owns the outcome.
+
+    "Exited 0 after the signal" covers both a workload that finished all its
+    work and one that flushed a partial checkpoint and gave up, so the wrapper
+    cannot classify it. It records the signal and propagates the real exit code;
+    the Pipes session decides whether the work actually completed.
+    """
     run_token = uuid.uuid4().hex
     run_dir = f"{slurm_resource_for_testing.remote_base}/signal-test-{run_token}"
     ready_path = f"{run_dir}/ready"
@@ -358,40 +364,48 @@ def test_pre_timeout_signal_flushes_checkpoint_and_fails_slurm_job(
     try:
         with SSHConnectionPool(slurm_resource_for_testing.ssh) as ssh_pool:
             ssh_pool.run(f"mkdir -p {shlex.quote(run_dir)}")
-            with pytest.raises(RuntimeError, match="did not complete successfully"):
-                job_id = client._execute_standalone(
-                    execution_plan=ExecutionPlan(
-                        kind=RuntimeVariant.SHELL,
-                        payload=[
-                            "#!/bin/bash",
-                            "set -uo pipefail",
-                            f"trap 'printf flushed > {shlex.quote(checkpoint_path)}; exit 0' USR1",
-                            f"touch {shlex.quote(ready_path)}",
-                            "while true; do sleep 0.1; done",
-                        ],
-                        environment={},
-                        resources={},
-                    ),
-                    run_dir=run_dir,
-                    ssh_pool=ssh_pool,
-                    message_reader=SimpleNamespace(),
-                    extra_slurm_opts={
-                        "partition": "normal",
-                        "time_limit": "00:02:00",
-                        "signal_before_timeout": "USR1@60",
-                    },
-                    poll_timeout=60,
-                )
+            job_id = client._execute_standalone(
+                execution_plan=ExecutionPlan(
+                    kind=RuntimeVariant.SHELL,
+                    payload=[
+                        "#!/bin/bash",
+                        "set -uo pipefail",
+                        f"trap 'printf flushed > {shlex.quote(checkpoint_path)}; exit 0' USR1",
+                        f"touch {shlex.quote(ready_path)}",
+                        "while true; do sleep 0.1; done",
+                    ],
+                    environment={},
+                    resources={},
+                ),
+                run_dir=run_dir,
+                ssh_pool=ssh_pool,
+                message_reader=SimpleNamespace(),
+                extra_slurm_opts={
+                    "partition": "normal",
+                    "time_limit": "00:02:00",
+                    "signal_before_timeout": "USR1@60",
+                },
+                poll_timeout=60,
+            )
 
             job_id = client._current_job_id
             assert job_id is not None
+
+            # The signal handler ran, so Slurm really delivered B:USR1.
             assert (
                 ssh_pool.run(f"cat {shlex.quote(checkpoint_path)}").strip() == "flushed"
             )
+
+            # The supervisor recorded it for the Dagster side to report...
+            marker_path = client._pre_timeout_marker_path(run_dir)
+            assert ssh_pool.run(f"cat {shlex.quote(marker_path)}").strip() == "USR1"
+            assert client._read_pre_timeout_signal(ssh_pool, run_dir) == "USR1"
+
+            # ...without overwriting the workload's own exit code.
             exit_code = ssh_pool.run(
                 f"sacct -j {job_id}.batch -n -P -o ExitCode"
             ).strip()
-            assert int(exit_code.split(":", maxsplit=1)[0]) > 0
+            assert int(exit_code.split(":", maxsplit=1)[0]) == 0
     finally:
         signal_thread.join(timeout=5)
         with SSHConnectionPool(slurm_resource_for_testing.ssh) as cleanup_pool:
