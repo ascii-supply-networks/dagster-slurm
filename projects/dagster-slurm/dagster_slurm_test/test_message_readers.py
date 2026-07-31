@@ -1,5 +1,7 @@
 import io
 import json
+from types import SimpleNamespace
+from typing import Any, cast
 
 from dagster_slurm.helpers.message_readers import LocalMessageReader, SSHMessageReader
 from dagster_slurm.resources.ssh import SSHConnectionResource
@@ -63,6 +65,10 @@ def test_ssh_message_reader_resumes_after_reconnect(monkeypatch, tmp_path):
         remote_path="/tmp/messages.jsonl",
         ssh_config=ssh_resource,
         max_reconnect_attempts=1,
+        # The fake tail exits instantly; treat that as a healthy session so
+        # these tests exercise resume/close handling rather than the new
+        # flapping-connection backoff.
+        healthy_session_seconds=0.0,
     )
     handler = _CollectingHandler()
 
@@ -125,6 +131,10 @@ def test_ssh_message_reader_tracks_closed_exception(monkeypatch, tmp_path):
         remote_path="/tmp/messages.jsonl",
         ssh_config=ssh_resource,
         max_reconnect_attempts=1,
+        # The fake tail exits instantly; treat that as a healthy session so
+        # these tests exercise resume/close handling rather than the new
+        # flapping-connection backoff.
+        healthy_session_seconds=0.0,
     )
     handler = _CollectingHandler()
 
@@ -192,3 +202,106 @@ def test_local_message_reader_uses_configurable_closed_drain_timeout(tmp_path):
         "opened",
         "closed",
     ]
+
+
+def test_ssh_message_reader_tail_multiplexes_and_keeps_proxy_jump(
+    monkeypatch, tmp_path
+):
+    """A tail without ControlMaster (or ProxyJump) is a direct login-node hit."""
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_CONTROL_DIR", str(tmp_path / "control"))
+
+    jump_key = tmp_path / "jump_key"
+    jump_key.write_text("dummy-key")
+    target_key = tmp_path / "target_key"
+    target_key.write_text("dummy-key")
+
+    jump = SSHConnectionResource(
+        host="jump.example.com", user="jumpuser", key_path=str(jump_key)
+    )
+    target = SSHConnectionResource(
+        host="target.example.com",
+        user="testuser",
+        key_path=str(target_key),
+        jump_host=jump,
+    )
+
+    cmd = SSHMessageReader(
+        remote_path="/tmp/messages.jsonl", ssh_config=target
+    )._build_ssh_tail_command()
+
+    assert cmd is not None
+    joined = " ".join(cmd)
+    assert "ProxyCommand=" in joined
+    assert "ControlMaster=auto" in joined
+    assert f"ControlPath={tmp_path / 'control'}/cm-" in joined
+
+
+def test_ssh_message_reader_tracks_the_pool_control_path(tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+
+    pool = SimpleNamespace(control_path="/tmp/pool-socket")
+    reader = SSHMessageReader(
+        remote_path="/tmp/messages.jsonl",
+        ssh_config=ssh_resource,
+        control_path="/tmp/stale-socket",
+        ssh_pool=cast(Any, pool),
+    )
+
+    assert reader.control_path == "/tmp/pool-socket"
+
+    # Once the pool abandons its socket the reader must stop using it too.
+    pool.control_path = None
+    assert reader.control_path is None
+
+
+def test_reconnect_delay_backs_off_and_is_capped(tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    reader = SSHMessageReader(
+        remote_path="/tmp/messages.jsonl",
+        ssh_config=SSHConnectionResource(
+            host="example.com", user="testuser", key_path=str(key_path)
+        ),
+        reconnect_interval=2.0,
+        max_reconnect_interval=10.0,
+    )
+
+    assert reader._reconnect_delay(0) == 2.0
+    assert reader._reconnect_delay(1) == 2.0
+    assert reader._reconnect_delay(2) == 4.0
+    assert reader._reconnect_delay(3) == 8.0
+    assert reader._reconnect_delay(9) == 10.0
+
+
+def test_flapping_tail_stops_reconnecting(monkeypatch, tmp_path):
+    """A tail that dies right after each message must not reconnect forever."""
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    ssh_resource = SSHConnectionResource(
+        host="example.com", user="testuser", key_path=str(key_path)
+    )
+
+    attempts = {"count": 0}
+
+    def fake_popen(cmd, stdout=None, stderr=None, text=None, bufsize=None):
+        del cmd, stdout, stderr, text, bufsize
+        attempts["count"] += 1
+        return _FakeProcess([json.dumps({"method": "opened", "params": {}}) + "\n"])
+
+    monkeypatch.setattr(
+        "dagster_slurm.helpers.message_readers.subprocess.Popen", fake_popen
+    )
+
+    reader = SSHMessageReader(
+        remote_path="/tmp/messages.jsonl",
+        ssh_config=ssh_resource,
+        reconnect_interval=0.0,
+        max_reconnect_attempts=3,
+    )
+    reader._read_loop_with_reconnect(_CollectingHandler())
+
+    assert attempts["count"] == 3
