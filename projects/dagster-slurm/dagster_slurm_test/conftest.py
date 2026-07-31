@@ -44,6 +44,7 @@ def _docker_slurm_env(key_path: Path | None = None) -> Dict[str, str]:
         "SLURM_EDGE_NODE_JUMP_PASSWORD": "",
         "SLURM_EDGE_NODE_JUMP_KEY": "",
         "SLURM_EDGE_NODE_OPTS_EXTRA": "",
+        "SLURM_EDGE_NODE_HOST_KEY_CHECKING": "off",
         "SLURM_DEPLOYMENT_BASE_PATH": DOCKER_SLURM_DEPLOYMENT_BASE_PATH,
         "SLURM_SUPERCOMPUTER_SITE": "",
         "SLURM_SUPERCOMPUTER_PARTITION": "",

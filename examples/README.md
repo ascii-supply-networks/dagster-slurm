@@ -43,6 +43,7 @@ SLURM_EDGE_NODE_HOST=localhost
 SLURM_EDGE_NODE_PORT=2223
 SLURM_EDGE_NODE_USER=submitter
 SLURM_EDGE_NODE_PASSWORD=submitter
+SLURM_EDGE_NODE_HOST_KEY_CHECKING=off
 SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 ```
 
@@ -76,6 +77,7 @@ SLURM_EDGE_NODE_HOST=localhost
 SLURM_EDGE_NODE_PORT=2223
 SLURM_EDGE_NODE_USER=submitter
 SLURM_EDGE_NODE_PASSWORD=submitter
+SLURM_EDGE_NODE_HOST_KEY_CHECKING=off
 SLURM_DEPLOYMENT_BASE_PATH=/home/submitter/pipelines/deployments
 
 # see the JQ command below for dynamically setting this

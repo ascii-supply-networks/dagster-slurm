@@ -2,11 +2,13 @@
 
 import os
 import shlex
-from typing import List, Optional
 from pathlib import Path
+from typing import Literal
 
 from dagster import ConfigurableResource
-from pydantic import Field, model_validator, field_validator
+from pydantic import Field, field_validator, model_validator
+
+HostKeyChecking = Literal["off", "accept-new", "strict"]
 
 
 class SSHConnectionResource(ConfigurableResource):
@@ -62,10 +64,10 @@ class SSHConnectionResource(ConfigurableResource):
     user: str = Field(description="SSH username")
 
     # Authentication (XOR - exactly one must be provided)
-    key_path: Optional[str] = Field(
+    key_path: str | None = Field(
         default=None, description="Path to SSH private key (for key-based auth)"
     )
-    password: Optional[str] = Field(
+    password: str | None = Field(
         default=None, description="SSH password (for password-based auth)"
     )
 
@@ -75,31 +77,51 @@ class SSHConnectionResource(ConfigurableResource):
         description="Allocate a pseudo-terminal (-t flag) for remote commands. "
         "Useful for commands that require an interactive terminal.",
     )
-    post_login_command: Optional[str] = Field(
+    post_login_command: str | None = Field(
         default=None,
         description="A command to be executed immediately after login, before the main command. "
         "Example: 'vsc5' or 'sudo -u otheruser'.",
     )
-    jump_host: Optional["SSHConnectionResource"] = Field(
+    jump_host: "SSHConnectionResource | None" = Field(
         default=None,
         description="An optional SSH connection to use as a proxy jump host (-J equivalent). "
         "The jump host may use key- or password-based authentication.",
     )
-    extra_opts: List[str] = Field(
+    extra_opts: list[str] = Field(
         default_factory=list,
         description="Additional raw SSH options (e.g., ['-o', 'Compression=yes'])",
+    )
+    host_key_checking: HostKeyChecking = Field(
+        default="strict",
+        description="SSH host-key verification policy.",
+    )
+    known_hosts_file: str | None = Field(
+        default=None,
+        description=(
+            "Known-hosts file. Defaults to /dev/null when verification is off "
+            "and ~/.ssh/known_hosts otherwise."
+        ),
     )
 
     @field_validator("key_path")
     @classmethod
-    def _expand_and_validate_key_path(cls, v: Optional[str]) -> Optional[str]:
+    def _expand_and_validate_key_path(cls, v: str | None) -> str | None:
         """Expands user directory and checks for existence."""
         if v is None:
             return None
-        expanded_path = Path(os.path.expanduser(v))
+        expanded_path = Path(v).expanduser()
         if not expanded_path.exists():
             raise ValueError(f"SSH key not found at path: {expanded_path}")
         return str(expanded_path)
+
+    @field_validator("known_hosts_file")
+    @classmethod
+    def _expand_known_hosts_file(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not v.strip():
+            raise ValueError("known_hosts_file cannot be empty")
+        return str(Path(v).expanduser())
 
     @model_validator(mode="after")
     def _validate_config(self):
@@ -157,6 +179,8 @@ class SSHConnectionResource(ConfigurableResource):
         - ``SLURM_SSH_FORCE_TTY`` - Set to 'true' or '1' to enable tty allocation (optional)
         - ``SLURM_SSH_POST_LOGIN_COMMAND`` - Post-login command string (optional)
         - ``SLURM_SSH_OPTS_EXTRA`` - Additional SSH options (optional)
+        - ``SLURM_SSH_HOST_KEY_CHECKING`` - off, accept-new, or strict (optional)
+        - ``SLURM_SSH_KNOWN_HOSTS_FILE`` - Known-hosts file path (optional)
 
         For proxy jumps, use the ``_JUMP`` suffix for jump host variables (e.g.,
         ``SLURM_SSH_JUMP_HOST``, ``SLURM_SSH_JUMP_USER``, etc.).
@@ -184,6 +208,10 @@ class SSHConnectionResource(ConfigurableResource):
             "yes",
         )
         post_login_command = os.getenv(f"{prefix}_POST_LOGIN_COMMAND")
+        host_key_checking = (
+            os.getenv(f"{prefix}_HOST_KEY_CHECKING", "strict").strip().lower()
+        )
+        known_hosts_file = os.getenv(f"{prefix}_KNOWN_HOSTS_FILE")
 
         jump_host = None
         # Only look for a jump host at the top level to prevent recursion
@@ -200,20 +228,43 @@ class SSHConnectionResource(ConfigurableResource):
             extra_opts=extra_opts,
             force_tty=force_tty,
             post_login_command=post_login_command,
+            host_key_checking=host_key_checking,
+            known_hosts_file=known_hosts_file,
             jump_host=jump_host,
         )
 
-    def get_proxy_command_opts(self) -> List[str]:
-        """Builds SSH options for ProxyCommand if a jump_host is configured."""
+    def get_proxy_command_opts(self) -> list[str]:
+        """Build a ProxyCommand whose SSH settings apply to the jump host."""
         if not self.jump_host:
             return []
 
-        target = f"{self.jump_host.user}@{self.jump_host.host}"
-        if self.jump_host.port != 22:
-            target = f"{target}:{self.jump_host.port}"
-        return ["-J", target]
+        jump = self.jump_host
+        command = [
+            "ssh",
+            *jump.get_common_ssh_opts(),
+            "-p",
+            str(jump.port),
+            *jump.get_key_auth_opts(batch_mode=True),
+        ]
+        if jump.uses_password_auth:
+            command.extend(
+                [
+                    "-o",
+                    "PreferredAuthentications=password,keyboard-interactive",
+                    "-o",
+                    "NumberOfPasswordPrompts=3",
+                ]
+            )
+        command.extend(
+            [
+                "-W",
+                "%h:%p",
+                f"{jump.user}@{jump.host}",
+            ]
+        )
+        return ["-o", f"ProxyCommand={shlex.join(command)}"]
 
-    def get_key_auth_opts(self, *, batch_mode: bool = True) -> List[str]:
+    def get_key_auth_opts(self, *, batch_mode: bool = True) -> list[str]:
         """Build key-based SSH authentication options."""
         if not self.uses_key_auth:
             return []
@@ -232,21 +283,72 @@ class SSHConnectionResource(ConfigurableResource):
             auth_opts.extend(["-o", "BatchMode=yes"])
         return auth_opts
 
-    def get_ssh_base_command(self) -> List[str]:
-        """Build base SSH command, including proxy and auth options."""
-        proxy_opts = self.get_proxy_command_opts()
-        base_opts = [
+    def get_host_key_opts(self) -> list[str]:
+        """Build host-key verification options."""
+        checking = {
+            "off": "no",
+            "accept-new": "accept-new",
+            "strict": "yes",
+        }[self.host_key_checking]
+        return [
             "-o",
-            "StrictHostKeyChecking=no",
+            f"StrictHostKeyChecking={checking}",
             "-o",
-            "UserKnownHostsFile=/dev/null",
+            f"UserKnownHostsFile={self._resolved_known_hosts_file()}",
+        ]
+
+    def _resolved_known_hosts_file(self) -> str:
+        if self.known_hosts_file is not None:
+            return self.known_hosts_file
+        if self.host_key_checking == "off":
+            return "/dev/null"
+        return str(Path.home() / ".ssh" / "known_hosts")
+
+    def get_common_ssh_opts(
+        self,
+        *,
+        server_alive_interval: int | None = None,
+        server_alive_count_max: int | None = None,
+    ) -> list[str]:
+        """Build shared SSH/SCP options with caller overrides first."""
+        opts = [
+            *self.extra_opts,
+            *self.get_host_key_opts(),
             "-o",
             "LogLevel=ERROR",
-            "-o",
-            "ServerAliveInterval=30",
-            "-o",
-            "ServerAliveCountMax=6",
         ]
+        if server_alive_interval is not None:
+            opts.extend(["-o", f"ServerAliveInterval={server_alive_interval}"])
+        if server_alive_count_max is not None:
+            opts.extend(["-o", f"ServerAliveCountMax={server_alive_count_max}"])
+        return opts
+
+    def host_key_error_hint(self, stderr: str) -> str:
+        """Return an actionable hint for an OpenSSH host-key failure."""
+        if "host key verification failed" not in stderr.lower():
+            return ""
+        known_hosts_file = self._resolved_known_hosts_file()
+        if self.host_key_checking == "accept-new":
+            action = (
+                "Verify the remote key, then update its existing entry in "
+                f"{known_hosts_file}."
+            )
+        elif self.host_key_checking == "strict":
+            action = (
+                f"Add the verified key to {known_hosts_file}, or set "
+                "host_key_checking='accept-new' for trust on first use."
+            )
+        else:
+            action = "Review host-key options supplied through extra_opts."
+        return f"\n{action}"
+
+    def get_ssh_base_command(self) -> list[str]:
+        """Build base SSH command, including proxy and auth options."""
+        proxy_opts = self.get_proxy_command_opts()
+        base_opts = self.get_common_ssh_opts(
+            server_alive_interval=30,
+            server_alive_count_max=6,
+        )
 
         if self.uses_key_auth:
             auth_opts = self.get_key_auth_opts(batch_mode=True)
@@ -270,26 +372,18 @@ class SSHConnectionResource(ConfigurableResource):
 
         return [
             "ssh",
+            *base_opts,
             *proxy_opts,
             "-p",
             str(self.port),
             *auth_opts,
-            *base_opts,
-            *self.extra_opts,
             f"{self.user}@{self.host}",
         ]
 
-    def get_scp_base_command(self) -> List[str]:
+    def get_scp_base_command(self) -> list[str]:
         """Build base SCP command, including proxy and auth options."""
         proxy_opts = self.get_proxy_command_opts()
-        base_opts = [
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-        ]
+        base_opts = self.get_common_ssh_opts()
 
         if self.uses_key_auth:
             # Assert for type checker, guaranteed by uses_key_auth property
@@ -312,12 +406,11 @@ class SSHConnectionResource(ConfigurableResource):
 
         return [
             "scp",
+            *base_opts,
             *proxy_opts,
             "-P",
             str(self.port),
             *auth_opts,
-            *base_opts,
-            *self.extra_opts,
         ]
 
     def get_remote_target(self) -> str:

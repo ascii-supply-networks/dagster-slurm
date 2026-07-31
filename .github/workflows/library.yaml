@@ -229,6 +229,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openssh-client sshpass netcat-openbsd
 
+      - name: Trust SLURM test container host keys
+        if: needs.changes.outputs.run-expensive == 'true'
+        run: |
+          install -d -m 0700 "$HOME/.ssh"
+          docker exec slurmctld sh -c 'cat /etc/ssh/ssh_host_*_key.pub' |
+            while read -r key_type key_data _; do
+              printf '[localhost]:2223 %s %s\n' "$key_type" "$key_data"
+              printf '[127.0.0.1]:2223 %s %s\n' "$key_type" "$key_data"
+            done > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+
       - name: 🕵️‍♀️ Check Runner Environment
         if: needs.changes.outputs.run-expensive == 'true'
         run: |
@@ -287,8 +298,8 @@ jobs:
           if ! sshpass -p "$SSH_PASS" ssh -vvv \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o KexAlgorithms=+diffie-hellman-group14-sha256 \
             -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256 \
             -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" 'echo "✅ SSH connection successful"' 2> ssh_debug_output.log; then
