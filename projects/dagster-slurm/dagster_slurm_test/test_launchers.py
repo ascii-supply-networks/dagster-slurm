@@ -557,3 +557,40 @@ def test_spark_launcher_local_mode():
 #     script = "\n".join(plan.payload)
 #     assert "start-master.sh" in script
 #     assert "start-worker.sh" in script
+
+
+def test_random_port_strategy_falls_back_when_flock_is_missing():
+    """`flock` is util-linux, so it is absent on macOS; local runs must survive."""
+    launcher = RayLauncher()
+    assert launcher.port_strategy == "random"
+
+    plan = launcher.prepare_execution(
+        payload_path="/remote/payload.py",
+        python_executable="/remote/env/bin/python",
+        working_dir="/remote/run",
+        pipes_context={},
+    )
+    script = "\n".join(plan.payload)
+
+    assert "command -v flock >/dev/null 2>&1" in script
+    assert '_ray_port_strategy="hash_jobid"' in script
+    # The old behaviour aborted the whole run instead of degrading.
+    assert "ERROR: port_strategy=random requires flock" not in script
+
+
+def test_port_strategy_branches_read_the_runtime_variable():
+    """Every branch must honour the post-fallback strategy, not the configured one."""
+    script = "\n".join(
+        RayLauncher()
+        .prepare_execution(
+            payload_path="/remote/payload.py",
+            python_executable="/remote/env/bin/python",
+            working_dir="/remote/run",
+            pipes_context={},
+        )
+        .payload
+    )
+
+    assert 'if [[ "$_ray_port_strategy" == "random" ]]; then' in script
+    assert 'elif [[ "$_ray_port_strategy" == "hash_jobid" ]]; then' in script
+    assert 'if [[ "$_ray_port_strategy" != "fixed" ]]; then' in script

@@ -24,6 +24,28 @@ from .session import (
 from .slurm import SlurmResource
 
 
+def _deep_merge_payload(
+    base: Dict[str, Any], override: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Merge ``override`` into ``base``, recursing into nested config models.
+
+    ``model_dump(exclude_unset=True)`` is recursive, so an override that touches
+    a single field of a nested model dumps as ``{"port_config": {"block_size": 500}}``.
+    A flat ``dict.update`` would swap out the whole nested model and silently
+    reset every sibling field to its class default - e.g. a site-configured
+    ``range_start=30000`` falling back to ``10000``, making Ray bind outside a
+    firewall-allowed port range.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_payload(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class ComputeResource(ConfigurableResource):
     """Unified compute resource - adapts to deployment.
 
@@ -529,7 +551,7 @@ class ComputeResource(ConfigurableResource):
             try:
                 override_payload = override.model_dump(exclude_unset=True)
                 merged_payload = default_launcher.model_dump()
-                merged_payload.update(override_payload)
+                merged_payload = _deep_merge_payload(merged_payload, override_payload)
                 return type(default_launcher).model_validate(merged_payload)
 
             except AttributeError:
