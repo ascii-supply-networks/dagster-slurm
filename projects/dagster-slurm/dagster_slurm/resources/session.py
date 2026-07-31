@@ -25,6 +25,12 @@ from pydantic import Field, PrivateAttr
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ExecutionPlan
+from ..helpers.ray_dashboard import RAY_DASHBOARD_URL_MARKER
+from ..launchers.ray import (
+    RayPortConfig,
+    _render_ray_port_assignments,
+    _render_ray_process_cleanup,
+)
 from ..resources.slurm import SlurmResource
 
 _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
@@ -768,7 +774,13 @@ class SlurmAllocation:
         self._exec_lock = threading.Lock()
         self._ray_cluster_lock = threading.Lock()
         self._ray_address: Optional[str] = None
+        self._ray_dashboard_url: Optional[str] = None
         self._ray_fingerprint: Optional[tuple[Any, ...]] = None
+
+    @property
+    def ray_dashboard_url(self) -> str | None:
+        """Dashboard URL reported by the persistent Ray head."""
+        return self._ray_dashboard_url
 
     def execute(
         self,
@@ -953,7 +965,10 @@ class SlurmAllocation:
             getattr(launcher, "worker_cpu_bind", "none"),
             getattr(launcher, "use_head_ip", True),
             getattr(launcher, "dashboard_host", "0.0.0.0"),
-            getattr(launcher, "port_strategy", "hash_jobid"),
+            getattr(launcher, "port_strategy", "random"),
+            getattr(launcher, "port_config", RayPortConfig()).model_dump(mode="json"),
+            getattr(launcher, "network_interface", None),
+            getattr(launcher, "node_ip_address_command", None),
         )
 
     def _ray_fingerprint_token(self, fingerprint: tuple[Any, ...]) -> str:
@@ -997,6 +1012,12 @@ class SlurmAllocation:
             return None
 
         self._ray_fingerprint = fingerprint
+        self._ray_dashboard_url = (
+            ssh_pool.run(
+                f"cat {shlex.quote(ray_dir)}/dashboard_url 2>/dev/null || true"
+            ).strip()
+            or None
+        )
         return output
 
     def _write_ray_fingerprint(
@@ -1081,12 +1102,15 @@ class SlurmAllocation:
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
         ray_port = int(getattr(launcher, "ray_port", 6379))
         dashboard_port = int(getattr(launcher, "dashboard_port", 8265))
-        port_strategy = str(getattr(launcher, "port_strategy", "hash_jobid"))
+        port_strategy = str(getattr(launcher, "port_strategy", "random"))
+        port_config = getattr(launcher, "port_config", RayPortConfig())
+        grace_period = int(getattr(launcher, "grace_period", 5))
         use_head_ip = str(getattr(launcher, "use_head_ip", True)).lower()
         dashboard_host = shlex.quote(
             str(getattr(launcher, "dashboard_host", "0.0.0.0"))
         )
         num_gpus = int(getattr(launcher, "num_gpus_per_node", 0))
+        head_startup_timeout = int(getattr(launcher, "head_startup_timeout", 120))
         object_store_arg = ""
         if getattr(launcher, "object_store_memory_gb", None) is not None:
             bytes_value = int(launcher.object_store_memory_gb) * 1_000_000_000
@@ -1114,8 +1138,19 @@ class SlurmAllocation:
             '  --port="$port" \\',
             '  --dashboard-port="$dash_port" \\',
             f"  --dashboard-host={dashboard_host} \\",
+            '  --node-manager-port="$node_manager_port" \\',
+            '  --object-manager-port="$object_manager_port" \\',
+            '  --ray-client-server-port="$ray_client_server_port" \\',
+            '  --redis-shard-ports="$redis_shard_port" \\',
+            '  --runtime-env-agent-port="$runtime_env_agent_port" \\',
+            '  --dashboard-agent-grpc-port="$dashboard_agent_grpc_port" \\',
+            '  --dashboard-agent-listen-port="$dashboard_agent_listen_port" \\',
+            '  --metrics-export-port="$metrics_export_port" \\',
+            '  --min-worker-port="$min_worker_port" \\',
+            '  --max-worker-port="$max_worker_port" \\',
             '  --temp-dir="$RAY_TMP_DIR" \\',
-            f"  --num-gpus={num_gpus}",
+            f"  --num-gpus={num_gpus} \\",
+            "  --block",
         ]
         ray_start_lines.extend(
             f"  {arg}" for arg in (object_store_arg, redis_arg, start_args) if arg
@@ -1124,19 +1159,21 @@ class SlurmAllocation:
             if not ray_start_lines[index].endswith("\\"):
                 ray_start_lines[index] = f"{ray_start_lines[index]} \\"
         ray_start_command = "\n".join(ray_start_lines)
+        port_assignments = _render_ray_port_assignments(
+            ray_port=ray_port,
+            dashboard_port=dashboard_port,
+            port_strategy=port_strategy,
+            port_config=port_config,
+        )
+        node_ip_override = launcher._render_node_ip_override("head_bind_addr")
 
         return f"""#!/bin/bash
 set -euo pipefail
 source {shlex.quote(activation_script)}
 {pre_start}
 
-port="{ray_port}"
-dash_port="{dashboard_port}"
-if [[ "{port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
-    off=$(( SLURM_JOB_ID % 1000 ))
-    port=$(( {ray_port} + off ))
-	    dash_port=$(( {dashboard_port} + off ))
-	fi
+{port_assignments}
+{_render_ray_process_cleanup(grace_period)}
 
 	head_node_name="$(hostname)"
 	head_bind_addr="$head_node_name"
@@ -1157,6 +1194,7 @@ if [[ "{port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
 	    if [[ -n "$ipv4" ]]; then head_bind_addr="$ipv4"; fi
 	  fi
 	fi
+	{node_ip_override}
 	head_adv="$head_bind_addr"
 	if [[ "$head_adv" == *:* ]]; then head_adv="[$head_adv]"; fi
 	ray_address="$head_adv:$port"
@@ -1168,7 +1206,7 @@ if [[ "{port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
 
 	cleanup_ray() {{
 	  echo "[$({date_fmt})] Stopping persistent Ray head..."
-	  ray stop --force 2>/dev/null || true
+	  stop_ray_process "${{RAY_HEAD_PID:-}}"
 	  if [[ -n "${{RAY_TMP_DIR:-}}" && -d "$RAY_TMP_DIR" ]]; then
 	    echo "[$({date_fmt})] Removing $RAY_TMP_DIR..."
 	    rm -rf "$RAY_TMP_DIR" 2>/dev/null || true
@@ -1177,15 +1215,29 @@ if [[ "{port_strategy}" == "hash_jobid" && -n "${{SLURM_JOB_ID:-}}" ]]; then
 	trap cleanup_ray EXIT INT TERM
 
 	echo "[$({date_fmt})] Starting persistent Ray head at $ray_address"
-	{ray_start_command}
+	{ray_start_command} &
+	RAY_HEAD_PID=$!
+
+for i in $(seq 1 {head_startup_timeout}); do
+  if ray status --address "$ray_address" &>/dev/null; then break; fi
+  if ! kill -0 "$RAY_HEAD_PID" 2>/dev/null; then
+    echo "ERROR: Persistent Ray head exited during startup" >&2
+    exit 1
+  fi
+  if [[ "$i" -eq {head_startup_timeout} ]]; then
+    echo "ERROR: Persistent Ray head failed to start" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 echo "$ray_address" > {shlex.quote(ray_dir)}/ray_address.tmp
 mv {shlex.quote(ray_dir)}/ray_address.tmp {shlex.quote(ray_dir)}/ray_address
+echo "http://$head_adv:$dash_port" > {shlex.quote(ray_dir)}/dashboard_url.tmp
+mv {shlex.quote(ray_dir)}/dashboard_url.tmp {shlex.quote(ray_dir)}/dashboard_url
+echo "{RAY_DASHBOARD_URL_MARKER}http://$head_adv:$dash_port"
 touch {shlex.quote(ray_dir)}/ray_ready
-
-while true; do
-  sleep 30
-done
+wait "$RAY_HEAD_PID"
 """
 
     def _render_ray_worker_script(
@@ -1199,6 +1251,11 @@ done
             str(command) for command in getattr(launcher, "pre_start_commands", [])
         )
         num_gpus = int(getattr(launcher, "num_gpus_per_node", 0))
+        ray_port = int(getattr(launcher, "ray_port", 6379))
+        dashboard_port = int(getattr(launcher, "dashboard_port", 8265))
+        port_strategy = str(getattr(launcher, "port_strategy", "random"))
+        port_config = getattr(launcher, "port_config", RayPortConfig())
+        grace_period = int(getattr(launcher, "grace_period", 5))
         redis_password = getattr(launcher, "redis_password", None)
         redis_arg = (
             f"--redis-password={shlex.quote(str(redis_password))}"
@@ -1209,17 +1266,30 @@ done
             variable_name="RAY_TMP_DIR",
             date_fmt=date_fmt,
         )
+        port_assignments = _render_ray_port_assignments(
+            ray_port=ray_port,
+            dashboard_port=dashboard_port,
+            port_strategy=port_strategy,
+            port_config=port_config,
+        )
+        node_ip_override = launcher._render_node_ip_override("worker_bind_addr")
+        worker_node_ip_arg = (
+            '  --node-ip-address="$worker_bind_addr" \\\n' if node_ip_override else ""
+        )
 
         return f"""#!/bin/bash
 	set -euo pipefail
 	ray_address="$1"
 	source {shlex.quote(activation_script)}
 	{pre_start}
+	{port_assignments}
+	{_render_ray_process_cleanup(grace_period)}
+	{node_ip_override}
 	{temp_dir_setup}
 
 	cleanup_ray() {{
 	  echo "[$({date_fmt})] Stopping persistent Ray worker..."
-	  ray stop --force 2>/dev/null || true
+	  stop_ray_process "${{RAY_WORKER_PID:-}}"
 	  if [[ -n "${{RAY_TMP_DIR:-}}" && -d "$RAY_TMP_DIR" ]]; then
 	    echo "[$({date_fmt})] Removing $RAY_TMP_DIR..."
 	    rm -rf "$RAY_TMP_DIR" 2>/dev/null || true
@@ -1228,11 +1298,19 @@ done
 	trap cleanup_ray EXIT INT TERM
 
 	echo "[$({date_fmt})] Starting persistent Ray worker for $ray_address"
-	ray start --address="$ray_address" --num-gpus={num_gpus} --temp-dir="$RAY_TMP_DIR" {redis_arg}
-
-	while true; do
-	  sleep 30
-	done
+	ray start --address="$ray_address" --num-gpus={num_gpus} \
+{worker_node_ip_arg}\
+	  --node-manager-port="$node_manager_port" \
+	  --object-manager-port="$object_manager_port" \
+	  --runtime-env-agent-port="$runtime_env_agent_port" \
+	  --dashboard-agent-grpc-port="$dashboard_agent_grpc_port" \
+	  --dashboard-agent-listen-port="$dashboard_agent_listen_port" \
+	  --metrics-export-port="$metrics_export_port" \
+	  --min-worker-port="$min_worker_port" \
+	  --max-worker-port="$max_worker_port" \
+	  --temp-dir="$RAY_TMP_DIR" {redis_arg} --block &
+	RAY_WORKER_PID=$!
+	wait "$RAY_WORKER_PID"
 	"""
 
     @staticmethod
@@ -1242,17 +1320,18 @@ done
 
         var_ref = f"${{{variable_name}}}"
         return f"""# Use a short, node-local Ray temp directory for sockets and runtime files.
+	_ray_instance="${{_port_base:-${{port:-manual}}}}"
 	if [[ -n "${{SLURM_TMPDIR:-}}" ]]; then
-	  {variable_name}="${{SLURM_TMPDIR}}/r${{SLURM_JOB_ID:-manual}}"
+	  {variable_name}="${{SLURM_TMPDIR}}/r${{SLURM_JOB_ID:-manual}}-${{_ray_instance}}"
 	  echo "[$({date_fmt})] Using SLURM_TMPDIR for Ray (node-local)"
-	elif mkdir -p "/tmp/r${{SLURM_JOB_ID:-manual}}" 2>/dev/null; then
-	  {variable_name}="/tmp/r${{SLURM_JOB_ID:-manual}}"
+	elif mkdir -p "/tmp/r${{SLURM_JOB_ID:-manual}}-${{_ray_instance}}" 2>/dev/null; then
+	  {variable_name}="/tmp/r${{SLURM_JOB_ID:-manual}}-${{_ray_instance}}"
 	  echo "[$({date_fmt})] Using /tmp for Ray (node-local)"
-	elif mkdir -p "/var/tmp/r${{SLURM_JOB_ID:-manual}}" 2>/dev/null; then
-	  {variable_name}="/var/tmp/r${{SLURM_JOB_ID:-manual}}"
+	elif mkdir -p "/var/tmp/r${{SLURM_JOB_ID:-manual}}-${{_ray_instance}}" 2>/dev/null; then
+	  {variable_name}="/var/tmp/r${{SLURM_JOB_ID:-manual}}-${{_ray_instance}}"
 	  echo "[$({date_fmt})] Using /var/tmp for Ray (node-local)"
 	else
-	  {variable_name}="$HOME/.r${{SLURM_JOB_ID:-manual}}"
+	  {variable_name}="$HOME/.r${{SLURM_JOB_ID:-manual}}-${{_ray_instance}}"
 	  echo "[$({date_fmt})] WARNING: Using HOME for Ray - shared filesystems can break Ray sockets"
 	fi
 	mkdir -p "{var_ref}"
@@ -1280,6 +1359,12 @@ done
                 address = ""
 
             if address:
+                self._ray_dashboard_url = (
+                    ssh_pool.run(
+                        f"cat {shlex.quote(ray_dir)}/dashboard_url 2>/dev/null || true"
+                    ).strip()
+                    or None
+                )
                 self.logger.info(
                     f"Persistent Ray cluster ready in allocation {self.slurm_job_id}: {address}"
                 )

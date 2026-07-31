@@ -528,8 +528,9 @@ class ComputeResource(ConfigurableResource):
         if type(override) is type(default_launcher):
             try:
                 override_payload = override.model_dump(exclude_unset=True)
-                # model_copy returns a new instance, keeping the original default untouched.
-                return default_launcher.model_copy(update=override_payload)
+                merged_payload = default_launcher.model_dump()
+                merged_payload.update(override_payload)
+                return type(default_launcher).model_validate(merged_payload)
 
             except AttributeError:
                 # Fall back to using the provided launcher directly if it doesn't support dumping.

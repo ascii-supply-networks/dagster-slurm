@@ -19,6 +19,7 @@ from dagster_slurm import (
     BashLauncher,
     ComputeResource,
     RayLauncher,
+    RayPortConfig,
     SlurmAllocationScope,
     SlurmRunAllocationConfig,
 )
@@ -149,6 +150,33 @@ def test_compute_resource_run_allocation_scope_defaults_to_asset():
     )
 
     assert compute.allocation_scope == SlurmAllocationScope.ASSET
+
+
+def test_launcher_override_merge_preserves_nested_ray_port_config():
+    compute = ComputeResource(
+        mode=ExecutionMode.LOCAL,
+        default_launcher=RayLauncher(
+            port_config=RayPortConfig(
+                range_start=30000,
+                range_end=31999,
+                block_size=1000,
+            ),
+        ),
+    )
+
+    merged_launcher = compute._resolve_launcher(
+        compute._resolve_launcher(RayLauncher(num_gpus_per_node=2))
+    )
+    plan = merged_launcher.prepare_execution(
+        payload_path="/remote/payload.py",
+        python_executable="/remote/env/bin/python",
+        working_dir="/remote/run",
+        pipes_context={},
+    )
+    script = "\n".join(plan.payload)
+
+    assert "_port_candidate=$(( 30000 + (_port_slot * 1000) ))" in script
+    assert "No free Ray port block in 30000-31999" in script
 
 
 def test_compute_resource_run_allocation_scope_requires_slurm_mode():

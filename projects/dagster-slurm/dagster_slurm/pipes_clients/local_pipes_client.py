@@ -19,6 +19,7 @@ from dagster import (
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 
 from ..helpers.message_readers import LocalMessageReader
+from ..helpers.ray_dashboard import RayDashboardLogEmitter
 from ..launchers.base import ComputeLauncher
 from ..runners.local_runner import LocalRunner
 
@@ -179,12 +180,14 @@ class LocalPipesClient(PipesClient):
 
             # Execute locally
             self.logger.info(f"Executing locally: {payload_path}")
+            dashboard_log_emitter = RayDashboardLogEmitter(context.log.info)
 
             try:
                 self.runner.execute_script(
                     script_lines=execution_plan.payload,
                     working_dir=working_dir,
                     wait=True,
+                    line_callback=dashboard_log_emitter.process_line,
                 )
             except Exception as e:
                 self.logger.error(f"Local execution failed: {e}")

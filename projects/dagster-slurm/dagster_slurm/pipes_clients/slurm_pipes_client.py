@@ -38,6 +38,7 @@ from dagster_slurm._compat import tomllib
 from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
 from ..helpers.metrics import SlurmMetricsCollector
+from ..helpers.ray_dashboard import RayDashboardLogEmitter
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
@@ -348,6 +349,7 @@ class SlurmPipesClient(PipesClient):
                                 ssh_pool=ssh_pool,
                                 run_dir=run_dir,
                                 job_id=old_job_id,
+                                op_context=op_ctx,
                             )
 
                             final_metrics = self._validate_final_slurm_outcome(
@@ -413,6 +415,7 @@ class SlurmPipesClient(PipesClient):
                                 ssh_pool=ssh_pool,
                                 run_dir=run_dir,
                                 job_id=old_job_id,
+                                op_context=op_ctx,
                             )
 
                             final_metrics = self._validate_final_slurm_outcome(
@@ -552,6 +555,9 @@ class SlurmPipesClient(PipesClient):
                             activation_script=activation_script,
                             startup_timeout=effective_launcher.head_startup_timeout,
                         )
+                        dashboard_url = self.session._allocation.ray_dashboard_url
+                        if dashboard_url:
+                            context.log.info(f"Ray head node web UI: {dashboard_url}")
                         effective_launcher = effective_launcher.model_copy(
                             update={"ray_address": ray_address}
                         )
@@ -609,6 +615,7 @@ class SlurmPipesClient(PipesClient):
                         ssh_pool=ssh_pool,
                         run_dir=run_dir,
                         job_id=job_id,
+                        op_context=context.op_execution_context,
                         stdout_path=step_result.stdout_path
                         if step_result is not None
                         else None,
@@ -2529,6 +2536,7 @@ rm -rf {pack_root_quoted}
         ssh_pool: SSHConnectionPool,
         run_dir: str,
         job_id: int,
+        op_context: Optional[OpExecutionContext] = None,
         stdout_path: str | None = None,
         stderr_path: str | None = None,
     ) -> None:
@@ -2548,12 +2556,27 @@ rm -rf {pack_root_quoted}
             (stdout_path or f"{run_dir}/slurm-{job_id}.out", sys.stdout, "stdout"),
             (stderr_path or f"{run_dir}/slurm-{job_id}.err", sys.stderr, "stderr"),
         ]
+        dashboard_log_emitter = getattr(
+            message_reader, "_ray_dashboard_log_emitter", None
+        )
+        if not isinstance(dashboard_log_emitter, RayDashboardLogEmitter):
+            log_info = (
+                op_context.log.info if op_context is not None else self.logger.info
+            )
+            dashboard_log_emitter = RayDashboardLogEmitter(log_info)
+            setattr(
+                message_reader,
+                "_ray_dashboard_log_emitter",
+                dashboard_log_emitter,
+            )
 
         for path, stream, label in log_paths:
             try:
                 content = ssh_pool.run(f"cat {shlex.quote(path)} 2>/dev/null || true")
                 if content.strip():
                     lines = content.splitlines()
+                    for line in lines:
+                        dashboard_log_emitter.process_line(line)
                     forwarded = forwarded_lines.get(label, 0)
                     streamed = streamed_lines.get(label, 0)
                     offset = max(forwarded, streamed)
@@ -2753,6 +2776,19 @@ rm -rf {pack_root_quoted}
         streamed_lock = threading.Lock()
         stream_processes: dict[str, subprocess.Popen[str]] = {}
         stream_processes_lock = threading.Lock()
+        dashboard_log_emitter = getattr(
+            message_reader, "_ray_dashboard_log_emitter", None
+        )
+        if not isinstance(dashboard_log_emitter, RayDashboardLogEmitter):
+            log_info = (
+                op_context.log.info if op_context is not None else self.logger.info
+            )
+            dashboard_log_emitter = RayDashboardLogEmitter(log_info)
+            setattr(
+                message_reader,
+                "_ray_dashboard_log_emitter",
+                dashboard_log_emitter,
+            )
 
         def stream_file(remote_path: str, output_stream, prefix: str, stream_key: str):
             try:
@@ -2784,6 +2820,7 @@ rm -rf {pack_root_quoted}
                                 for line in lines:
                                     if not line.strip():
                                         continue
+                                    dashboard_log_emitter.process_line(line)
                                     output_stream.write(f"{prefix}{line}\n")
                                 output_stream.flush()
                                 with streamed_lock:
@@ -2820,6 +2857,7 @@ rm -rf {pack_root_quoted}
                             continue
                         if not line.strip():
                             continue
+                        dashboard_log_emitter.process_line(line)
                         output_stream.write(f"{prefix}{line}")
                         output_stream.flush()
                         with streamed_lock:

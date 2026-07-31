@@ -1,7 +1,8 @@
 """Abstract runner interface."""
 
 from abc import ABC, abstractmethod
-from typing import List
+from collections.abc import Callable
+from typing import List, Optional
 
 
 class Runner(ABC):
@@ -20,6 +21,7 @@ class Runner(ABC):
         script_lines: List[str],
         working_dir: str,
         wait: bool = True,
+        line_callback: Optional[Callable[[str], object]] = None,
     ) -> int:
         """Execute a shell script.
 
@@ -27,6 +29,7 @@ class Runner(ABC):
             script_lines: Bash script lines (including shebang)
             working_dir: Directory to execute in
             wait: If True, block until completion
+            line_callback: Called as each stdout or stderr line is observed
 
         Returns:
             Job/process ID
