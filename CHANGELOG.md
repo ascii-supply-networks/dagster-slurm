@@ -2,6 +2,76 @@
 
 <!-- version list -->
 
+## v1.16.0-rc.1 (2026-08-01)
+
+### Bug Fixes
+
+- Bound pipes message reader reconnect storms
+  ([`9cf0725`](https://github.com/ascii-supply-networks/dagster-slurm/commit/9cf072588a3c835aad0cdb6d695324da594e94a1))
+
+- Keep status polling from overshooting its own deadline
+  ([`d7b60b8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d7b60b89054535182c04e87ee45facdc48a57a7d))
+
+- Merge nested launcher config instead of replacing it
+  ([`2e1e3f7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/2e1e3f7ca89e70cf644472cfb8a9bb9445a49798))
+
+- Never disable ssh multiplexing silently on long socket paths
+  ([`1fbb23d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1fbb23d98e8b66361a61e78c2dad882c3207c47e))
+
+- Report password auth as unsupported, and report from the pool
+  ([`fc22809`](https://github.com/ascii-supply-networks/dagster-slurm/commit/fc22809632239066bbafafe2d296ad5ccd8cffe9))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`46bde79`](https://github.com/ascii-supply-networks/dagster-slurm/commit/46bde79faf891f0b7c1bb006a039c60e927b2c15))
+
+### Features
+
+- Back off slurm status polling and report lost multiplexing
+  ([`d26eee2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/d26eee28d9d55dc3e103470ca67772e12142ef68))
+
+- Emit loud warning in case of ssh controlmaster failure
+  ([`4373082`](https://github.com/ascii-supply-networks/dagster-slurm/commit/43730825aaf751dcd5c67ee5984d88e75b5ce7af))
+
+- Let ssh settings defer to the operator's ssh config
+  ([`5068a8a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5068a8a57a112030f89fe5e6b6f13474b442c2d3))
+
+- Notice a finished job as soon as pipes reports it closed
+  ([`60d547b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/60d547b2a4074fe29bebe3b17e860d22d282b544))
+
+- Parallel ray clusters and advanced networking on slurm
+  ([`4b8cc6f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4b8cc6faacaa6e9bf52beea4b9c08c1518f151a5))
+
+- Share and self-heal a single ssh controlmaster
+  ([`9f5cd05`](https://github.com/ascii-supply-networks/dagster-slurm/commit/9f5cd05a304e50fd52257f2b967f60acf1a3a58b))
+
+- Signal before timeout
+  ([`1b47398`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1b4739868d15be3d8a647ab34a6699e19a3fa12d))
+
+- Ssh strict mode
+  ([`5d10054`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5d10054a89fe4717a9c4bad3f59fd6b149bc3d30))
+
+- Update devtooling
+  ([`83afe98`](https://github.com/ascii-supply-networks/dagster-slurm/commit/83afe98c84177b6c6aedb0570d143afaea7bdc1f))
+
+### Performance Improvements
+
+- Collapse the post-completion ssh round trips
+  ([`83eb5d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/83eb5d473c80d083e89c3d7c2dee64a78d3127eb))
+
+- Drain instead of sleeping on the job-completion path
+  ([`df8b392`](https://github.com/ascii-supply-networks/dagster-slurm/commit/df8b39268d3fbc491e34e9c34c6844050c089501))
+
+### Testing
+
+- Assert the new pre-timeout contract in the integration test
+  ([`4b60e35`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4b60e352ba1d5c8b4bc99264e9697817dc679519))
+
+- Teach the ssh pool test double about multiplexing state
+  ([`2258468`](https://github.com/ascii-supply-networks/dagster-slurm/commit/225846882f6db01fb4e991d1feb90d7d6883c2e3))
+
+
 ## v1.16.0 (2026-07-30)
 
 ### Chores
