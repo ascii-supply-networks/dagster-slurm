@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.17.0-rc.1 (2026-08-02)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`42ff14f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/42ff14fba65d88eef740a046cc99f9f6d8f07399))
+
+### Features
+
+- Add extensible Slurm GPU metrics
+  ([`96e72fe`](https://github.com/ascii-supply-networks/dagster-slurm/commit/96e72fe96dc58dc38efe180f96de5a9339dbfd40))
+
+
 ## v1.17.0 (2026-08-01)
 
 ### Chores
