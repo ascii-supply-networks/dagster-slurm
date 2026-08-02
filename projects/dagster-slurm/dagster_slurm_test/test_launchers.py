@@ -440,6 +440,10 @@ def test_ray_launcher_cluster_standalone_mode():
     )
     assert "ray start --head" in driver_script
     assert "--node-ip-address=$head_bind_addr" in driver_script
+    assert (
+        'live_nodes=$(echo "$status_output" | grep -c "node_" || true)' in driver_script
+    )
+    assert "timeout 10s srun --overlap --cpu-bind=none" in driver_script
     assert 'srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$node_i"' in driver_script
     assert "/remote/env/bin/python /path/to/script.py" in driver_script
     assert "trap - EXIT SIGINT SIGTERM" in driver_script
