@@ -1197,6 +1197,19 @@ def test_workload_exit_code_survives_the_signal(slurm_pipes_client, tmp_path: Pa
     assert marker == "USR1"
 
 
+def test_workload_immediate_signal_exit_is_reaped(slurm_pipes_client, tmp_path: Path):
+    """A fast signal handler must not expose the interrupted wait status."""
+    return_code, marker = _run_pre_timeout_supervisor(
+        slurm_pipes_client,
+        tmp_path,
+        ['trap "exit 0" USR1', "while true; do sleep 0.01; done"],
+        send_signal=True,
+    )
+
+    assert return_code == 0
+    assert marker == "USR1"
+
+
 def test_workload_ignoring_the_signal_still_fails(slurm_pipes_client, tmp_path: Path):
     """An unhandled signal kills the workload, which stays a failure."""
     return_code, marker = _run_pre_timeout_supervisor(

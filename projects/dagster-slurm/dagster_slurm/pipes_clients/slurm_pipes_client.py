@@ -2729,10 +2729,14 @@ _dagster_slurm_workload_exit=0
 while true; do
   wait "$_dagster_slurm_workload_pid"
   _dagster_slurm_wait_exit=$?
-  if ! kill -0 "$_dagster_slurm_workload_pid" 2>/dev/null; then
-    _dagster_slurm_workload_exit=$_dagster_slurm_wait_exit
-    break
+  if [[ "$_dagster_slurm_signal_received" -eq 1 ]]; then
+    # The trap interrupts wait with 128+signal even when the workload's own
+    # handler exits cleanly. Wait again to reap the workload's real status.
+    _dagster_slurm_signal_received=0
+    continue
   fi
+  _dagster_slurm_workload_exit=$_dagster_slurm_wait_exit
+  break
 done
 
 trap - "$_dagster_slurm_signal"
