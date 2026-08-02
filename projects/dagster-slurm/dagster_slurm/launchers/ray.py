@@ -1040,7 +1040,7 @@ class RayLauncher(ComputeLauncher):
             echo "PAYLOAD FAILED OR SCRIPT EXITED UNEXPECTEDLY! Capturing logs..." >&2
             for node in "${{worker_nodes[@]}}"; do
                 echo "--- WORKER NODE ($node) RAYLET LOG ---" >&2
-                srun --cpu-bind=none --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
+                timeout 10s srun --overlap --cpu-bind=none --nodes=1 --ntasks=1 -w "$node" bash -c 'tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1)' || echo "Worker log on $node not found." >&2
             done
             echo "--- HEAD NODE ($(hostname)) RAYLET LOG ---" >&2
             tail -n 50 $(find $RAY_CLUSTER_TMP/session_*/logs/raylet.out -type f 2>/dev/null | sort | tail -n 1) || echo "Head raylet log not found." >&2
@@ -1168,7 +1168,7 @@ class RayLauncher(ComputeLauncher):
         # This is the robust way: capture output first, then grep it.
         # This prevents grep's non-zero exit code from triggering 'set -e'.
         status_output=$(ray status 2>/dev/null || echo "ray status failed")
-        live_nodes=$(echo "$status_output" | grep -c "node_")
+        live_nodes=$(echo "$status_output" | grep -c "node_" || true)
 
         if [[ "$live_nodes" -ge "$expected_nodes" ]]; then
             echo "✓ Success! $live_nodes of $expected_nodes nodes are active."
