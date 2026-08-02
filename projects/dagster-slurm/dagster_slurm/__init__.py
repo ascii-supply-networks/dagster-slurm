@@ -13,6 +13,7 @@ Run Dagster assets on Slurm clusters with support for:
 from .config.runtime import SlurmRunConfig
 
 # Core resources
+from .helpers.metrics import SlurmMetric, SlurmMetricsCallback, SlurmMetricsContext
 from .launchers.ray import RayLauncher, RayPortConfig
 
 # Launchers
@@ -56,6 +57,9 @@ __all__ = [
     # Advanced: Direct client access
     "LocalPipesClient",
     "SlurmPipesClient",
+    "SlurmMetric",
+    "SlurmMetricsCallback",
+    "SlurmMetricsContext",
     # Sensors / reconciliation helpers
     "build_slurm_orphan_reconcile_sensor",
     "reconcile_orphaned_slurm_runs",

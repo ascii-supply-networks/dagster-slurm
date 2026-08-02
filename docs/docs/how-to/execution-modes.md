@@ -49,6 +49,7 @@ compute = ComputeResource(
 - Each run file-packages the asset environment using `pixi-pack` (unless `pre_deployed_env_path` is set).
 - Jobs terminate as soon as the asset finishes—ideal for isolated workloads.
 - Override `launcher=` on individual assets to run Ray or Spark (WIP) workloads inside the allocation.
+- Completed jobs include CPU, memory, and GPU TRES materialization metadata. See [Collect Slurm job metrics](./job-metrics.md).
 
 ## Slurm mode with run-scoped Ray allocation
 

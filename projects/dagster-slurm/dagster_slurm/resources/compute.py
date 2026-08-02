@@ -10,6 +10,7 @@ from dagster._core.pipes.client import PipesClientCompletedInvocation
 
 from ..config.environment import ExecutionMode
 from ..config.runtime import SlurmRunConfig
+from ..helpers.metrics import SlurmMetricSelection, SlurmMetricsCallback
 from ..helpers.ssh_pool import SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..launchers.ray import RayLauncher
@@ -884,7 +885,9 @@ class ComputeResource(ConfigurableResource):
         environment_name: Optional[str] = None,
         config: Optional[SlurmRunConfig] = None,
         extra_files: Optional[List[str]] = None,
+        metrics_collector: Optional[SlurmMetricsCallback] = None,
         poll_timeout: int = 3600,
+        slurm_metrics: SlurmMetricSelection | None = None,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute asset with optional resource overrides.
@@ -919,8 +922,15 @@ class ComputeResource(ConfigurableResource):
                 Values from config are used as defaults, but explicit parameters take precedence.
             extra_files: List of local file paths to upload alongside the payload.
                 Merged with default_extra_files, asset metadata, and config.extra_files.
+            metrics_collector: Optional callback that receives a
+                :class:`SlurmMetricsContext` after a standalone Slurm job or
+                shared-allocation step finishes and returns custom Dagster metadata
+                key-value pairs. Callback errors and invalid metadata are logged
+                without failing the workload.
             poll_timeout: Maximum time in seconds to wait for the Slurm job to
                 complete. Defaults to 3600 (1 hour).
+            slurm_metrics: Built-in Slurm metadata fields to attach. ``None`` enables
+                all fields; an empty collection disables optional built-in fields.
             **kwargs: Passed to client.run()
 
         Yields:
@@ -1065,6 +1075,10 @@ class ComputeResource(ConfigurableResource):
             kwargs["force_env_push"] = resolved_force_env_push
             kwargs["skip_payload_upload"] = skip_payload_upload_resolved
             kwargs["poll_timeout"] = poll_timeout
+            if slurm_metrics is not None:
+                kwargs["slurm_metrics"] = slurm_metrics
+            if metrics_collector is not None:
+                kwargs["metrics_collector"] = metrics_collector
             if resolved_remote_payload_path:
                 kwargs["remote_payload_path"] = resolved_remote_payload_path
             if pack_cmd_override:
