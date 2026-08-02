@@ -956,6 +956,7 @@ def test_persistent_ray_scripts_use_node_local_temp_dirs_and_hostname_address():
     assert 'rm -rf "$RAY_TMP_DIR"' in head_script
 
     assert '--temp-dir="$RAY_TMP_DIR"' in worker_script
+    assert '--ray-client-server-port="$ray_client_server_port"' in worker_script
     assert 'export RAY_TMPDIR="${RAY_TMP_DIR}"' in worker_script
     assert 'rm -rf "$RAY_TMP_DIR"' in worker_script
 

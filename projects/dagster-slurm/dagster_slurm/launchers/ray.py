@@ -825,6 +825,7 @@ class RayLauncher(ComputeLauncher):
             "--redis-password=$redis_password",
             "--node-manager-port=$node_manager_port",
             "--object-manager-port=$object_manager_port",
+            "--ray-client-server-port=$ray_client_server_port",
             "--runtime-env-agent-port=$runtime_env_agent_port",
             "--dashboard-agent-grpc-port=$dashboard_agent_grpc_port",
             "--dashboard-agent-listen-port=$dashboard_agent_listen_port",
