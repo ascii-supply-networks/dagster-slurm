@@ -225,6 +225,7 @@ class SlurmStepExecutionResult:
     job_id: int
     stdout_path: str
     stderr_path: str
+    step_id: str | None = None
 
 
 class SlurmSessionResource(ConfigurableResource):
@@ -839,13 +840,19 @@ class SlurmAllocation:
             for aux_name, aux_content in auxiliary_scripts.items()
         ]
 
-        script_lines = execution_plan.payload
-
         safe_asset_key = re.sub(r"[^A-Za-z0-9_.=-]+", "_", asset_key).strip("._-")
         if not safe_asset_key:
             safe_asset_key = "asset"
         script_name = f"asset_{exec_id}_{safe_asset_key}.sh"
         script_path = f"{run_dir}/{script_name}"
+        step_id_path = f"{run_dir}/.slurm-step-{exec_id}.id"
+        step_id_capture = (
+            'printf \'%s.%s\\n\' "${SLURM_JOB_ID:?}" "${SLURM_STEP_ID:?}" > '
+            f"{shlex.quote(step_id_path)}"
+        )
+        script_lines = list(execution_plan.payload)
+        capture_index = 1 if script_lines and script_lines[0].startswith("#!") else 0
+        script_lines.insert(capture_index, step_id_capture)
         ssh_pool.write_file("\n".join(script_lines), script_path)
         ssh_pool.run(f"chmod +x {shlex.quote(script_path)}")
 
@@ -882,10 +889,22 @@ class SlurmAllocation:
             f"Execution {exec_id} in allocation {self.slurm_job_id} completed"
         )
 
+        step_id = ssh_pool.run(
+            f"cat {shlex.quote(step_id_path)} 2>/dev/null || true"
+        ).strip()
+        if not re.fullmatch(rf"{self.slurm_job_id}\.[A-Za-z0-9_+-]+", step_id):
+            self.logger.warning(
+                "Could not determine Slurm step ID for execution %s in allocation %s",
+                exec_id,
+                self.slurm_job_id,
+            )
+            step_id = None
+
         return SlurmStepExecutionResult(
             job_id=self.slurm_job_id,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
+            step_id=step_id,
         )
 
     def ensure_ray_cluster(

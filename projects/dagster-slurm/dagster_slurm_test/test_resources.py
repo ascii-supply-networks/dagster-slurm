@@ -344,6 +344,10 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
 
         def run(self, cmd: str):
             self.commands.append(cmd)
+            if ".slurm-step-1.id" in cmd:
+                return "42.7"
+            if ".slurm-step-2.id" in cmd:
+                return "42.8"
             return ""
 
     session = SlurmSessionResource(slurm=_mock_slurm_resource())
@@ -381,7 +385,9 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
     assert first.stdout_path.endswith("slurm-42-step-1_asset_one.out")
     assert second.stdout_path.endswith("slurm-42-step-2_asset_two.out")
     assert first.stdout_path in fake_ssh_pool.commands[1]
-    assert second.stdout_path in fake_ssh_pool.commands[3]
+    assert second.stdout_path in fake_ssh_pool.commands[4]
+    assert first.step_id == "42.7"
+    assert second.step_id == "42.8"
 
 
 def test_slurm_session_allocation_honors_zero_gpu_override(monkeypatch):
@@ -830,6 +836,8 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
 
         def run(self, cmd: str):
             self.commands.append(cmd)
+            if cmd.startswith("cat /remote/run/.slurm-step-1.id"):
+                return "42.7"
             return ""
 
     allocation = SlurmAllocation(
@@ -850,7 +858,7 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
     )
     fake_ssh_pool = FakeSSHPool()
 
-    allocation.execute(
+    result = allocation.execute(
         plan,
         asset_key="asset",
         run_dir="/remote/run",
@@ -863,9 +871,13 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
         "/remote/run/ray_driver.sh",
         "/remote/run/ray_worker-1.sh",
     ]
-    assert fake_ssh_pool.commands[-1].startswith(
+    assert fake_ssh_pool.commands[-2].startswith(
         "srun --overlap --jobid=42 --job-name=asset_1"
     )
+    asset_script = fake_ssh_pool.writes[0][1].splitlines()
+    assert asset_script[0] == "#!/bin/bash"
+    assert "${SLURM_STEP_ID:?}" in asset_script[1]
+    assert result.step_id == "42.7"
 
 
 def test_slurm_allocation_srun_failure_reports_step_logs():

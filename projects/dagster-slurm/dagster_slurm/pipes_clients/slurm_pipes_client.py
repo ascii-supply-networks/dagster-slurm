@@ -29,6 +29,7 @@ from dagster import (
     get_dagster_logger,
     open_pipes_session,
 )
+from dagster._core.definitions.metadata import normalize_metadata
 from dagster._core.errors import DagsterPipesExecutionError
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 from dagster._utils.interrupts import _received_interrupt
@@ -37,7 +38,15 @@ from dagster_slurm._compat import tomllib
 
 from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
-from ..helpers.metrics import SlurmMetricsCollector
+from ..helpers.metrics import (
+    DEFAULT_SLURM_METADATA_KEYS,
+    SlurmJobMetrics,
+    SlurmMetricSelection,
+    SlurmMetricsCallback,
+    SlurmMetricsCollector,
+    SlurmMetricsContext,
+    normalize_slurm_metrics,
+)
 from ..helpers.ray_dashboard import RayDashboardLogEmitter
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
@@ -209,6 +218,8 @@ class SlurmPipesClient(PipesClient):
         pre_deployed_env_path_override: Optional[str] = None,
         environment_name: Optional[str] = None,
         extra_files: Optional[list[str]] = None,
+        slurm_metrics: SlurmMetricSelection | None = None,
+        metrics_collector: SlurmMetricsCallback | None = None,
         poll_timeout: int = 3600,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
@@ -229,6 +240,12 @@ class SlurmPipesClient(PipesClient):
             remote_payload_path: Optional pre-existing remote payload path to use when
                 skipping upload.
             environment_name: Named environment prepared by ``project_setup_cmd``.
+            slurm_metrics: Built-in Slurm metadata fields to attach. ``None`` enables
+                all fields; an empty collection disables optional built-in fields.
+            metrics_collector: Optional callback invoked after a standalone Slurm job
+                or shared-allocation step reaches a terminal state. It receives a
+                :class:`SlurmMetricsContext` and returns additional Dagster metadata
+                key-value pairs.
             poll_timeout: Maximum time in seconds to wait for the Slurm job to
                 complete. Defaults to 3600 (1 hour).
             **kwargs: Additional arguments (ignored, for forward compatibility)
@@ -237,6 +254,7 @@ class SlurmPipesClient(PipesClient):
             Dagster events
 
         """
+        enabled_slurm_metrics = normalize_slurm_metrics(slurm_metrics)
         auth_provider = getattr(self.slurm, "_auth_provider", None)
         if auth_provider and callable(getattr(auth_provider, "ensure", None)):
             auth_provider.ensure()
@@ -368,6 +386,8 @@ class SlurmPipesClient(PipesClient):
                                 ssh_pool,
                                 context,
                                 metrics=final_metrics,
+                                slurm_metrics=enabled_slurm_metrics,
+                                custom_metrics_collector=metrics_collector,
                             )
 
                             # Clear tags to prevent stale reattach
@@ -430,6 +450,8 @@ class SlurmPipesClient(PipesClient):
                                 ssh_pool,
                                 context,
                                 metrics=final_metrics,
+                                slurm_metrics=enabled_slurm_metrics,
+                                custom_metrics_collector=metrics_collector,
                             )
 
                             # Clear tags to prevent stale reattach
@@ -633,6 +655,18 @@ class SlurmPipesClient(PipesClient):
                         )
                         if step_result is not None:
                             self._emit_session_metadata(step_result, context)
+                            step_metrics = self._collect_session_step_metrics(
+                                step_result=step_result,
+                                ssh_pool=ssh_pool,
+                            )
+                            self._collect_and_emit_metrics(
+                                job_id,
+                                ssh_pool,
+                                context,
+                                metrics=step_metrics,
+                                slurm_metrics=enabled_slurm_metrics,
+                                custom_metrics_collector=metrics_collector,
+                            )
                     else:
                         final_metrics = self._validate_final_slurm_outcome(
                             job_id,
@@ -646,6 +680,8 @@ class SlurmPipesClient(PipesClient):
                             ssh_pool,
                             context,
                             metrics=final_metrics,
+                            slurm_metrics=enabled_slurm_metrics,
+                            custom_metrics_collector=metrics_collector,
                         )
 
                         # Clear reattach tags so stale tags don't trigger
@@ -1183,19 +1219,26 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         context: Any,
         metrics: Any | None = None,
+        slurm_metrics: SlurmMetricSelection | None = None,
+        custom_metrics_collector: SlurmMetricsCallback | None = None,
     ) -> None:
         """Collect Slurm job metrics via sacct and attach as output metadata."""
         try:
             metrics = metrics or self.metrics_collector.collect_job_metrics(
                 job_id, ssh_pool
             )
-            metadata = {
-                "slurm_job_id": job_id,
-                "node_hours": metrics.node_hours,
-                "cpu_efficiency_pct": round(metrics.cpu_efficiency * 100, 2),
-                "max_memory_mb": round(metrics.max_rss_mb, 2),
-                "elapsed_seconds": round(metrics.elapsed_seconds, 2),
-            }
+            to_metadata = getattr(metrics, "to_metadata", None)
+            if callable(to_metadata):
+                metadata = dict(to_metadata(slurm_metrics))
+            else:
+                metadata = {
+                    "slurm_job_id": job_id,
+                    "node_hours": metrics.node_hours,
+                    "cpu_efficiency_pct": round(metrics.cpu_efficiency * 100, 2),
+                    "max_memory_mb": round(metrics.max_rss_mb, 2),
+                    "elapsed_seconds": round(metrics.elapsed_seconds, 2),
+                }
+
             add_output_metadata = getattr(context, "add_output_metadata", None)
             if not callable(add_output_metadata):
                 self.logger.debug(
@@ -1204,6 +1247,17 @@ class SlurmPipesClient(PipesClient):
                     type(context).__name__,
                 )
                 return
+
+            if custom_metrics_collector is not None:
+                metadata.update(
+                    self._collect_custom_metrics(
+                        collector=custom_metrics_collector,
+                        job_id=job_id,
+                        ssh_pool=ssh_pool,
+                        default_metrics=metrics,
+                        reserved_keys=set(DEFAULT_SLURM_METADATA_KEYS),
+                    )
+                )
 
             # Multi-asset executions require specifying the output name.
             output_names: list[str] = []
@@ -1240,6 +1294,63 @@ class SlurmPipesClient(PipesClient):
         except Exception as e:
             self.logger.warning(f"Failed to collect metrics: {e}")
 
+    def _collect_custom_metrics(
+        self,
+        *,
+        collector: SlurmMetricsCallback,
+        job_id: int,
+        ssh_pool: SSHConnectionPool,
+        default_metrics: Any,
+        reserved_keys: set[str],
+    ) -> dict[str, Any]:
+        """Run and validate a best-effort custom metrics callback."""
+        try:
+            result = collector(
+                SlurmMetricsContext(
+                    job_id=job_id,
+                    ssh_pool=ssh_pool,
+                    slurm_resource=self.slurm,
+                    session_resource=self.session,
+                    default_metrics=default_metrics,
+                    step_id=getattr(default_metrics, "step_id", None),
+                )
+            )
+            if not isinstance(result, Mapping):
+                self.logger.warning(
+                    "Custom Slurm metrics collector for job %s returned %s; "
+                    "expected a mapping.",
+                    job_id,
+                    type(result).__name__,
+                )
+                return {}
+            if not all(isinstance(key, str) for key in result):
+                self.logger.warning(
+                    "Custom Slurm metrics collector for job %s returned a "
+                    "non-string metadata key; ignoring custom metrics.",
+                    job_id,
+                )
+                return {}
+
+            collisions = reserved_keys.intersection(result)
+            if collisions:
+                self.logger.warning(
+                    "Custom Slurm metrics collector for job %s tried to replace "
+                    "reserved metadata keys %s; those values were ignored.",
+                    job_id,
+                    sorted(collisions),
+                )
+            custom_metadata = {
+                key: value for key, value in result.items() if key not in reserved_keys
+            }
+            return dict(normalize_metadata(custom_metadata))
+        except Exception as error:
+            self.logger.warning(
+                "Custom Slurm metrics collector failed for job %s: %s",
+                job_id,
+                error,
+            )
+            return {}
+
     def _emit_session_metadata(
         self, step_result: SlurmStepExecutionResult, context: Any
     ) -> None:
@@ -1254,6 +1365,8 @@ class SlurmPipesClient(PipesClient):
             "slurm_step_stdout_path": step_result.stdout_path,
             "slurm_step_stderr_path": step_result.stderr_path,
         }
+        if step_result.step_id is not None:
+            metadata["slurm_step_id"] = step_result.step_id
 
         output_names: list[str] = []
         if getattr(context, "op_execution_context", None):
@@ -1277,6 +1390,32 @@ class SlurmPipesClient(PipesClient):
         else:
             for output_name in output_names:
                 add_output_metadata(metadata, output_name=output_name)
+
+    def _collect_session_step_metrics(
+        self,
+        *,
+        step_result: SlurmStepExecutionResult,
+        ssh_pool: SSHConnectionPool,
+    ) -> SlurmJobMetrics:
+        """Collect terminal accounting for one step in a live allocation."""
+        if step_result.step_id is None:
+            return SlurmMetricsCollector._empty_metrics(step_result.job_id)
+
+        metrics = SlurmMetricsCollector._empty_metrics(
+            step_result.job_id,
+            step_id=step_result.step_id,
+        )
+        for attempt in range(3):
+            metrics = self.metrics_collector.collect_job_metrics(
+                step_result.job_id,
+                ssh_pool,
+                step_id=step_result.step_id,
+            )
+            if metrics.accounting_available:
+                return metrics
+            if attempt < 2:
+                time.sleep(0.5)
+        return metrics
 
     @staticmethod
     def _parse_slurm_exit_code(exit_code: str) -> tuple[int, int]:
@@ -1303,8 +1442,15 @@ class SlurmPipesClient(PipesClient):
     def _query_final_accounting(self, job_id: int, ssh_pool: SSHConnectionPool) -> str:
         """Fetch every accounting field the completion path needs, once."""
         fmt = self.metrics_collector.SACCT_FORMAT
-        return ssh_pool.run(
+        output = ssh_pool.run(
             f"sacct -j {job_id} -n -P --format={fmt} 2>/dev/null || true"
+        ).strip()
+        if output or not hasattr(self.metrics_collector, "BASE_SACCT_FORMAT"):
+            return output
+        return ssh_pool.run(
+            f"sacct -j {job_id} -n -P "
+            f"--format={self.metrics_collector.BASE_SACCT_FORMAT} "
+            "2>/dev/null || true"
         ).strip()
 
     @staticmethod
