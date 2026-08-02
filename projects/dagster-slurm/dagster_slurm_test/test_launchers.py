@@ -450,6 +450,7 @@ def test_ray_launcher_cluster_standalone_mode():
 
     assert "--address=$ip_head" in worker_script
     assert "--num-gpus=2" in worker_script
+    assert "--ray-client-server-port=$ray_client_server_port" in worker_script
     assert "--node-ip-address" not in worker_script
     assert "trap - EXIT INT TERM" in worker_script
     assert 'exit "$exit_code"' in worker_script
