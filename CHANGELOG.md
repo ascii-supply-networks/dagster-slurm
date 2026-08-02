@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.17.0-rc.2 (2026-08-02)
+
+### Bug Fixes
+
+- Assign Ray client port on worker nodes
+  ([`0ae351c`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0ae351cc50a493acbc9342aff0bac8efbc387b42))
+
+- Preserve workload exit after pre-timeout signal
+  ([`0df210b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0df210bf8cab392a7857f36dcd6053ca073d1905))
+
+- Tolerate delayed Ray worker registration
+  ([`5f26423`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5f2642339f5e577518d7ce03e570e9d82cef7a0e))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`fcbe298`](https://github.com/ascii-supply-networks/dagster-slurm/commit/fcbe298eb431383a8a33b44f19a6a38620e29371))
+
+
 ## v1.17.0-rc.1 (2026-08-02)
 
 ### Chores
