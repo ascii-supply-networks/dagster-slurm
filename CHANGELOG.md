@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.18.0-rc.2 (2026-08-04)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`e167b1d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e167b1d07047ae2ccb069fa8e627e18e374bc705))
+
+### Features
+
+- Summarize SSH stdio forwarding
+  ([`e726a1c`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e726a1c0405532bc3b0d49146c50574e1274b0a1))
+
+### Refactoring
+
+- Centralize SSH message forwarding
+  ([`cf691a3`](https://github.com/ascii-supply-networks/dagster-slurm/commit/cf691a3efdb9c07e666e9ed2061e895351193dd6))
+
+
 ## v1.18.0-rc.1 (2026-08-04)
 
 ### Bug Fixes
