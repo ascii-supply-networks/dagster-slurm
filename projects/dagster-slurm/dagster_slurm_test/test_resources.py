@@ -770,6 +770,52 @@ def test_final_log_fallback_shell_quotes_remote_paths():
     assert "; cat /remote" not in command
 
 
+def test_final_log_fallback_skips_forwarded_lines(capsys: pytest.CaptureFixture[str]):
+    slurm = _mock_slurm_resource()
+    client = SlurmPipesClient(slurm_resource=slurm, launcher=BashLauncher())
+    reader = SSHMessageReader(
+        remote_path="/remote/run/messages.jsonl",
+        ssh_config=slurm.ssh,
+    )
+    reader._forwarded_lines = {"stdout": 2, "stderr": 1}
+    stdout_path = "/remote/run/slurm-123.out"
+    stderr_path = "/remote/run/slurm-123.err"
+
+    class FakeSSHPool:
+        def run(self, cmd: str) -> str:
+            first_print = cmd.split("; ", maxsplit=1)[0]
+            first_marker_path = shlex.split(first_print)[2]
+            marker = first_marker_path.removesuffix(stdout_path)
+            return "\n".join(
+                [
+                    f"{marker}{stdout_path}",
+                    "already forwarded stdout 1",
+                    "already forwarded stdout 2",
+                    "remaining stdout 1",
+                    "remaining stdout 2",
+                    f"{marker}{stderr_path}",
+                    "already forwarded stderr",
+                    "remaining stderr",
+                ]
+            )
+
+    client._maybe_emit_final_logs(
+        message_reader=reader,
+        ssh_pool=cast(SSHConnectionPool, FakeSSHPool()),
+        run_dir="/remote/run",
+        job_id=123,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "[SLURM STDOUT fallback] remaining stdout 1\n"
+        "[SLURM STDOUT fallback] remaining stdout 2\n"
+    )
+    assert captured.err == "[SLURM STDERR fallback] remaining stderr\n"
+
+
 @pytest.mark.parametrize(
     "auxiliary_script_name",
     [
