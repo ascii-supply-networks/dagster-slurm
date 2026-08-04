@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.18.0-rc.3 (2026-08-04)
+
+### Bug Fixes
+
+- Osx devenv and stax upgrade
+  ([`48d4438`](https://github.com/ascii-supply-networks/dagster-slurm/commit/48d44389ca06337f96990ea90e21ef2607b97aa0))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`b221ceb`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b221ceb22e4d59943d61a0938c69456c6477a359))
+
+
 ## v1.18.0-rc.2 (2026-08-04)
 
 ### Chores
