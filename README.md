@@ -34,6 +34,7 @@ Hydrating supercomputers with Dagster and Slurm to enhance developer experience.
 - **Connection Pooling**: SSH ControlMaster for efficient remote operations
 - **Metrics Collection**: Automatic collection of Slurm job metrics (CPU efficiency, memory, node-hours)
 - **Production-Prepared**: Proper error handling, cleanup, health checks
+- **Asset Kinds**: Assets are tagged with the built-in `slurm` kind (see [dagster#34075](https://github.com/dagster-io/dagster/pull/34075)) so Slurm-backed assets are visually identifiable in the Dagster UI
 
 ### 📊 Metrics
 
