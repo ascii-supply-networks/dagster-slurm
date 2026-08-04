@@ -82,16 +82,16 @@
     "stax-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1785442580,
-        "narHash": "sha256-S6tUd7qXfShuBEohSZ/hxU5B7gucOlaHjBxPPvuxsMQ=",
+        "lastModified": 1785518288,
+        "narHash": "sha256-ItRt0J2nR94nmg9L6Pion/OB7wW7mmMFE5CHZmr2Yvs=",
         "owner": "cesarferreira",
         "repo": "stax",
-        "rev": "7de79991d024979b847f1443179532cc9fd646da",
+        "rev": "625eb6aaedd8595385e20fe36972b6c17188d74b",
         "type": "github"
       },
       "original": {
         "owner": "cesarferreira",
-        "ref": "v0.102.0",
+        "ref": "v0.102.2",
         "repo": "stax",
         "type": "github"
       }
