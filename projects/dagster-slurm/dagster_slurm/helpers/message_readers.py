@@ -346,6 +346,35 @@ class SSHMessageReader(PipesMessageReader):
             if isinstance(exception, dict):
                 self._closed_exception = exception
 
+    def _forward_message(
+        self,
+        message: Any,
+        handler: Any,
+        tracker: _ClosedMessageTracker,
+    ) -> bool:
+        """Record and forward one parsed Pipes message.
+
+        Returns whether the message was forwarded immediately. Closed messages
+        are held by the tracker so trailing stdio can be drained first.
+        """
+        self._record_protocol_message(message)
+        if tracker.observe(message):
+            return False
+
+        if isinstance(message, dict) and message.get("method") == "log_external_stream":
+            params = message.get("params", {}) or {}
+            stream = params.get("stream")
+            text = params.get("text", "")
+            if isinstance(stream, str) and stream in self._forwarded_lines:
+                line_count = len(str(text).splitlines())
+                if text and not text.endswith("\n"):
+                    line_count = max(line_count, 1)
+                if line_count:
+                    self._forwarded_lines[stream] += line_count
+
+        handler.handle_message(message)
+        return True
+
     def _reconnect_delay(self, reconnect_count: int) -> float:
         """Exponentially back off reconnects so a flapping tail cannot storm SSH."""
         if reconnect_count <= 0:
@@ -410,26 +439,8 @@ class SSHMessageReader(PipesMessageReader):
 
                         try:
                             message = json.loads(line)
-                            self._record_protocol_message(message)
-                            if tracker.observe(message):
+                            if not self._forward_message(message, handler, tracker):
                                 continue
-                            if (
-                                isinstance(message, dict)
-                                and message.get("method") == "log_external_stream"
-                            ):
-                                params = message.get("params", {}) or {}
-                                stream = params.get("stream")
-                                text = params.get("text", "")
-                                if (
-                                    isinstance(stream, str)
-                                    and stream in self._forwarded_lines
-                                ):
-                                    line_count = len(str(text).splitlines())
-                                    if text and not text.endswith("\n"):
-                                        line_count = max(line_count, 1)
-                                    if line_count:
-                                        self._forwarded_lines[stream] += line_count
-                            handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
                             self.total_messages = total_message_count
@@ -473,26 +484,8 @@ class SSHMessageReader(PipesMessageReader):
 
                         try:
                             message = json.loads(line)
-                            self._record_protocol_message(message)
-                            if tracker.observe(message):
+                            if not self._forward_message(message, handler, tracker):
                                 continue
-                            if (
-                                isinstance(message, dict)
-                                and message.get("method") == "log_external_stream"
-                            ):
-                                params = message.get("params", {}) or {}
-                                stream = params.get("stream")
-                                text = params.get("text", "")
-                                if (
-                                    isinstance(stream, str)
-                                    and stream in self._forwarded_lines
-                                ):
-                                    line_count = len(str(text).splitlines())
-                                    if text and not text.endswith("\n"):
-                                        line_count = max(line_count, 1)
-                                    if line_count:
-                                        self._forwarded_lines[stream] += line_count
-                            handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
                             self.total_messages = total_message_count
@@ -638,26 +631,8 @@ class SSHMessageReader(PipesMessageReader):
                         processed_lines += 1
                         try:
                             message = json.loads(line)
-                            self._record_protocol_message(message)
-                            if tracker.observe(message):
+                            if not self._forward_message(message, handler, tracker):
                                 continue
-                            if (
-                                isinstance(message, dict)
-                                and message.get("method") == "log_external_stream"
-                            ):
-                                params = message.get("params", {}) or {}
-                                stream = params.get("stream")
-                                text = params.get("text", "")
-                                if (
-                                    isinstance(stream, str)
-                                    and stream in self._forwarded_lines
-                                ):
-                                    line_count = len(str(text).splitlines())
-                                    if text and not text.endswith("\n"):
-                                        line_count = max(line_count, 1)
-                                    if line_count:
-                                        self._forwarded_lines[stream] += line_count
-                            handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
                             self.total_messages = total_message_count
