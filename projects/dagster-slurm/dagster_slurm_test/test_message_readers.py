@@ -40,6 +40,20 @@ def test_ssh_message_reader_resumes_after_reconnect(monkeypatch, tmp_path):
         json.dumps({"method": "opened", "params": {}}) + "\n",
         json.dumps(
             {
+                "method": "log_external_stream",
+                "params": {"stream": "stdout", "text": "hello\n"},
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
+                "method": "log_external_stream",
+                "params": {"stream": "stderr", "text": "å"},
+            }
+        )
+        + "\n",
+        json.dumps(
+            {
                 "method": "report_asset_materialization",
                 "params": {"asset_key": "myprefix/orders"},
             }
@@ -53,7 +67,7 @@ def test_ssh_message_reader_resumes_after_reconnect(monkeypatch, tmp_path):
         tail_cmd = cmd[-1]
         if "-n +1 " in tail_cmd:
             return _FakeProcess(payload_lines)
-        if "-n +3 " in tail_cmd:
+        if "-n +5 " in tail_cmd:
             return _FakeProcess([])
         raise AssertionError(f"Unexpected tail command: {tail_cmd}")
 
@@ -76,11 +90,15 @@ def test_ssh_message_reader_resumes_after_reconnect(monkeypatch, tmp_path):
 
     assert [message["method"] for message in handler.messages] == [
         "opened",
+        "log_external_stream",
+        "log_external_stream",
         "report_asset_materialization",
     ]
+    assert reader._stdio_messages == {"stdout": 1, "stderr": 1}
+    assert reader._stdio_bytes == {"stdout": 6, "stderr": 2}
     assert len(commands) == 2
     assert "-n +1 " in commands[0][-1]
-    assert "-n +3 " in commands[1][-1]
+    assert "-n +5 " in commands[1][-1]
 
 
 def test_ssh_message_reader_tracks_closed_exception(monkeypatch, tmp_path):
@@ -148,6 +166,46 @@ def test_ssh_message_reader_tracks_closed_exception(monkeypatch, tmp_path):
         "cause": None,
         "context": None,
     }
+
+
+def test_ssh_message_reader_emits_one_bounded_stdio_summary(monkeypatch, tmp_path):
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    reader = SSHMessageReader(
+        remote_path="/tmp/messages.jsonl",
+        ssh_config=SSHConnectionResource(
+            host="example.com", user="testuser", key_path=str(key_path)
+        ),
+    )
+    debug_calls: list[tuple[Any, ...]] = []
+    reader.logger = cast(
+        Any,
+        SimpleNamespace(debug=lambda *args: debug_calls.append(args)),
+    )
+    monkeypatch.setattr(reader, "_read_loop_with_reconnect", lambda _handler: None)
+    monkeypatch.setattr(reader, "_await_closed", lambda **_kwargs: True)
+    reader.total_messages = 5
+    reader._stdio_messages = {"stdout": 2, "stderr": 1}
+    reader._stdio_bytes = {"stdout": 21, "stderr": 8}
+
+    with reader.read_messages(_CollectingHandler()):
+        pass
+
+    summary_calls = [
+        call for call in debug_calls if call[0].startswith("SSHMessageReader summary:")
+    ]
+    assert summary_calls == [
+        (
+            "SSHMessageReader summary: total_messages=%d; "
+            "stdout_messages=%d, stdout_bytes=%d; "
+            "stderr_messages=%d, stderr_bytes=%d",
+            5,
+            2,
+            21,
+            1,
+            8,
+        )
+    ]
 
 
 def test_ssh_message_reader_control_path_keeps_key_auth_opts(tmp_path):
