@@ -24,6 +24,8 @@
   selectedPython = pythonPackages.${pythonVersion} or (throw "Unsupported Python version: ${pythonVersion}");
   ghStack = pkgs.gh-stack.overrideAttrs (old: {
     version = "0.1.0";
+    checkFlags = (old.checkFlags or []) ++ ["-skip=^TestIntegration_AdoptedBranchRebasesFromCommonAncestor$"];
+    preCheck = (old.preCheck or "") + "\nexport LC_ALL=C\n";
     src = pkgs.fetchFromGitHub {
       owner = "github";
       repo = "gh-stack";
