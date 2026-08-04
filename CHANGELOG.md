@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.18.0-rc.1 (2026-08-04)
+
+### Bug Fixes
+
+- Avoid duplicating SSH stdio events
+  ([`4919fb4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4919fb48e7aa117e3b9ff8821b4642b0f24d5bcf))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`8572b68`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8572b68e83e1e92a0927565a2f218c828644e09c))
+
+
 ## v1.18.0 (2026-08-02)
 
 ### Chores
