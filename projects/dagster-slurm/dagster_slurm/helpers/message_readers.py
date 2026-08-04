@@ -429,10 +429,6 @@ class SSHMessageReader(PipesMessageReader):
                                         line_count = max(line_count, 1)
                                     if line_count:
                                         self._forwarded_lines[stream] += line_count
-                                self.logger.debug(
-                                    "SSHMessageReader stdio chunk: %s",
-                                    message.get("params", {}).get("text", "")[:200],
-                                )
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
@@ -496,10 +492,6 @@ class SSHMessageReader(PipesMessageReader):
                                         line_count = max(line_count, 1)
                                     if line_count:
                                         self._forwarded_lines[stream] += line_count
-                                self.logger.debug(
-                                    "SSHMessageReader stdio chunk: %s",
-                                    message.get("params", {}).get("text", "")[:200],
-                                )
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
@@ -665,10 +657,6 @@ class SSHMessageReader(PipesMessageReader):
                                         line_count = max(line_count, 1)
                                     if line_count:
                                         self._forwarded_lines[stream] += line_count
-                                self.logger.debug(
-                                    "SSHMessageReader stdio chunk (fallback): %s",
-                                    message.get("params", {}).get("text", "")[:200],
-                                )
                             handler.handle_message(message)
                             message_count += 1
                             total_message_count += 1
