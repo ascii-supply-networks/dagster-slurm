@@ -229,6 +229,8 @@ class SSHMessageReader(PipesMessageReader):
         self._fallback_next_line = 1
         self._ssh_next_line = 1
         self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
+        self._stdio_messages: Dict[str, int] = {"stdout": 0, "stderr": 0}
+        self._stdio_bytes: Dict[str, int] = {"stdout": 0, "stderr": 0}
         self._closed_message: Optional[Dict[str, Any]] = None
         self._closed_exception: Optional[Dict[str, Any]] = None
 
@@ -308,6 +310,16 @@ class SSHMessageReader(PipesMessageReader):
             if hasattr(self, "_closed_tracker"):
                 self._closed_tracker.maybe_flush(handler, force=True)
 
+            self.logger.debug(
+                "SSHMessageReader summary: total_messages=%d; "
+                "stdout_messages=%d, stdout_bytes=%d; "
+                "stderr_messages=%d, stderr_bytes=%d",
+                self.total_messages,
+                self._stdio_messages["stdout"],
+                self._stdio_bytes["stdout"],
+                self._stdio_messages["stderr"],
+                self._stdio_bytes["stderr"],
+            )
             self.logger.debug("Message reader stopped")
 
     def _await_closed(self, timeout: float, interval: float = 0.02) -> bool:
@@ -366,11 +378,14 @@ class SSHMessageReader(PipesMessageReader):
             stream = params.get("stream")
             text = params.get("text", "")
             if isinstance(stream, str) and stream in self._forwarded_lines:
-                line_count = len(str(text).splitlines())
-                if text and not text.endswith("\n"):
+                text_value = str(text)
+                line_count = len(text_value.splitlines())
+                if text_value and not text_value.endswith("\n"):
                     line_count = max(line_count, 1)
                 if line_count:
                     self._forwarded_lines[stream] += line_count
+                self._stdio_messages[stream] += 1
+                self._stdio_bytes[stream] += len(text_value.encode("utf-8"))
 
         handler.handle_message(message)
         return True
