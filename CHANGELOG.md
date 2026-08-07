@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.19.0-rc.1 (2026-08-07)
+
+### Bug Fixes
+
+- Defer run_dir cleanup for callers that reuse a session across run() calls
+  ([`1288961`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1288961c1d770372af8d304ecd8eae0710522445))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`81819e2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/81819e23c9357978a65912171d7c83bf4b2f9c46))
+
+
 ## v1.19.0 (2026-08-04)
 
 ### Chores
