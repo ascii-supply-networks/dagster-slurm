@@ -1434,3 +1434,25 @@ class ComputeResource(ConfigurableResource):
     def teardown_after_execution(self, context: InitResourceContext) -> None:
         """Release run-scoped allocations through Dagster's resource lifecycle."""
         self.teardown(context)
+
+    def cleanup_deferred_run_dir(self, context) -> None:
+        """Delete the remote ``run_dir`` for a step whose ``run()`` calls used
+        ``defer_cleanup=True``.
+
+        ``run(..., defer_cleanup=True)`` (see
+        ``SlurmPipesClient.run``/``SlurmPipesClient.cleanup_deferred_run_dir``)
+        exists for a caller that intentionally invokes ``run()`` repeatedly
+        for one Dagster step against the same session/allocation (for
+        example a per-wave loop) -- that pattern reuses the same
+        deterministic ``run_dir`` on every call, so per-call async cleanup
+        can race the next call's own upload into that directory. Callers
+        that opt into ``defer_cleanup`` must call this once they are truly
+        done calling ``run()`` for that step/partition, most naturally from
+        the same scope that decided to reuse one session/allocation across
+        calls (e.g. right before that scope releases its allocation lease).
+
+        A no-op outside Slurm execution modes (nothing was ever deferred).
+        """
+        client = self.get_pipes_client(context)
+        if isinstance(client, SlurmPipesClient):
+            client.cleanup_deferred_run_dir(context=context)

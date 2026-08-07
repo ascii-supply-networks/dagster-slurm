@@ -221,6 +221,7 @@ class SlurmPipesClient(PipesClient):
         slurm_metrics: SlurmMetricSelection | None = None,
         metrics_collector: SlurmMetricsCallback | None = None,
         poll_timeout: int = 3600,
+        defer_cleanup: bool = False,
         **kwargs,
     ) -> PipesClientCompletedInvocation:
         """Execute payload on Slurm cluster with real-time log streaming.
@@ -248,6 +249,21 @@ class SlurmPipesClient(PipesClient):
                 key-value pairs.
             poll_timeout: Maximum time in seconds to wait for the Slurm job to
                 complete. Defaults to 3600 (1 hour).
+            defer_cleanup: If True, skip the async ``run_dir`` cleanup this call
+                would otherwise trigger (on success, on a reattach outcome, and
+                on failure) and leave it for the caller to remove later via
+                :meth:`cleanup_deferred_run_dir`. ``run_dir`` is deterministic
+                per Dagster step/partition/mapping (see ``_get_remote_run_dir``),
+                not per call, so a caller that invokes ``run()`` repeatedly for
+                one step against the same allocation/session (e.g. a per-wave
+                loop that intentionally reuses one ``SlurmPipesClient``-backed
+                ``ComputeResource`` across many ``run()`` calls) would otherwise
+                have each call's fire-and-forget ``nohup rm -rf <run_dir> &``
+                race the *next* call's ``mkdir -p``/upload into that same,
+                still-being-deleted directory -- a real, unsynchronized
+                delete-vs-recreate race, not merely wasted re-staging work.
+                Defaults to False so every existing caller (one ``run()`` call
+                per directory) is unaffected.
             **kwargs: Additional arguments (ignored, for forward compatibility)
 
         Yields:
@@ -400,7 +416,7 @@ class SlurmPipesClient(PipesClient):
                         )
 
                         # Cleanup
-                        if not self.debug_mode:
+                        if not self.debug_mode and not defer_cleanup:
                             try:
                                 self._schedule_async_cleanup(ssh_pool, run_dir)
                             except Exception as e:
@@ -464,7 +480,7 @@ class SlurmPipesClient(PipesClient):
                         )
 
                         # Cleanup
-                        if not self.debug_mode:
+                        if not self.debug_mode and not defer_cleanup:
                             try:
                                 self._schedule_async_cleanup(ssh_pool, run_dir)
                             except Exception as e:
@@ -697,7 +713,7 @@ class SlurmPipesClient(PipesClient):
                 )
 
                 # Cleanup (unless debug mode)
-                if not self.debug_mode:
+                if not self.debug_mode and not defer_cleanup:
                     try:
                         self._schedule_async_cleanup(ssh_pool, run_dir)
                     except Exception as e:
@@ -733,8 +749,16 @@ class SlurmPipesClient(PipesClient):
 
             self.logger.error(f"Execution failed: {e}")
 
-            # Cleanup on failure (unless debug mode)
-            if self.cleanup_on_failure and not self.debug_mode and run_dir:
+            # Cleanup on failure (unless debug mode, or the caller asked to
+            # defer cleanup because it may reuse this same run_dir -- for
+            # example a retry within a wave loop that reattaches to the same
+            # session/allocation).
+            if (
+                self.cleanup_on_failure
+                and not self.debug_mode
+                and not defer_cleanup
+                and run_dir
+            ):
                 try:
                     with ssh_pool:
                         self._schedule_async_cleanup(ssh_pool, run_dir)
@@ -768,6 +792,45 @@ class SlurmPipesClient(PipesClient):
             self._sigterm_received = False
 
         return PipesClientCompletedInvocation(session)
+
+    def cleanup_deferred_run_dir(self, *, context: AssetExecutionContext) -> None:
+        """Delete one step's ``run_dir`` after a run of ``defer_cleanup=True`` calls.
+
+        Call this once, after the caller is certain it will not invoke
+        ``run(..., defer_cleanup=True)`` again for the same Dagster
+        step/partition/mapping (see ``_get_remote_run_dir`` -- ``run_dir`` is
+        derived purely from ``remote_base``, the run id, and that identity, so
+        it is safe to recompute here without any state carried over from the
+        deferred calls). A natural place to call this is the same scope that
+        opted into reusing one session/allocation across repeated ``run()``
+        calls (for example, right before that scope releases its allocation
+        lease), once nothing else will write into this directory.
+
+        A no-op in debug mode, matching every other cleanup path on this
+        client (debug mode always preserves remote directories for
+        inspection).
+        """
+        if self.debug_mode:
+            return
+        if context.run:
+            run_id = context.run.run_id
+        else:
+            self.logger.warning(
+                "Context is not part of a Dagster run; skipping deferred run_dir "
+                "cleanup (no stable run_id to derive it from)."
+            )
+            return
+
+        ssh_pool = SSHConnectionPool(self.slurm.ssh)
+        try:
+            with ssh_pool:
+                remote_base = self._get_remote_base(run_id, ssh_pool)
+                run_dir = self._get_remote_run_dir(
+                    remote_base, run_id, context.op_execution_context
+                )
+                self._schedule_async_cleanup(ssh_pool, run_dir)
+        except Exception as exc:
+            self.logger.warning(f"Deferred run_dir cleanup failed: {exc}")
 
     @property
     def _control_path(self) -> Optional[str]:
