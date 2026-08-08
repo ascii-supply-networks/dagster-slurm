@@ -75,11 +75,13 @@ compute_ray = ComputeResource(
         mem="64G",
         time_limit="04:00:00",
         partition="gpu",
+        nodelist="gpu-[01-02]",
     ),
 )
 ```
 
 - The allocation belongs to the Dagster run, not to one asset.
+- Set `nodelist` to a node name or Slurm host-list expression when node-aware capacity discovery should pin the allocation to the selected nodes.
 - `dagster-slurm` starts Ray once, passes `RAY_ADDRESS` to each compatible asset step, and releases the allocation during resource teardown.
 - Per-asset Slurm resource overrides must match the run allocation. Incompatible overrides fail before submission instead of silently creating a different scheduling model.
 - The example project enables this for the Ray resource with `SLURM_ALLOCATION_SCOPE=run`.

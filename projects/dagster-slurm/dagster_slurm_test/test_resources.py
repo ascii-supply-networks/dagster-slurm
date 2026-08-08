@@ -417,6 +417,40 @@ def test_slurm_session_allocation_inherits_queue_gpu_default(monkeypatch):
     assert "#SBATCH --gres=gpu:4" in allocation_script
 
 
+def test_run_allocation_nodelist_pins_sbatch_submission(monkeypatch):
+    compute = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=_mock_slurm_resource(gpus_per_node=8),
+        default_launcher=RayLauncher(num_gpus_per_node=8),
+        allocation_scope=SlurmAllocationScope.RUN,
+        run_allocation=SlurmRunAllocationConfig(nodelist="gpu-[01-02]"),
+    )
+    monkeypatch.setattr(
+        SlurmSessionResource,
+        "setup_for_execution",
+        lambda self, context: object.__setattr__(self, "_initialized", True),
+    )
+    session = compute._get_or_create_run_allocation_session(
+        build_init_resource_context()
+    )
+
+    allocation_script, _ = _render_allocation_script(
+        session,
+        monkeypatch,
+        run_id="run_pinned_to_nodes",
+        job_id=125,
+    )
+
+    assert "#SBATCH --nodelist=gpu-[01-02]" in allocation_script
+    assert "#SBATCH --gres=gpu:8" in allocation_script
+
+
+@pytest.mark.parametrize("nodelist", ["", "gpu-01\ngpu-02", "gpu-01\n"])
+def test_run_allocation_nodelist_rejects_invalid_expression(nodelist):
+    with pytest.raises(ValueError, match="nodelist"):
+        SlurmRunAllocationConfig(nodelist=nodelist)
+
+
 def test_slurm_session_allocation_quotes_remote_working_dir_paths(monkeypatch):
     remote_base = "/remote/base dir;touch pwned"
     run_id = "run_with_spaces"
