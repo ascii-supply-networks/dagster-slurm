@@ -43,6 +43,13 @@ _SHARED_ALLOCATION_CLEANUP_GRACE_SECONDS = 10
 _SAFE_AUXILIARY_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_.=-]+$")
 
 
+def _validate_nodelist(nodelist: str | None) -> None:
+    if nodelist is not None and (
+        not nodelist or any(character.isspace() for character in nodelist)
+    ):
+        raise ValueError("nodelist must be a non-empty Slurm host-list expression")
+
+
 def _try_acquire_remote_lock(
     ssh_pool: SSHConnectionPool,
     *,
@@ -191,6 +198,13 @@ class SlurmRunAllocationConfig(Config):
         default=None,
         description="Slurm partition override for the allocation.",
     )
+    nodelist: Optional[str] = Field(
+        default=None,
+        description=(
+            "Slurm node list expression used to pin the run-owned allocation, "
+            "for example 'gpu-01' or 'gpu-[01-04]'."
+        ),
+    )
     qos: Optional[str] = Field(default=None, description="QoS override.")
     account: Optional[str] = Field(default=None, description="Account override.")
     reservation: Optional[str] = Field(
@@ -208,6 +222,7 @@ class SlurmRunAllocationConfig(Config):
 
     @model_validator(mode="after")
     def _validate_signal_before_timeout(self) -> "SlurmRunAllocationConfig":
+        _validate_nodelist(self.nodelist)
         if self.time_limit is None and self.signal_before_timeout is not None:
             normalize_signal_before_timeout(self.signal_before_timeout)
         elif self.time_limit is not None:
@@ -253,6 +268,10 @@ class SlurmSessionResource(ConfigurableResource):
         description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
     )
     partition: Optional[str] = Field(default=None, description="Override partition")
+    nodelist: Optional[str] = Field(
+        default=None,
+        description="Node list expression used to pin the session allocation",
+    )
     max_concurrent_jobs: int = Field(default=10, description="Max concurrent srun jobs")
     enable_health_checks: bool = Field(
         default=True, description="Enable node health checks"
@@ -292,6 +311,7 @@ class SlurmSessionResource(ConfigurableResource):
 
     @model_validator(mode="after")
     def _validate_signal_before_timeout(self) -> "SlurmSessionResource":
+        _validate_nodelist(self.nodelist)
         self._effective_signal_before_timeout()
         return self
 
@@ -533,6 +553,10 @@ class SlurmSessionResource(ConfigurableResource):
                 cleaned = value.strip()
                 return cleaned or None
             return str(value)
+
+        nodelist = _normalize_optional(self.nodelist)
+        if nodelist:
+            script_lines.append(f"#SBATCH --nodelist={nodelist}")
 
         qos = _normalize_optional(self.qos) or _normalize_optional(
             getattr(self.slurm.queue, "qos", None)
