@@ -94,6 +94,8 @@ When Dagster restarts (deploy, code reload, crash), it sends `SIGTERM` to runnin
 
 With the **multiprocess executor**, the parent process unconditionally fails the run on `SIGTERM` (this is Dagster core behaviour). The Slurm job is preserved, and on re-launch `dagster-slurm` automatically discovers the existing job on the cluster — it **never resubmits**. Configure `run_retries` in `dagster.yaml` so the daemon re-launches failed runs automatically.
 
+Run-scoped Ray allocations use the same recovery model at the individual `srun` step level. Driver steps write durable step-ID, exit-status, and log markers before the local supervisor waits. A retry reattaches to the original allocation, replays its Pipes messages, and adopts a running or successfully completed step; only a known failed step is submitted again.
+
 See [Troubleshooting: Dagster restarts and Slurm job survival](./troubleshooting.md#dagster-restarts-and-slurm-job-survival) for details.
 
 :::

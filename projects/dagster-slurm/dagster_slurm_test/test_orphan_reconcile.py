@@ -11,7 +11,10 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import (
     _TAG_LAST_SUPERVISOR_HEARTBEAT,
     _TAG_ORPHAN_RETRY_OF,
     _TAG_RUN_DIR,
+    _TAG_SESSION_ALLOCATION_DIR,
+    _TAG_SESSION_STEP_STATUS_PATH,
     SlurmPipesClient,
+    _session_step_scoped_tag_key,
 )
 from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
 
@@ -80,6 +83,16 @@ def _add_started_run(
 def test_reconcile_terminal_orphan_marks_failed_and_requests_reattach():
     with dg.DagsterInstance.ephemeral() as instance:
         run = _add_started_run(instance)
+        instance.add_run_tags(
+            run.run_id,
+            {
+                _TAG_SESSION_ALLOCATION_DIR: "/remote/allocations/dagster_original",
+                _TAG_SESSION_STEP_STATUS_PATH: "/remote/run-dir/.step.status",
+                _session_step_scoped_tag_key("orphan_asset", "s"): (
+                    "/remote/run-dir/.step.status"
+                ),
+            },
+        )
 
         with patch(
             "dagster_slurm.sensors.SSHConnectionPool",
@@ -100,6 +113,14 @@ def test_reconcile_terminal_orphan_marks_failed_and_requests_reattach():
         assert request.asset_selection == [dg.AssetKey("orphan_asset")]
         assert request.tags[_TAG_JOB_ID] == "42"
         assert request.tags[_TAG_RUN_DIR] == "/remote/run-dir"
+        assert (
+            request.tags[_TAG_SESSION_ALLOCATION_DIR]
+            == "/remote/allocations/dagster_original"
+        )
+        assert request.tags[_TAG_SESSION_STEP_STATUS_PATH].endswith(".step.status")
+        assert request.tags[_session_step_scoped_tag_key("orphan_asset", "s")].endswith(
+            ".step.status"
+        )
         assert request.tags[_TAG_ORPHAN_RETRY_OF] == run.run_id
 
 

@@ -34,6 +34,7 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
 from dagster_slurm.resources.session import (
     SlurmAllocation,
     SlurmSessionResource,
+    SlurmStepExecutionResult,
     _try_acquire_remote_lock,
 )
 
@@ -348,6 +349,8 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
                 return "42.7"
             if ".slurm-step-2.id" in cmd:
                 return "42.8"
+            if ".slurm-step-" in cmd and ".status" in cmd:
+                return "0"
             return ""
 
     session = SlurmSessionResource(slurm=_mock_slurm_resource())
@@ -365,12 +368,14 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
     )
     fake_ssh_pool = FakeSSHPool()
     ssh_pool = cast(SSHConnectionPool, fake_ssh_pool)
+    updates: list[SlurmStepExecutionResult] = []
 
     first = allocation.execute(
         plan,
         asset_key="asset/one",
         run_dir="/remote/run/one",
         ssh_pool=ssh_pool,
+        step_update_callback=updates.append,
     )
     second = allocation.execute(
         plan,
@@ -384,10 +389,12 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
     assert first.stderr_path != second.stderr_path
     assert first.stdout_path.endswith("slurm-42-step-1_asset_one.out")
     assert second.stdout_path.endswith("slurm-42-step-2_asset_two.out")
-    assert first.stdout_path in fake_ssh_pool.commands[1]
-    assert second.stdout_path in fake_ssh_pool.commands[4]
+    assert any(first.stdout_path in command for command in fake_ssh_pool.commands)
+    assert any(second.stdout_path in command for command in fake_ssh_pool.commands)
     assert first.step_id == "42.7"
     assert second.step_id == "42.8"
+    assert [update.step_id for update in updates] == [None, "42.7"]
+    assert updates[0].status_path == "/remote/run/one/.slurm-step-1.status"
 
 
 def test_slurm_session_allocation_honors_zero_gpu_override(monkeypatch):
@@ -918,6 +925,8 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
             self.commands.append(cmd)
             if cmd.startswith("cat /remote/run/.slurm-step-1.id"):
                 return "42.7"
+            if cmd.startswith("cat /remote/run/.slurm-step-1.status"):
+                return "0"
             return ""
 
     allocation = SlurmAllocation(
@@ -951,8 +960,10 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
         "/remote/run/ray_driver.sh",
         "/remote/run/ray_worker-1.sh",
     ]
-    assert fake_ssh_pool.commands[-2].startswith(
-        "srun --overlap --jobid=42 --job-name=asset_1"
+    assert any(
+        "srun --overlap --jobid=42 --job-name=asset_1" in command
+        and "nohup bash" in command
+        for command in fake_ssh_pool.commands
     )
     asset_script = fake_ssh_pool.writes[0][1].splitlines()
     assert asset_script[0] == "#!/bin/bash"
@@ -971,8 +982,10 @@ def test_slurm_allocation_srun_failure_reports_step_logs():
 
         def run(self, cmd: str):
             self.commands.append(cmd)
-            if cmd.startswith("srun --overlap"):
-                raise RuntimeError("ssh command failed")
+            if cmd.startswith("cat /remote/run/.slurm-step-1.id"):
+                return "42.7"
+            if cmd.startswith("cat /remote/run/.slurm-step-1.status"):
+                return "1"
             if "slurm-42-step-1_asset.out" in cmd:
                 return "captured stdout"
             if "slurm-42-step-1_asset.err" in cmd:
@@ -1002,11 +1015,52 @@ def test_slurm_allocation_srun_failure_reports_step_logs():
         )
 
     message = str(exc_info.value)
-    assert "srun step 1 failed in allocation 42" in message
+    assert "srun step failed in allocation 42" in message
     assert "stdout_path=/remote/run/slurm-42-step-1_asset.out" in message
     assert "stderr_path=/remote/run/slurm-42-step-1_asset.err" in message
     assert "captured stdout" in message
     assert "captured stderr" in message
+
+
+def test_slurm_allocation_wait_for_step_reattaches_to_existing_markers(monkeypatch):
+    class FakeSSHPool:
+        status_reads = 0
+
+        def run(self, cmd: str) -> str:
+            if cmd.startswith("cat /remote/run/.step.id"):
+                return "42.7"
+            if cmd.startswith("cat /remote/run/.step.status"):
+                self.status_reads += 1
+                return "0" if self.status_reads > 1 else ""
+            return ""
+
+    allocation = SlurmAllocation(
+        slurm_job_id=42,
+        nodes=["c1"],
+        working_dir="/remote/session",
+        config=SlurmSessionResource(slurm=_mock_slurm_resource()),
+    )
+    updates: list[SlurmStepExecutionResult] = []
+    polls: list[str | None] = []
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    result = allocation.wait_for_step(
+        SlurmStepExecutionResult(
+            job_id=42,
+            stdout_path="/remote/run/stdout",
+            stderr_path="/remote/run/stderr",
+            step_id_path="/remote/run/.step.id",
+            status_path="/remote/run/.step.status",
+        ),
+        ssh_pool=cast(SSHConnectionPool, FakeSSHPool()),
+        step_update_callback=updates.append,
+        poll_callback=lambda current: polls.append(current.step_id),
+        timeout=10,
+    )
+
+    assert result.step_id == "42.7"
+    assert [update.step_id for update in updates] == ["42.7"]
+    assert polls == ["42.7"]
 
 
 def test_persistent_ray_scripts_use_node_local_temp_dirs_and_hostname_address():
@@ -1070,6 +1124,27 @@ def test_run_allocation_session_creation_is_thread_safe(monkeypatch):
 
     assert len(set(session_ids)) == 1
     assert len(setup_calls) == 1
+
+
+def test_session_teardown_preserves_allocation_for_reattach(monkeypatch):
+    session = SlurmSessionResource(slurm=_mock_slurm_resource())
+    allocation = SimpleNamespace(slurm_job_id=42, cancel=lambda _pool: None)
+    ssh_pool = SimpleNamespace(__exit__=lambda *_args: None)
+    cleanup_calls: list[int] = []
+    monkeypatch.setattr(
+        session,
+        "_schedule_shared_allocation_cleanup",
+        lambda: cleanup_calls.append(42),
+    )
+    object.__setattr__(session, "_allocation", allocation)
+    object.__setattr__(session, "_ssh_pool", ssh_pool)
+    object.__setattr__(session, "_initialized", True)
+    object.__setattr__(session, "_shared_lifecycle", True)
+    object.__setattr__(session, "_preserve_allocation_on_teardown", True)
+
+    session.teardown_after_execution(build_init_resource_context())
+
+    assert cleanup_calls == []
 
 
 class LocalSlurmFakeSSHPool:
@@ -1141,6 +1216,41 @@ def test_run_allocation_attaches_to_existing_remote_session(tmp_path: Path):
 
     assert first_allocation.slurm_job_id == second_allocation.slurm_job_id
     assert first_allocation.nodes == second_allocation.nodes
+    assert ssh_pool.submitted_jobs == [700]
+
+
+def test_run_allocation_retry_reattaches_to_tagged_session(tmp_path: Path):
+    ssh_pool = LocalSlurmFakeSSHPool()
+    original_context = SimpleNamespace(
+        run=SimpleNamespace(run_id="original-run", tags={})
+    )
+    original_session = SlurmSessionResource(
+        slurm=_mock_slurm_resource(remote_base=str(tmp_path)),
+        num_nodes=2,
+    )
+    object.__setattr__(
+        original_session,
+        "_ssh_pool",
+        cast(SSHConnectionPool, ssh_pool),
+    )
+    original = original_session._create_allocation(original_context)
+
+    retry_session = SlurmSessionResource(
+        slurm=_mock_slurm_resource(remote_base=str(tmp_path)),
+        num_nodes=2,
+    )
+    object.__setattr__(retry_session, "_ssh_pool", cast(SSHConnectionPool, ssh_pool))
+    retry_context = SimpleNamespace(
+        run=SimpleNamespace(
+            run_id="retry-run",
+            tags={"dagster_slurm/session_allocation_dir": original.working_dir},
+        )
+    )
+
+    reattached = retry_session._create_allocation(retry_context)
+
+    assert reattached.slurm_job_id == original.slurm_job_id
+    assert reattached.working_dir == original.working_dir
     assert ssh_pool.submitted_jobs == [700]
 
 

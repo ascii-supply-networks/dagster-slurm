@@ -24,7 +24,15 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import (
     _TAG_ASSET_KEY,
     _TAG_JOB_ID,
     _TAG_RUN_DIR,
+    _TAG_SESSION_ALLOCATION_DIR,
+    _TAG_SESSION_STEP_ID,
+    _TAG_SESSION_STEP_ID_PATH,
+    _TAG_SESSION_STEP_STATUS_PATH,
+    _TAG_SESSION_STEP_STDERR_PATH,
+    _TAG_SESSION_STEP_STDOUT_PATH,
+    _session_step_scoped_tag_key,
 )
+from dagster_slurm.resources.session import SlurmStepExecutionResult
 
 
 def _make_client() -> SlurmPipesClient:
@@ -313,6 +321,40 @@ def test_store_job_tags_none_context():
     client._store_job_tags(None, 42, "/tmp/run_dir", "my_asset")
 
 
+def test_store_session_step_tags_records_durable_invocation():
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.run_id = "test-run-id"
+    result = SlurmStepExecutionResult(
+        job_id=42,
+        stdout_path="/tmp/run/stdout",
+        stderr_path="/tmp/run/stderr",
+        step_id="42.7",
+        step_id_path="/tmp/run/.step.id",
+        status_path="/tmp/run/.step.status",
+    )
+
+    client._store_session_step_tags(
+        mock_op_context,
+        result=result,
+        run_dir="/tmp/run",
+        asset_key="my_asset",
+        allocation_dir="/tmp/allocations/dagster_original",
+    )
+
+    stored_tags = mock_op_context.instance.add_run_tags.call_args.args[1]
+    assert stored_tags[_TAG_JOB_ID] == "42"
+    assert stored_tags[_TAG_RUN_DIR] == "/tmp/run"
+    assert stored_tags[_TAG_SESSION_ALLOCATION_DIR].endswith("dagster_original")
+    assert stored_tags[_TAG_SESSION_STEP_ID] == "42.7"
+    assert stored_tags[_TAG_SESSION_STEP_ID_PATH].endswith(".step.id")
+    assert stored_tags[_TAG_SESSION_STEP_STATUS_PATH].endswith(".step.status")
+    assert stored_tags[_TAG_SESSION_STEP_STDOUT_PATH].endswith("stdout")
+    assert stored_tags[_TAG_SESSION_STEP_STDERR_PATH].endswith("stderr")
+    assert stored_tags[_TAG_ASSET_KEY] == "my_asset"
+    assert stored_tags[_session_step_scoped_tag_key("my_asset", "i")] == "42.7"
+
+
 def test_get_asset_key_string_single_asset():
     """_get_asset_key_string returns the asset key as a string."""
     client = _make_client()
@@ -356,6 +398,104 @@ def test_find_reattachable_job_from_parent_run():
     assert result is not None
     assert result["job_id"] == "42"
     assert result["run_dir"] == "/tmp/old_run_dir"
+
+
+def test_find_reattachable_job_preserves_session_step_metadata():
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+    parent_run = MagicMock()
+    parent_run.tags = {
+        _TAG_JOB_ID: "42",
+        _TAG_RUN_DIR: "/tmp/old_run_dir",
+        _TAG_SESSION_ALLOCATION_DIR: "/tmp/allocations/dagster_original",
+        _TAG_SESSION_STEP_ID: "42.7",
+        _TAG_SESSION_STEP_ID_PATH: "/tmp/old_run_dir/.step.id",
+        _TAG_SESSION_STEP_STATUS_PATH: "/tmp/old_run_dir/.step.status",
+        _TAG_SESSION_STEP_STDOUT_PATH: "/tmp/old_run_dir/stdout",
+        _TAG_SESSION_STEP_STDERR_PATH: "/tmp/old_run_dir/stderr",
+    }
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+    ssh_pool = MagicMock()
+    ssh_pool.run.return_value = ""
+
+    with patch.object(client, "_get_job_state", return_value="RUNNING"):
+        result = client._find_reattachable_job(
+            mock_op_context,
+            ssh_pool,
+            "my_asset",
+        )
+
+    assert result is not None
+    assert result[_TAG_SESSION_STEP_ID] == "42.7"
+    assert result[_TAG_SESSION_STEP_STATUS_PATH].endswith(".step.status")
+
+
+def test_find_reattachable_job_selects_parallel_asset_step_metadata():
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+    parent_tags = {
+        _TAG_JOB_ID: "42",
+        _TAG_RUN_DIR: "/tmp/asset-b",
+        _TAG_ASSET_KEY: "asset-b",
+    }
+    for asset_key, step_id in (("asset-a", "42.7"), ("asset-b", "42.8")):
+        scoped_values = {
+            "j": "42",
+            "r": f"/tmp/{asset_key}",
+            "a": asset_key,
+            "d": "/tmp/allocations/dagster_original",
+            "i": step_id,
+            "p": f"/tmp/{asset_key}/.step.id",
+            "s": f"/tmp/{asset_key}/.step.status",
+            "o": f"/tmp/{asset_key}/stdout",
+            "e": f"/tmp/{asset_key}/stderr",
+        }
+        parent_tags.update(
+            {
+                _session_step_scoped_tag_key(asset_key, field): value
+                for field, value in scoped_values.items()
+            }
+        )
+    parent_run = MagicMock(tags=parent_tags)
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+    ssh_pool = MagicMock()
+    ssh_pool.run.return_value = ""
+
+    with patch.object(client, "_get_job_state", return_value="RUNNING"):
+        result = client._find_reattachable_job(
+            mock_op_context,
+            ssh_pool,
+            "asset-a",
+        )
+
+    assert result is not None
+    assert result[_TAG_SESSION_STEP_ID] == "42.7"
+    assert result["run_dir"] == "/tmp/asset-a"
+
+
+def test_find_reattachable_job_skips_failed_session_step():
+    client = _make_client()
+    mock_op_context = MagicMock()
+    mock_op_context.dagster_run.parent_run_id = "parent-run-123"
+    parent_run = MagicMock()
+    parent_run.tags = {
+        _TAG_JOB_ID: "42",
+        _TAG_RUN_DIR: "/tmp/old_run_dir",
+        _TAG_SESSION_STEP_STATUS_PATH: "/tmp/old_run_dir/.step.status",
+    }
+    mock_op_context.instance.get_run_by_id.return_value = parent_run
+    ssh_pool = MagicMock()
+    ssh_pool.run.return_value = "1"
+
+    result = client._find_reattachable_job(
+        mock_op_context,
+        ssh_pool,
+        "my_asset",
+    )
+
+    assert result is None
 
 
 def test_find_reattachable_job_from_failed_run_query():
