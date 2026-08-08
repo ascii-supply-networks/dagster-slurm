@@ -206,6 +206,41 @@ Open `http://127.0.0.1:8265`.
 - Use `SlurmRunAllocationConfig.cpus_per_task`, `mem`, `num_nodes`, and queue fields to size run-scoped allocations.
 - `ray_start_args` lets you pass `ray start` flags for debugging.
 
+### Reclaim capacity from failed co-tenants
+
+Ray schedules new work onto resources released by another asset, but it cannot resize an `ActorPoolStrategy` after that pool starts. For concurrent assets in a run-scoped allocation, split each asset's backlog into a primary fair-share slice and a reserve tail. Run the primary slice immediately, wait until released capacity remains idle across multiple observations, then submit the reserve through a second actor pool:
+
+```python
+from dagster_slurm import run_with_ray_reserve_topup
+from ray.data import ActorPoolStrategy
+
+
+def process(dataset, workers):
+    return dataset.map_batches(
+        Mapper,
+        compute=ActorPoolStrategy(min_size=workers, max_size=workers),
+        num_cpus=4,
+        num_gpus=1,
+    ).materialize()
+
+
+primary_result, reserve_result = run_with_ray_reserve_topup(
+    primary=lambda: process(primary, fair_share_workers),
+    reserve=lambda available: process(
+        reserve,
+        min(max_reserve_workers, int(available["GPU"])),
+    ),
+    minimum_resources={"GPU": 1, "CPU": 4},
+    stable_polls=2,
+    poll_interval_seconds=1,
+    timeout_seconds=300,
+)
+```
+
+The helper starts the primary callback and capacity watcher concurrently, then starts the reserve callback with the stable snapshot. It returns both results so the caller can merge them; the reserve result is `None` after a timeout. Resource-provider failures use bounded exponential retry, which prevents a single transient Ray RPC error from disabling a long-lived watch.
+
+Include every resource each reserve actor needs in `minimum_resources`, not only GPUs. This avoids claiming GPU lanes while CPU or custom resources remain occupied. The returned snapshot is an observation rather than a reservation, so the helper dispatches the reserve callback immediately and lets Ray arbitrate any race with other cluster users.
+
 ## Packaging the environment
 
 Set `ComputeResource.auto_detect_platform=True` (default) so pixi packs the right platform build for your cluster. For faster startup in production:
