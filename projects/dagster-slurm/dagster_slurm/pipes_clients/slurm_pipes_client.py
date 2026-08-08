@@ -58,10 +58,45 @@ from ..resources.slurm import SlurmResource, validate_signal_before_timeout
 _TAG_JOB_ID = "dagster_slurm/job_id"
 _TAG_RUN_DIR = "dagster_slurm/run_dir"
 _TAG_ASSET_KEY = "dagster_slurm/asset_key"
+_TAG_SESSION_ALLOCATION_DIR = "dagster_slurm/session_allocation_dir"
+_TAG_SESSION_STEP_ID = "dagster_slurm/session_step_id"
+_TAG_SESSION_STEP_ID_PATH = "dagster_slurm/session_step_id_path"
+_TAG_SESSION_STEP_STATUS_PATH = "dagster_slurm/session_step_status_path"
+_TAG_SESSION_STEP_STDOUT_PATH = "dagster_slurm/session_step_stdout_path"
+_TAG_SESSION_STEP_STDERR_PATH = "dagster_slurm/session_step_stderr_path"
+_TAG_SESSION_STEP_SCOPED_PREFIX = "dagster_slurm/session_step_"
 _TAG_LAST_SUPERVISOR_HEARTBEAT = "dagster_slurm/last_supervisor_heartbeat"
 _TAG_ORPHAN_RECONCILED_AT = "dagster_slurm/orphan_reconciled_at"
 _TAG_ORPHAN_RETRY_OF = "dagster_slurm/orphan_retry_of"
 _HEARTBEAT_INTERVAL_SECONDS = 30.0
+
+_SESSION_STEP_SCOPED_FIELDS = {
+    _TAG_JOB_ID: "j",
+    _TAG_RUN_DIR: "r",
+    _TAG_ASSET_KEY: "a",
+    _TAG_SESSION_ALLOCATION_DIR: "d",
+    _TAG_SESSION_STEP_ID: "i",
+    _TAG_SESSION_STEP_ID_PATH: "p",
+    _TAG_SESSION_STEP_STATUS_PATH: "s",
+    _TAG_SESSION_STEP_STDOUT_PATH: "o",
+    _TAG_SESSION_STEP_STDERR_PATH: "e",
+}
+
+
+def _session_step_scoped_tag_key(asset_key: str, field: str) -> str:
+    asset_digest = hashlib.sha256(asset_key.encode("utf-8")).hexdigest()[:16]
+    return f"{_TAG_SESSION_STEP_SCOPED_PREFIX}{asset_digest}_{field}"
+
+
+def _session_step_tags_for_asset(
+    tags: Mapping[str, str], asset_key: str
+) -> dict[str, str]:
+    scoped_tags: dict[str, str] = {}
+    for tag, field in _SESSION_STEP_SCOPED_FIELDS.items():
+        value = tags.get(_session_step_scoped_tag_key(asset_key, field))
+        if value:
+            scoped_tags[tag] = value
+    return scoped_tags
 
 
 class _TerminableProcess(Protocol):
@@ -342,6 +377,18 @@ class SlurmPipesClient(PipesClient):
                     op_ctx, ssh_pool, asset_key_str
                 )
                 if reattach_info:
+                    if use_session and reattach_info.get(_TAG_SESSION_STEP_STATUS_PATH):
+                        return self._reattach_session_step(
+                            context=context,
+                            ssh_pool=ssh_pool,
+                            reattach_info=reattach_info,
+                            extras=extras,
+                            poll_timeout=poll_timeout,
+                            enabled_slurm_metrics=enabled_slurm_metrics,
+                            metrics_collector=metrics_collector,
+                            defer_cleanup=defer_cleanup,
+                        )
+
                     old_job_id_str = reattach_info["job_id"]
                     old_run_dir = reattach_info["run_dir"]
                     old_job_id = int(old_job_id_str)
@@ -637,6 +684,7 @@ class SlurmPipesClient(PipesClient):
                             context=context,
                             run_dir=run_dir,
                             ssh_pool=ssh_pool,
+                            poll_timeout=poll_timeout,
                         )
                         job_id = step_result.job_id
                     else:
@@ -733,6 +781,12 @@ class SlurmPipesClient(PipesClient):
                 is_executor_interrupt
                 and not self._is_run_canceling(context.op_execution_context)
             ):
+                if use_session and self.session is not None:
+                    object.__setattr__(
+                        self.session,
+                        "_preserve_allocation_on_teardown",
+                        True,
+                    )
                 self.logger.warning(
                     f"Detaching due to {'SIGTERM' if self._sigterm_received else exc_name}. "
                     f"Slurm job {self._current_job_id} "
@@ -1087,6 +1141,43 @@ class SlurmPipesClient(PipesClient):
         except Exception as exc:
             self.logger.debug(f"Could not store reattach tags: {exc}")
 
+    def _store_session_step_tags(
+        self,
+        op_context: Optional[OpExecutionContext],
+        *,
+        result: SlurmStepExecutionResult,
+        run_dir: str,
+        asset_key: str | None,
+        allocation_dir: str,
+    ) -> None:
+        """Persist enough session-step identity for a retry to reattach."""
+        if op_context is None:
+            return
+
+        tags = {
+            _TAG_JOB_ID: str(result.job_id),
+            _TAG_RUN_DIR: run_dir,
+            _TAG_SESSION_ALLOCATION_DIR: allocation_dir,
+            _TAG_SESSION_STEP_ID: result.step_id or "",
+            _TAG_SESSION_STEP_ID_PATH: result.step_id_path or "",
+            _TAG_SESSION_STEP_STATUS_PATH: result.status_path or "",
+            _TAG_SESSION_STEP_STDOUT_PATH: result.stdout_path,
+            _TAG_SESSION_STEP_STDERR_PATH: result.stderr_path,
+        }
+        if asset_key:
+            tags[_TAG_ASSET_KEY] = asset_key
+            tags.update(
+                {
+                    _session_step_scoped_tag_key(asset_key, field): tags[tag]
+                    for tag, field in _SESSION_STEP_SCOPED_FIELDS.items()
+                    if tag in tags
+                }
+            )
+        try:
+            op_context.instance.add_run_tags(op_context.run_id, tags)
+        except Exception as exc:
+            self.logger.debug(f"Could not store session step tags: {exc}")
+
     def _store_supervisor_heartbeat(
         self,
         op_context: Optional[OpExecutionContext],
@@ -1138,18 +1229,34 @@ class SlurmPipesClient(PipesClient):
             if not isinstance(tags, Mapping):
                 return
 
+            if asset_key:
+                scoped_tags = _session_step_tags_for_asset(tags, asset_key)
+                if scoped_tags:
+                    tags = scoped_tags
+                elif tags.get(_TAG_ASSET_KEY) not in (None, asset_key):
+                    return
+
             job_id = tags.get(_TAG_JOB_ID)
             run_dir = tags.get(_TAG_RUN_DIR)
             if not job_id or not run_dir:
                 return
 
-            candidates.append(
-                {
-                    "job_id": job_id,
-                    "run_dir": run_dir,
-                    "allow_completed": allow_completed,
-                }
-            )
+            candidate = {
+                "job_id": job_id,
+                "run_dir": run_dir,
+                "allow_completed": allow_completed,
+            }
+            for tag in (
+                _TAG_SESSION_ALLOCATION_DIR,
+                _TAG_SESSION_STEP_ID,
+                _TAG_SESSION_STEP_ID_PATH,
+                _TAG_SESSION_STEP_STATUS_PATH,
+                _TAG_SESSION_STEP_STDOUT_PATH,
+                _TAG_SESSION_STEP_STDERR_PATH,
+            ):
+                if tags.get(tag):
+                    candidate[tag] = tags[tag]
+            candidates.append(candidate)
 
         # Strategy 0: orphan-reconcile sensor path. The sensor launches a new
         # run request carrying the original Slurm job tags directly.
@@ -1188,6 +1295,17 @@ class SlurmPipesClient(PipesClient):
         # An empty state means the job_id is completely unknown — skip it.
         for cand in candidates:
             try:
+                session_status_path = cand.get(_TAG_SESSION_STEP_STATUS_PATH)
+                if session_status_path:
+                    session_status = ssh_pool.run(
+                        f"cat {shlex.quote(str(session_status_path))} "
+                        "2>/dev/null || true"
+                    ).strip()
+                    if session_status.isdigit() and int(session_status) != 0:
+                        # A known failed step should be resubmitted inside the
+                        # recovered allocation, not adopted by the retry.
+                        continue
+
                 state = self._get_job_state(int(cand["job_id"]), ssh_pool)
                 if not state:
                     continue
@@ -1195,10 +1313,21 @@ class SlurmPipesClient(PipesClient):
                     # Fresh re-materializations must not adopt completed jobs from
                     # old failed runs. Only retry parent-run candidates may do that.
                     continue
-                return {
+                result = {
                     "job_id": str(cand["job_id"]),
                     "run_dir": str(cand.get("run_dir", "")),
                 }
+                for tag in (
+                    _TAG_SESSION_ALLOCATION_DIR,
+                    _TAG_SESSION_STEP_ID,
+                    _TAG_SESSION_STEP_ID_PATH,
+                    _TAG_SESSION_STEP_STATUS_PATH,
+                    _TAG_SESSION_STEP_STDOUT_PATH,
+                    _TAG_SESSION_STEP_STDERR_PATH,
+                ):
+                    if cand.get(tag):
+                        result[tag] = str(cand[tag])
+                return result
             except (ValueError, TypeError):
                 continue
 
@@ -2650,6 +2779,7 @@ rm -rf {pack_root_quoted}
         context: AssetExecutionContext,
         run_dir: str,
         ssh_pool: SSHConnectionPool,
+        poll_timeout: int,
     ) -> SlurmStepExecutionResult:
         """Execute in shared Slurm allocation with log streaming."""
         if not self.session:
@@ -2665,11 +2795,169 @@ rm -rf {pack_root_quoted}
             if len(selected_keys) > 1
             else str(next(iter(selected_keys)))
         )
+        allocation = self.session._allocation
+        if allocation is None:
+            raise RuntimeError("Session allocation is not initialized")
+
+        def store_step(result: SlurmStepExecutionResult) -> None:
+            self._store_session_step_tags(
+                context.op_execution_context,
+                result=result,
+                run_dir=run_dir,
+                asset_key=asset_key_str,
+                allocation_dir=allocation.working_dir,
+            )
+
+        def poll_step(result: SlurmStepExecutionResult) -> None:
+            self._poll_session_step(
+                result,
+                op_context=context.op_execution_context,
+                ssh_pool=ssh_pool,
+            )
+
         return self.session.execute_in_session(
             execution_plan=execution_plan,
             asset_key=asset_key_str,
             run_dir=run_dir,
+            step_update_callback=store_step,
+            poll_callback=poll_step,
+            timeout=poll_timeout,
         )
+
+    def _poll_session_step(
+        self,
+        result: SlurmStepExecutionResult,
+        *,
+        op_context: OpExecutionContext,
+        ssh_pool: SSHConnectionPool,
+    ) -> None:
+        self._store_supervisor_heartbeat(op_context)
+        if not self._is_run_canceling(op_context):
+            return
+
+        self._cancellation_requested = True
+        if result.step_id is not None:
+            ssh_pool.run(f"scancel {shlex.quote(result.step_id)}")
+        raise RuntimeError(f"Session step {result.step_id or '<starting>'} cancelled")
+
+    def _reattach_session_step(
+        self,
+        *,
+        context: AssetExecutionContext,
+        ssh_pool: SSHConnectionPool,
+        reattach_info: dict[str, str],
+        extras: dict[str, Any] | None,
+        poll_timeout: int,
+        enabled_slurm_metrics: SlurmMetricSelection,
+        metrics_collector: SlurmMetricsCallback | None,
+        defer_cleanup: bool,
+    ) -> PipesClientCompletedInvocation:
+        """Resume a durable srun step inside an existing session allocation."""
+        if not self.session or not self.session._allocation:
+            raise RuntimeError("Session step reattachment requires an allocation")
+        allocation = self.session._allocation
+
+        required_tags = (
+            _TAG_SESSION_STEP_ID_PATH,
+            _TAG_SESSION_STEP_STATUS_PATH,
+            _TAG_SESSION_STEP_STDOUT_PATH,
+            _TAG_SESSION_STEP_STDERR_PATH,
+        )
+        missing = [tag for tag in required_tags if not reattach_info.get(tag)]
+        if missing:
+            raise RuntimeError(
+                "Session step reattachment metadata is incomplete: "
+                + ", ".join(missing)
+            )
+
+        allocation_job_id = int(reattach_info["job_id"])
+        if allocation.slurm_job_id != allocation_job_id:
+            raise RuntimeError(
+                "Session retry attached to allocation "
+                f"{allocation.slurm_job_id}, expected {allocation_job_id}"
+            )
+
+        step_result = SlurmStepExecutionResult(
+            job_id=allocation_job_id,
+            stdout_path=reattach_info[_TAG_SESSION_STEP_STDOUT_PATH],
+            stderr_path=reattach_info[_TAG_SESSION_STEP_STDERR_PATH],
+            step_id=reattach_info.get(_TAG_SESSION_STEP_ID),
+            step_id_path=reattach_info[_TAG_SESSION_STEP_ID_PATH],
+            status_path=reattach_info[_TAG_SESSION_STEP_STATUS_PATH],
+        )
+        run_dir = reattach_info["run_dir"]
+        op_context = context.op_execution_context
+        message_reader = SSHMessageReader(
+            remote_path=f"{run_dir}/messages.jsonl",
+            ssh_config=self.slurm.ssh,
+            control_path=ssh_pool.control_path,
+            ssh_pool=ssh_pool,
+        )
+        self.logger.info(
+            "Reattaching to session step %s in allocation %s",
+            step_result.step_id or step_result.step_id_path,
+            allocation_job_id,
+        )
+
+        def store_step(result: SlurmStepExecutionResult) -> None:
+            self._store_session_step_tags(
+                op_context,
+                result=result,
+                run_dir=run_dir,
+                asset_key=self._get_asset_key_string(op_context),
+                allocation_dir=allocation.working_dir,
+            )
+
+        def poll_step(result: SlurmStepExecutionResult) -> None:
+            self._poll_session_step(
+                result,
+                op_context=op_context,
+                ssh_pool=ssh_pool,
+            )
+
+        with open_pipes_session(
+            context=op_context,
+            context_injector=PipesEnvContextInjector(),
+            message_reader=message_reader,
+            extras=extras,
+        ) as session:
+            step_result = allocation.wait_for_step(
+                step_result,
+                ssh_pool=ssh_pool,
+                step_update_callback=store_step,
+                poll_callback=poll_step,
+                timeout=poll_timeout,
+            )
+            self._maybe_emit_final_logs(
+                message_reader=message_reader,
+                ssh_pool=ssh_pool,
+                run_dir=run_dir,
+                job_id=allocation_job_id,
+                op_context=op_context,
+                stdout_path=step_result.stdout_path,
+                stderr_path=step_result.stderr_path,
+            )
+            self._emit_session_metadata(step_result, context)
+            step_metrics = self._collect_session_step_metrics(
+                step_result=step_result,
+                ssh_pool=ssh_pool,
+            )
+            self._collect_and_emit_metrics(
+                allocation_job_id,
+                ssh_pool,
+                context,
+                metrics=step_metrics,
+                slurm_metrics=enabled_slurm_metrics,
+                custom_metrics_collector=metrics_collector,
+            )
+
+        self._raise_if_pipes_process_failed(
+            message_reader,
+            job_id=allocation_job_id,
+        )
+        if not self.debug_mode and not defer_cleanup:
+            self._schedule_async_cleanup(ssh_pool, run_dir)
+        return PipesClientCompletedInvocation(session)
 
     def _resolve_signal_before_timeout(
         self,

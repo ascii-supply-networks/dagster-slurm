@@ -17,6 +17,13 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import (
     _TAG_ORPHAN_RECONCILED_AT,
     _TAG_ORPHAN_RETRY_OF,
     _TAG_RUN_DIR,
+    _TAG_SESSION_ALLOCATION_DIR,
+    _TAG_SESSION_STEP_ID,
+    _TAG_SESSION_STEP_ID_PATH,
+    _TAG_SESSION_STEP_SCOPED_PREFIX,
+    _TAG_SESSION_STEP_STATUS_PATH,
+    _TAG_SESSION_STEP_STDERR_PATH,
+    _TAG_SESSION_STEP_STDOUT_PATH,
 )
 from dagster_slurm.resources.slurm import SlurmResource
 
@@ -100,6 +107,24 @@ def _build_reattach_run_request(
     asset_key = run.tags.get(_TAG_ASSET_KEY)
     if asset_key:
         tags[_TAG_ASSET_KEY] = asset_key
+
+    for tag in (
+        _TAG_SESSION_ALLOCATION_DIR,
+        _TAG_SESSION_STEP_ID,
+        _TAG_SESSION_STEP_ID_PATH,
+        _TAG_SESSION_STEP_STATUS_PATH,
+        _TAG_SESSION_STEP_STDOUT_PATH,
+        _TAG_SESSION_STEP_STDERR_PATH,
+    ):
+        if run.tags.get(tag):
+            tags[tag] = run.tags[tag]
+    tags.update(
+        {
+            tag: value
+            for tag, value in run.tags.items()
+            if tag.startswith(_TAG_SESSION_STEP_SCOPED_PREFIX)
+        }
+    )
 
     partition_key = run.tags.get(PARTITION_NAME_TAG)
     if partition_key:

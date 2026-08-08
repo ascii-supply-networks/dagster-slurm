@@ -8,9 +8,9 @@ import shlex
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from enum import Enum
-from typing import Any, List, Literal, Optional, Set
+from typing import Any, Callable, List, Literal, Optional, Set
 import uuid
 
 from dagster import (
@@ -41,6 +41,7 @@ _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
 _REMOTE_LOCK_POLL_SECONDS = 2
 _SHARED_ALLOCATION_CLEANUP_GRACE_SECONDS = 10
 _SAFE_AUXILIARY_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_.=-]+$")
+_SESSION_ALLOCATION_DIR_TAG = "dagster_slurm/session_allocation_dir"
 
 
 def _validate_nodelist(nodelist: str | None) -> None:
@@ -241,6 +242,8 @@ class SlurmStepExecutionResult:
     stdout_path: str
     stderr_path: str
     step_id: str | None = None
+    step_id_path: str | None = None
+    status_path: str | None = None
 
 
 class SlurmSessionResource(ConfigurableResource):
@@ -333,6 +336,7 @@ class SlurmSessionResource(ConfigurableResource):
     _context: Any = PrivateAttr(default=None)
     _owns_allocation: bool = PrivateAttr(default=False)
     _shared_lifecycle: bool = PrivateAttr(default=False)
+    _preserve_allocation_on_teardown: bool = PrivateAttr(default=False)
     _allocation_lease_id: Optional[str] = PrivateAttr(default=None)
 
     @property
@@ -385,7 +389,12 @@ class SlurmSessionResource(ConfigurableResource):
             # Cancel allocation
             if self._allocation:
                 try:
-                    if self._shared_lifecycle:
+                    if self._preserve_allocation_on_teardown:
+                        self.logger.info(
+                            "Preserving allocation %s for supervisor reattachment",
+                            self._allocation.slurm_job_id,
+                        )
+                    elif self._shared_lifecycle:
                         self._schedule_shared_allocation_cleanup()
                     elif self._owns_allocation:
                         self._allocation.cancel(self._ssh_pool)  # type: ignore
@@ -415,6 +424,9 @@ class SlurmSessionResource(ConfigurableResource):
         execution_plan: ExecutionPlan,
         asset_key: str,
         run_dir: str,
+        step_update_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
+        poll_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
+        timeout: int | None = None,
     ) -> SlurmStepExecutionResult:
         """Execute workload in the shared allocation.
         Thread-safe for parallel asset execution.
@@ -444,6 +456,9 @@ class SlurmSessionResource(ConfigurableResource):
                 asset_key=asset_key,
                 run_dir=run_dir,
                 ssh_pool=self._ssh_pool,  # type: ignore
+                step_update_callback=step_update_callback,
+                poll_callback=poll_callback,
+                timeout=timeout,
             )
 
     def _resolve_run_id(self, context) -> str:
@@ -465,7 +480,23 @@ class SlurmSessionResource(ConfigurableResource):
     def _create_allocation(self, context) -> "SlurmAllocation":
         """Start or attach to the run's Slurm allocation."""
         allocation_id = f"dagster_{self._resolve_run_id(context)}"
-        working_dir = f"{self.slurm.remote_base}/allocations/{allocation_id}"
+        allocations_root = posixpath.normpath(f"{self.slurm.remote_base}/allocations")
+        working_dir = f"{allocations_root}/{allocation_id}"
+        if context.run:
+            tagged_dir = getattr(context.run, "tags", {}).get(
+                _SESSION_ALLOCATION_DIR_TAG
+            )
+            if tagged_dir:
+                normalized_tagged_dir = posixpath.normpath(tagged_dir)
+                if normalized_tagged_dir.startswith(f"{allocations_root}/"):
+                    working_dir = normalized_tagged_dir
+                    allocation_id = posixpath.basename(working_dir)
+                else:
+                    self.logger.warning(
+                        "Ignoring session allocation directory outside %s: %s",
+                        allocations_root,
+                        tagged_dir,
+                    )
 
         ssh_pool = self._require_ssh_pool()
         ssh_pool.run(f"mkdir -p {shlex.quote(working_dir)}")
@@ -852,6 +883,9 @@ class SlurmAllocation:
         asset_key: str,
         run_dir: str,
         ssh_pool: SSHConnectionPool,
+        step_update_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
+        poll_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
+        timeout: int | None = None,
     ) -> SlurmStepExecutionResult:
         """Execute plan in this allocation via srun."""
         with self._exec_lock:
@@ -888,48 +922,117 @@ class SlurmAllocation:
         log_name = f"slurm-{self.slurm_job_id}-step-{exec_id}_{safe_asset_key}"
         stdout_path = f"{run_dir}/{log_name}.out"
         stderr_path = f"{run_dir}/{log_name}.err"
+        status_path = f"{run_dir}/.slurm-step-{exec_id}.status"
 
-        # Execute via srun
+        # Launch the step from a detached remote wrapper. The wrapper and its
+        # status marker survive a local Dagster supervisor restart, allowing a
+        # retry to reattach to this exact invocation instead of resubmitting it.
         srun_cmd = (
             f"srun --overlap --jobid={self.slurm_job_id} "
             f"--job-name=asset_{exec_id} {shlex.quote(script_path)} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
-
-        self.logger.info(f"Executing in allocation {self.slurm_job_id}: {script_name}")
-        try:
-            ssh_pool.run(srun_cmd)
-        except Exception as exc:
-            stdout_tail = _tail_remote_file_for_error(ssh_pool, stdout_path)
-            stderr_tail = _tail_remote_file_for_error(ssh_pool, stderr_path)
-            raise RuntimeError(
-                f"srun step {exec_id} failed in allocation {self.slurm_job_id}. "
-                f"stdout_path={stdout_path}; stderr_path={stderr_path}\n"
-                f"Original error: {exc}\n"
-                f"--- stdout tail ---\n{stdout_tail}\n"
-                f"--- stderr tail ---\n{stderr_tail}"
-            ) from exc
-        self.logger.info(
-            f"Execution {exec_id} in allocation {self.slurm_job_id} completed"
+        status_tmp_path = f"{status_path}.tmp"
+        wrapper = (
+            "set +e\n"
+            f"{srun_cmd}\n"
+            "status=$?\n"
+            f"printf '%s\\n' \"$status\" > {shlex.quote(status_tmp_path)}\n"
+            f"mv {shlex.quote(status_tmp_path)} {shlex.quote(status_path)}"
+        )
+        launch_cmd = (
+            f"rm -f {shlex.quote(step_id_path)} {shlex.quote(status_path)} "
+            f"{shlex.quote(status_tmp_path)}; "
+            "nohup bash --noprofile --norc -c "
+            f"{shlex.quote(wrapper)} </dev/null >/dev/null 2>&1 &"
         )
 
-        step_id = ssh_pool.run(
-            f"cat {shlex.quote(step_id_path)} 2>/dev/null || true"
-        ).strip()
-        if not re.fullmatch(rf"{self.slurm_job_id}\.[A-Za-z0-9_+-]+", step_id):
-            self.logger.warning(
-                "Could not determine Slurm step ID for execution %s in allocation %s",
-                exec_id,
-                self.slurm_job_id,
-            )
-            step_id = None
-
-        return SlurmStepExecutionResult(
+        self.logger.info(f"Executing in allocation {self.slurm_job_id}: {script_name}")
+        ssh_pool.run(launch_cmd)
+        result = SlurmStepExecutionResult(
             job_id=self.slurm_job_id,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
-            step_id=step_id,
+            step_id_path=step_id_path,
+            status_path=status_path,
         )
+        if step_update_callback is not None:
+            step_update_callback(result)
+
+        return self.wait_for_step(
+            result,
+            ssh_pool=ssh_pool,
+            step_update_callback=step_update_callback,
+            poll_callback=poll_callback,
+            timeout=timeout,
+        )
+
+    def wait_for_step(
+        self,
+        result: SlurmStepExecutionResult,
+        *,
+        ssh_pool: SSHConnectionPool,
+        step_update_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
+        poll_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
+        timeout: int | None = None,
+    ) -> SlurmStepExecutionResult:
+        """Wait for a launched allocation step, including after supervisor restart."""
+        if result.step_id_path is None or result.status_path is None:
+            raise ValueError("Session step reattachment requires id and status paths")
+
+        started_at = time.monotonic()
+        current = result
+        while True:
+            step_id = ssh_pool.run(
+                f"cat {shlex.quote(result.step_id_path)} 2>/dev/null || true"
+            ).strip()
+            if current.step_id is None and re.fullmatch(
+                rf"{result.job_id}\.[A-Za-z0-9_+-]+",
+                step_id,
+            ):
+                current = dataclass_replace(current, step_id=step_id)
+                if step_update_callback is not None:
+                    step_update_callback(current)
+
+            status = ssh_pool.run(
+                f"cat {shlex.quote(result.status_path)} 2>/dev/null || true"
+            ).strip()
+            if status:
+                if not re.fullmatch(r"\d+", status):
+                    raise RuntimeError(
+                        f"Invalid session step status {status!r} at {result.status_path}"
+                    )
+                return_code = int(status)
+                if return_code != 0:
+                    stdout_tail = _tail_remote_file_for_error(
+                        ssh_pool, result.stdout_path
+                    )
+                    stderr_tail = _tail_remote_file_for_error(
+                        ssh_pool, result.stderr_path
+                    )
+                    raise RuntimeError(
+                        f"srun step failed in allocation {result.job_id} "
+                        f"with exit code {return_code}. "
+                        f"stdout_path={result.stdout_path}; "
+                        f"stderr_path={result.stderr_path}\n"
+                        f"--- stdout tail ---\n{stdout_tail}\n"
+                        f"--- stderr tail ---\n{stderr_tail}"
+                    )
+                self.logger.info(
+                    "Execution %s in allocation %s completed",
+                    current.step_id or "<pending-step-id>",
+                    result.job_id,
+                )
+                return current
+
+            if poll_callback is not None:
+                poll_callback(current)
+            if timeout is not None and time.monotonic() - started_at > timeout:
+                raise TimeoutError(
+                    f"Timed out after {timeout}s waiting for allocation step "
+                    f"in job {result.job_id}"
+                )
+            time.sleep(1)
 
     def ensure_ray_cluster(
         self,
