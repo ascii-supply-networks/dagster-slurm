@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v1.19.1-rc.1 (2026-08-08)
+
+### Bug Fixes
+
+- Expose stable Ray capacity reclamation
+  ([`7e49c51`](https://github.com/ascii-supply-networks/dagster-slurm/commit/7e49c515598ce75eb4dbd7e9ed598cef94e9f395))
+
+- Reattach run-scoped session steps
+  ([`3a0af55`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3a0af5503cdbff329020e16b9a1e109d2bbc2ca5))
+
+- Support pinning run allocations to nodes
+  ([`1fee9db`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1fee9dbd3d261582a8ddf6a4a4a9cc6ee5510a83))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`191c343`](https://github.com/ascii-supply-networks/dagster-slurm/commit/191c343692b23d3b3e2d88a3fdc3312536fb4436))
+
+
 ## v1.19.1 (2026-08-07)
 
 ### Chores
