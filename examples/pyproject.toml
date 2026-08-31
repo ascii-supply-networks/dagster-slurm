@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.10,<3.15"
 [tool.pixi.workspace]
 platforms = [
-  { name = "linux-64-cuda-12", platform = "linux-64", cuda = "12" },
+  { name = "linux-64-cuda-13", platform = "linux-64", cuda = "13" },
   { platform = "linux-aarch64" },
   { name = "osx-arm64-macos-26-5-2", platform = "osx-arm64", macos = "26.5.2" },
 ]
@@ -107,7 +107,8 @@ hdbscan = ">=0.8,<1"
 matplotlib = ">=3.9,<4"
 
 [tool.pixi.feature.cluster-rapids.target.linux-64.dependencies]
-cuml = ">=25.10,<26"
+cuml = ">=26.08,<26.10"
+cuda-version = ">=13.0,<14"
 
 [tool.pixi.feature.cluster-dev.pypi-dependencies]
 loguru = ">=0.7,<1"
