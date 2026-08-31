@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.19.2-rc.1 (2026-08-31)
+
+### Bug Fixes
+
+- Skip title updates for fork PRs
+  ([`0ffd65e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/0ffd65efb357f4f50230a6dd1e9fa11bf59f21b5))
+
+### Chores
+
+- Bump cuml to 26.08 and target CUDA 13 in RAPIDS example
+  ([`a94fa7a`](https://github.com/ascii-supply-networks/dagster-slurm/commit/a94fa7aaa23223e4e0f2c927284014f76ff3e33b))
+
+- Update uv lockfile version [skip ci]
+  ([`ccd2f6b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ccd2f6bca81b1b1eee0e83fda6dc8675db81c6c4))
+
+
 ## v1.19.2 (2026-08-08)
 
 ### Chores
