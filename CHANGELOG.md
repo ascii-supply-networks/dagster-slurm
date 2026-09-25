@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.19.2-rc.2 (2026-09-25)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`6662cb5`](https://github.com/ascii-supply-networks/dagster-slurm/commit/6662cb58a1e6c89b9757feddeba4ca7e0534b66c))
+
+### Features
+
+- Support --exclude on run and session allocations
+  ([`fe10678`](https://github.com/ascii-supply-networks/dagster-slurm/commit/fe10678335b4059a369b77082aaeb864e27e1346))
+
+
 ## v1.19.2-rc.1 (2026-08-31)
 
 ### Bug Fixes
