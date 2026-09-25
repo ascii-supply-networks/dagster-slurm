@@ -82,6 +82,7 @@ compute_ray = ComputeResource(
 
 - The allocation belongs to the Dagster run, not to one asset.
 - Set `nodelist` to a node name or Slurm host-list expression when node-aware capacity discovery should pin the allocation to the selected nodes.
+- Set `exclude` to a node name or Slurm host-list expression to keep known-bad nodes out of the allocation (for example on a retry after a node granted fewer GPUs than requested) without pinning placement. Slurm can still place the job on any other node in the partition. A node listed in both `nodelist` and `exclude` is rejected at validation time.
 - `dagster-slurm` starts Ray once, passes `RAY_ADDRESS` to each compatible asset step, and releases the allocation during resource teardown.
 - Per-asset Slurm resource overrides must match the run allocation. Incompatible overrides fail before submission instead of silently creating a different scheduling model.
 - The example project enables this for the Ray resource with `SLURM_ALLOCATION_SCOPE=run`.
