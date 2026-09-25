@@ -44,11 +44,91 @@ _SAFE_AUXILIARY_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_.=-]+$")
 _SESSION_ALLOCATION_DIR_TAG = "dagster_slurm/session_allocation_dir"
 
 
-def _validate_nodelist(nodelist: str | None) -> None:
-    if nodelist is not None and (
-        not nodelist or any(character.isspace() for character in nodelist)
+_HOSTLIST_EXPANSION_LIMIT = 65536
+
+
+def _validate_hostlist(field_name: str, hostlist: str | None) -> None:
+    if hostlist is not None and (
+        not hostlist or any(character.isspace() for character in hostlist)
     ):
-        raise ValueError("nodelist must be a non-empty Slurm host-list expression")
+        raise ValueError(f"{field_name} must be a non-empty Slurm host-list expression")
+
+
+def _split_hostlist(hostlist: str) -> list[str]:
+    """Split a host-list expression on commas outside brackets."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for character in hostlist:
+        if character == "[":
+            depth += 1
+        elif character == "]":
+            depth -= 1
+        if character == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(character)
+    parts.append("".join(current))
+    return [part for part in parts if part]
+
+
+def _expand_hostlist(hostlist: str) -> set[str] | None:
+    """Expand a Slurm host-list expression such as ``gpu-[01-03,07]``.
+
+    Returns None when the expression cannot be expanded locally (for example a
+    file path or a malformed/oversized range), so callers can skip checks that
+    depend on the concrete host names.
+    """
+    if "/" in hostlist:
+        return None
+    hosts: set[str] = set()
+    for part in _split_hostlist(hostlist):
+        expanded = [""]
+        for literal, ranges in re.findall(r"([^\[\]]*)(?:\[([^\[\]]*)\])?", part):
+            if not literal and not ranges:
+                continue
+            suffixes = [literal]
+            if ranges:
+                values: list[str] = []
+                for item in ranges.split(","):
+                    match = re.fullmatch(r"(\d+)(?:-(\d+))?", item)
+                    if match is None:
+                        return None
+                    start, end = match.group(1), match.group(2) or match.group(1)
+                    width = len(start)
+                    if int(end) < int(start):
+                        return None
+                    values.extend(
+                        f"{number:0{width}d}"
+                        for number in range(int(start), int(end) + 1)
+                    )
+                suffixes = [literal + value for value in values]
+            expanded = [prefix + suffix for prefix in expanded for suffix in suffixes]
+            if len(expanded) > _HOSTLIST_EXPANSION_LIMIT:
+                return None
+        hosts.update(expanded)
+        if len(hosts) > _HOSTLIST_EXPANSION_LIMIT:
+            return None
+    return hosts
+
+
+def _validate_node_placement(nodelist: str | None, exclude: str | None) -> None:
+    """Validate nodelist/exclude and reject nodes that appear in both."""
+    _validate_hostlist("nodelist", nodelist)
+    _validate_hostlist("exclude", exclude)
+    if nodelist is None or exclude is None:
+        return
+    included = _expand_hostlist(nodelist)
+    excluded = _expand_hostlist(exclude)
+    if included is None or excluded is None:
+        return
+    overlap = included & excluded
+    if overlap:
+        raise ValueError(
+            "nodelist and exclude must not name the same node(s): "
+            + ", ".join(sorted(overlap))
+        )
 
 
 def _try_acquire_remote_lock(
@@ -206,6 +286,14 @@ class SlurmRunAllocationConfig(Config):
             "for example 'gpu-01' or 'gpu-[01-04]'."
         ),
     )
+    exclude: Optional[str] = Field(
+        default=None,
+        description=(
+            "Slurm node list expression the run-owned allocation must avoid, "
+            "for example to keep a known-bad node out of a retry without "
+            "pinning placement via nodelist."
+        ),
+    )
     qos: Optional[str] = Field(default=None, description="QoS override.")
     account: Optional[str] = Field(default=None, description="Account override.")
     reservation: Optional[str] = Field(
@@ -223,7 +311,7 @@ class SlurmRunAllocationConfig(Config):
 
     @model_validator(mode="after")
     def _validate_signal_before_timeout(self) -> "SlurmRunAllocationConfig":
-        _validate_nodelist(self.nodelist)
+        _validate_node_placement(self.nodelist, self.exclude)
         if self.time_limit is None and self.signal_before_timeout is not None:
             normalize_signal_before_timeout(self.signal_before_timeout)
         elif self.time_limit is not None:
@@ -275,6 +363,10 @@ class SlurmSessionResource(ConfigurableResource):
         default=None,
         description="Node list expression used to pin the session allocation",
     )
+    exclude: Optional[str] = Field(
+        default=None,
+        description="Node list expression the session allocation must avoid",
+    )
     max_concurrent_jobs: int = Field(default=10, description="Max concurrent srun jobs")
     enable_health_checks: bool = Field(
         default=True, description="Enable node health checks"
@@ -314,7 +406,7 @@ class SlurmSessionResource(ConfigurableResource):
 
     @model_validator(mode="after")
     def _validate_signal_before_timeout(self) -> "SlurmSessionResource":
-        _validate_nodelist(self.nodelist)
+        _validate_node_placement(self.nodelist, self.exclude)
         self._effective_signal_before_timeout()
         return self
 
@@ -588,6 +680,10 @@ class SlurmSessionResource(ConfigurableResource):
         nodelist = _normalize_optional(self.nodelist)
         if nodelist:
             script_lines.append(f"#SBATCH --nodelist={nodelist}")
+
+        exclude = _normalize_optional(self.exclude)
+        if exclude:
+            script_lines.append(f"#SBATCH --exclude={exclude}")
 
         qos = _normalize_optional(self.qos) or _normalize_optional(
             getattr(self.slurm.queue, "qos", None)

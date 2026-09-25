@@ -458,6 +458,107 @@ def test_run_allocation_nodelist_rejects_invalid_expression(nodelist):
         SlurmRunAllocationConfig(nodelist=nodelist)
 
 
+def test_run_allocation_exclude_emits_sbatch_exclude(monkeypatch):
+    compute = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=_mock_slurm_resource(gpus_per_node=1),
+        default_launcher=RayLauncher(num_gpus_per_node=1),
+        allocation_scope=SlurmAllocationScope.RUN,
+        run_allocation=SlurmRunAllocationConfig(exclude="gpu-[03,07]"),
+    )
+    monkeypatch.setattr(
+        SlurmSessionResource,
+        "setup_for_execution",
+        lambda self, context: object.__setattr__(self, "_initialized", True),
+    )
+    session = compute._get_or_create_run_allocation_session(
+        build_init_resource_context()
+    )
+
+    assert session.exclude == "gpu-[03,07]"
+    assert compute._run_allocation_shape()["exclude"] == "gpu-[03,07]"
+
+    allocation_script, _ = _render_allocation_script(
+        session,
+        monkeypatch,
+        run_id="run_excluding_nodes",
+        job_id=126,
+    )
+
+    assert "#SBATCH --exclude=gpu-[03,07]" in allocation_script
+    assert "--nodelist" not in allocation_script
+
+
+def test_run_allocation_without_exclude_omits_sbatch_exclude(monkeypatch):
+    compute = ComputeResource(
+        mode=ExecutionMode.SLURM,
+        slurm=_mock_slurm_resource(gpus_per_node=1),
+        default_launcher=RayLauncher(num_gpus_per_node=1),
+        allocation_scope=SlurmAllocationScope.RUN,
+        run_allocation=SlurmRunAllocationConfig(),
+    )
+    monkeypatch.setattr(
+        SlurmSessionResource,
+        "setup_for_execution",
+        lambda self, context: object.__setattr__(self, "_initialized", True),
+    )
+    session = compute._get_or_create_run_allocation_session(
+        build_init_resource_context()
+    )
+
+    allocation_script, _ = _render_allocation_script(
+        session,
+        monkeypatch,
+        run_id="run_without_exclude",
+        job_id=127,
+    )
+
+    assert "--exclude" not in allocation_script
+
+
+@pytest.mark.parametrize("exclude", ["", "gpu-01 gpu-02", "gpu-01\n"])
+def test_run_allocation_exclude_rejects_invalid_expression(exclude):
+    with pytest.raises(ValueError, match="exclude"):
+        SlurmRunAllocationConfig(exclude=exclude)
+
+
+@pytest.mark.parametrize(
+    ("nodelist", "exclude", "overlap"),
+    [
+        ("gpu-01", "gpu-01", "gpu-01"),
+        ("gpu-[01-04]", "gpu-03", "gpu-03"),
+        ("gpu-[01-02],cpu-01", "gpu-[02,05],cpu-01", "cpu-01, gpu-02"),
+        ("rack[1-2]-n[01-02]", "rack2-n01", "rack2-n01"),
+    ],
+)
+def test_run_allocation_rejects_nodelist_exclude_overlap(nodelist, exclude, overlap):
+    with pytest.raises(ValueError, match=f"same node\\(s\\): {overlap}"):
+        SlurmRunAllocationConfig(nodelist=nodelist, exclude=exclude)
+
+
+@pytest.mark.parametrize(
+    ("nodelist", "exclude"),
+    [
+        ("gpu-[01-02]", "gpu-[03-04]"),
+        ("gpu-1", "gpu-01"),
+        ("gpu-[01-02]", "/etc/slurm/bad-nodes"),
+    ],
+)
+def test_run_allocation_accepts_disjoint_nodelist_and_exclude(nodelist, exclude):
+    cfg = SlurmRunAllocationConfig(nodelist=nodelist, exclude=exclude)
+    assert cfg.nodelist == nodelist
+    assert cfg.exclude == exclude
+
+
+def test_session_resource_rejects_nodelist_exclude_overlap():
+    with pytest.raises(ValueError, match="nodelist and exclude"):
+        SlurmSessionResource(
+            slurm=_mock_slurm_resource(),
+            nodelist="gpu-[01-02]",
+            exclude="gpu-02",
+        )
+
+
 def test_slurm_session_allocation_quotes_remote_working_dir_paths(monkeypatch):
     remote_base = "/remote/base dir;touch pwned"
     run_id = "run_with_spaces"
