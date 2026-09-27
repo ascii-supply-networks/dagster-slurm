@@ -442,6 +442,17 @@ class ComputeResource(ConfigurableResource):
                 project_setup_input_globs=self.project_setup_input_globs,
             )
 
+    def get_run_allocation_session(
+        self, context: InitResourceContext
+    ) -> SlurmSessionResource:
+        """Get or initialize the run session for caller-managed walltime relays."""
+        if (
+            self.mode != ExecutionMode.SLURM
+            or self.allocation_scope != SlurmAllocationScope.RUN
+        ):
+            raise ValueError("Requires mode='slurm' and allocation_scope='run'")
+        return self._get_or_create_run_allocation_session(context)
+
     def _get_or_create_run_allocation_session(
         self,
         context: InitResourceContext,
@@ -458,6 +469,8 @@ class ComputeResource(ConfigurableResource):
                     slurm=self.slurm,
                     num_nodes=shape["num_nodes"],
                     time_limit=shape["time_limit"],
+                    time_min=shape["time_min"],
+                    extra_sbatch_directives=shape["extra_sbatch_directives"],
                     signal_before_timeout=shape["signal_before_timeout"],
                     partition=shape["partition"],
                     nodelist=shape["nodelist"],
@@ -485,6 +498,11 @@ class ComputeResource(ConfigurableResource):
             raise ValueError("slurm resource is required for run-scoped allocation")
 
         cfg = self.run_allocation
+        if (
+            self._run_allocation_session is not None
+            and self._run_allocation_session._allocation is not None
+        ):
+            cfg = self._run_allocation_session.allocation.config
         queue = self.slurm.queue
         time_limit = cfg.time_limit or queue.time_limit
         signal_before_timeout = validate_signal_before_timeout(
@@ -508,6 +526,8 @@ class ComputeResource(ConfigurableResource):
                 cfg.mem_per_cpu if cfg.mem_per_cpu is not None else queue.mem_per_cpu
             ),
             "time_limit": time_limit,
+            "time_min": cfg.time_min,
+            "extra_sbatch_directives": cfg.extra_sbatch_directives,
             "signal_before_timeout": signal_before_timeout,
             "partition": cfg.partition or queue.partition or None,
             "nodelist": cfg.nodelist,

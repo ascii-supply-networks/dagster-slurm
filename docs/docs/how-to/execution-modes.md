@@ -87,6 +87,8 @@ compute_ray = ComputeResource(
 - Per-asset Slurm resource overrides must match the run allocation. Incompatible overrides fail before submission instead of silently creating a different scheduling model.
 - The example project enables this for the Ray resource with `SLURM_ALLOCATION_SCOPE=run`.
 
+For workloads that checkpoint and span several allocations, see [Continue a run in a successor allocation](./walltime-relay.md).
+
 ## Executor choice and Dagster restarts
 
 :::tip Use the in-process executor for reliable Slurm runs
