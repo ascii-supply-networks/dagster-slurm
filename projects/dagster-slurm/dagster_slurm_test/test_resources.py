@@ -345,11 +345,13 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
 
         def run(self, cmd: str):
             self.commands.append(cmd)
-            if ".slurm-step-1.id" in cmd:
+            if "printf acquired" in cmd:
+                return "acquired"
+            if cmd.startswith("cat ") and "/payloads/1-" in cmd and "/id " in cmd:
                 return "42.7"
-            if ".slurm-step-2.id" in cmd:
+            if cmd.startswith("cat ") and "/payloads/2-" in cmd and "/id " in cmd:
                 return "42.8"
-            if ".slurm-step-" in cmd and ".status" in cmd:
+            if cmd.startswith("cat ") and "/payloads/" in cmd and "/status " in cmd:
                 return "0"
             return ""
 
@@ -387,14 +389,19 @@ def test_slurm_allocation_execute_uses_per_step_log_paths():
     assert first.job_id == second.job_id == 42
     assert first.stdout_path != second.stdout_path
     assert first.stderr_path != second.stderr_path
-    assert first.stdout_path.endswith("slurm-42-step-1_asset_one.out")
-    assert second.stdout_path.endswith("slurm-42-step-2_asset_two.out")
+    assert "/slurm-42-step-1-" in first.stdout_path and first.stdout_path.endswith(
+        "_asset_one.out"
+    )
+    assert "/slurm-42-step-2-" in second.stdout_path and second.stdout_path.endswith(
+        "_asset_two.out"
+    )
     assert any(first.stdout_path in command for command in fake_ssh_pool.commands)
     assert any(second.stdout_path in command for command in fake_ssh_pool.commands)
     assert first.step_id == "42.7"
     assert second.step_id == "42.8"
     assert [update.step_id for update in updates] == [None, "42.7"]
-    assert updates[0].status_path == "/remote/run/one/.slurm-step-1.status"
+    assert updates[0].status_path is not None
+    assert updates[0].status_path.startswith("/remote/session/payloads/1-")
 
 
 def test_slurm_session_allocation_honors_zero_gpu_override(monkeypatch):
@@ -588,7 +595,7 @@ def test_slurm_session_allocation_quotes_remote_working_dir_paths(monkeypatch):
         in fake_ssh_pool.commands
     )
     assert (
-        f"cat {shlex.quote(f'{expected_working_dir}/nodes.txt')}"
+        f"cat {shlex.quote(f'{expected_working_dir}/jobs/125/nodes.txt')}"
         in fake_ssh_pool.commands
     )
 
@@ -1024,9 +1031,11 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
 
         def run(self, cmd: str):
             self.commands.append(cmd)
-            if cmd.startswith("cat /remote/run/.slurm-step-1.id"):
+            if "printf acquired" in cmd:
+                return "acquired"
+            if cmd.startswith("cat ") and "/payloads/" in cmd and "/id " in cmd:
                 return "42.7"
-            if cmd.startswith("cat /remote/run/.slurm-step-1.status"):
+            if cmd.startswith("cat ") and "/payloads/" in cmd and "/status " in cmd:
                 return "0"
             return ""
 
@@ -1056,19 +1065,20 @@ def test_slurm_allocation_accepts_safe_auxiliary_script_names():
     )
 
     written_paths = [remote_path for remote_path, _content in fake_ssh_pool.writes]
-    assert written_paths == [
-        "/remote/run/asset_1_asset.sh",
+    assert written_paths[0].startswith("/remote/run/workload_1-")
+    assert written_paths[1].startswith("/remote/run/asset_1-")
+    assert written_paths[2:] == [
         "/remote/run/ray_driver.sh",
         "/remote/run/ray_worker-1.sh",
     ]
     assert any(
-        "srun --overlap --jobid=42 --job-name=asset_1" in command
+        "srun --overlap --jobid=42 --nodes=1 --ntasks=1 --job-name=asset_1" in command
         and "nohup bash" in command
         for command in fake_ssh_pool.commands
     )
-    asset_script = fake_ssh_pool.writes[0][1].splitlines()
+    asset_script = fake_ssh_pool.writes[1][1].splitlines()
     assert asset_script[0] == "#!/bin/bash"
-    assert "${SLURM_STEP_ID:?}" in asset_script[1]
+    assert any("${SLURM_STEP_ID:?}" in line for line in asset_script)
     assert result.step_id == "42.7"
 
 
@@ -1083,13 +1093,15 @@ def test_slurm_allocation_srun_failure_reports_step_logs():
 
         def run(self, cmd: str):
             self.commands.append(cmd)
-            if cmd.startswith("cat /remote/run/.slurm-step-1.id"):
+            if "printf acquired" in cmd:
+                return "acquired"
+            if cmd.startswith("cat ") and "/payloads/" in cmd and "/id " in cmd:
                 return "42.7"
-            if cmd.startswith("cat /remote/run/.slurm-step-1.status"):
+            if cmd.startswith("cat ") and "/payloads/" in cmd and "/status " in cmd:
                 return "1"
-            if "slurm-42-step-1_asset.out" in cmd:
+            if cmd.startswith("tail ") and "_asset.out" in cmd:
                 return "captured stdout"
-            if "slurm-42-step-1_asset.err" in cmd:
+            if cmd.startswith("tail ") and "_asset.err" in cmd:
                 return "captured stderr"
             return ""
 
@@ -1117,8 +1129,14 @@ def test_slurm_allocation_srun_failure_reports_step_logs():
 
     message = str(exc_info.value)
     assert "srun step failed in allocation 42" in message
-    assert "stdout_path=/remote/run/slurm-42-step-1_asset.out" in message
-    assert "stderr_path=/remote/run/slurm-42-step-1_asset.err" in message
+    assert (
+        "stdout_path=/remote/run/slurm-42-step-1-" in message
+        and "_asset.out" in message
+    )
+    assert (
+        "stderr_path=/remote/run/slurm-42-step-1-" in message
+        and "_asset.err" in message
+    )
     assert "captured stdout" in message
     assert "captured stderr" in message
 
@@ -1272,6 +1290,8 @@ class LocalSlurmFakeSSHPool:
                 job_id = self._next_job_id
                 self._next_job_id += 1
                 self.submitted_jobs.append(job_id)
+                working_dir = working_dir / "jobs" / str(job_id)
+                working_dir.mkdir(parents=True, exist_ok=True)
                 (working_dir / "head_node.txt").write_text("node-a\n", encoding="utf-8")
                 (working_dir / "nodes.txt").write_text(
                     "node-a\nnode-b\n", encoding="utf-8"
@@ -1344,7 +1364,7 @@ def test_run_allocation_retry_reattaches_to_tagged_session(tmp_path: Path):
     retry_context = SimpleNamespace(
         run=SimpleNamespace(
             run_id="retry-run",
-            tags={"dagster_slurm/session_allocation_dir": original.working_dir},
+            tags={"dagster_slurm/session_allocation_dir": original.session_dir},
         )
     )
 

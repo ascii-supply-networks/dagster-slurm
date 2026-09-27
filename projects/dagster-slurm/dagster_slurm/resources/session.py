@@ -8,6 +8,7 @@ import shlex
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace as dataclass_replace
 from enum import Enum
 from typing import Any, Callable, List, Literal, Optional, Set
@@ -24,9 +25,11 @@ from pydantic import Field, PrivateAttr, model_validator
 
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
 from ..helpers.ssh_pool import SSHConnectionPool
+from ..helpers.signals import build_pre_timeout_supervisor_script
 from ..launchers.base import ExecutionPlan
 from ..helpers.ray_dashboard import RAY_DASHBOARD_URL_MARKER
 from ..launchers.ray import (
+    RayLauncher,
     RayPortConfig,
     _render_ray_port_assignments,
     _render_ray_process_cleanup,
@@ -35,6 +38,7 @@ from ..resources.slurm import (
     SlurmResource,
     normalize_signal_before_timeout,
     validate_signal_before_timeout,
+    _slurm_time_limit_seconds,
 )
 
 _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
@@ -42,6 +46,66 @@ _REMOTE_LOCK_POLL_SECONDS = 2
 _SHARED_ALLOCATION_CLEANUP_GRACE_SECONDS = 10
 _SAFE_AUXILIARY_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_.=-]+$")
 _SESSION_ALLOCATION_DIR_TAG = "dagster_slurm/session_allocation_dir"
+
+
+def _validate_relay_options(
+    time_min: str | None, time_limit: str | None, directives: list[str]
+) -> None:
+    if time_min is not None:
+        minimum = _slurm_time_limit_seconds(time_min)
+        if minimum <= 0 or (
+            time_limit is not None and minimum > _slurm_time_limit_seconds(time_limit)
+        ):
+            raise ValueError("time_min must be positive and no greater than time_limit")
+    # Only single, long-form scheduler options are accepted. Prevent overrides
+    # of fields and options that would break our script/step lifecycle.
+    reserved = {
+        "job-name",
+        "time",
+        "time-min",
+        "signal",
+        "output",
+        "error",
+        "chdir",
+        "wrap",
+        "array",
+        "wait",
+        "parsable",
+        "test-only",
+        "hold",
+        "requeue",
+        "nodes",
+        "ntasks",
+        "ntasks-per-node",
+        "cpus-per-task",
+        "mem",
+        "mem-per-cpu",
+        "gres",
+        "gpus",
+        "gpus-per-node",
+        "partition",
+        "nodelist",
+        "exclude",
+        "qos",
+        "account",
+        "reservation",
+        "constraint",
+        "export",
+        "export-file",
+    }
+    seen: set[str] = set()
+    for directive in directives:
+        match = re.fullmatch(
+            r"--([a-z][a-z0-9-]*)(?:=([^\s\x00-\x1f\x7f]+))?", directive
+        )
+        if match is None:
+            raise ValueError(
+                "extra_sbatch_directives requires one --option[=value] per entry"
+            )
+        name = match[1]
+        if any(option.startswith(name) for option in reserved) or name in seen:
+            raise ValueError(f"Duplicate or managed sbatch directive: --{name}")
+        seen.add(name)
 
 
 _HOSTLIST_EXPANSION_LIMIT = 65536
@@ -271,6 +335,10 @@ class SlurmRunAllocationConfig(Config):
         default=None,
         description="Maximum allocation time, for example '04:00:00'.",
     )
+    time_min: Optional[str] = Field(
+        default=None, description="Minimum backfill walltime."
+    )
+    extra_sbatch_directives: List[str] = Field(default_factory=list)
     signal_before_timeout: Optional[str] = Field(
         default=None,
         description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
@@ -311,6 +379,9 @@ class SlurmRunAllocationConfig(Config):
 
     @model_validator(mode="after")
     def _validate_signal_before_timeout(self) -> "SlurmRunAllocationConfig":
+        _validate_relay_options(
+            self.time_min, self.time_limit, self.extra_sbatch_directives
+        )
         _validate_node_placement(self.nodelist, self.exclude)
         if self.time_limit is None and self.signal_before_timeout is not None:
             normalize_signal_before_timeout(self.signal_before_timeout)
@@ -332,6 +403,35 @@ class SlurmStepExecutionResult:
     step_id: str | None = None
     step_id_path: str | None = None
     status_path: str | None = None
+    drain_marker_path: str | None = None
+    drain_signal: str | None = None
+    exit_code: int | None = None
+    allocation_state: str | None = None
+
+    @property
+    def drained(self) -> bool:
+        """Whether a drain signal fired during this invocation."""
+        return self.drain_signal is not None
+
+
+class SlurmStepDrained(RuntimeError):
+    """A Pipes invocation drained; callers can inspect the durable step result."""
+
+    def __init__(self, result: SlurmStepExecutionResult):
+        self.result = result
+        super().__init__(
+            f"Slurm step {result.step_id or result.job_id} drained ({result.drain_signal})"
+        )
+
+
+class SlurmAllocationEnded(RuntimeError):
+    """The allocation ended before a step could publish its exit status."""
+
+    def __init__(self, result: SlurmStepExecutionResult):
+        self.result = result
+        super().__init__(
+            f"Slurm allocation {result.job_id} ended ({result.allocation_state})"
+        )
 
 
 class SlurmSessionResource(ConfigurableResource):
@@ -354,6 +454,10 @@ class SlurmSessionResource(ConfigurableResource):
     slurm: "SlurmResource" = Field(description="Slurm cluster configuration")
     num_nodes: int = Field(default=2, description="Nodes in allocation")
     time_limit: str = Field(default="04:00:00", description="Max allocation time")
+    time_min: Optional[str] = Field(
+        default=None, description="Minimum backfill walltime"
+    )
+    extra_sbatch_directives: List[str] = Field(default_factory=list)
     signal_before_timeout: Optional[str] = Field(
         default=None,
         description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
@@ -406,8 +510,20 @@ class SlurmSessionResource(ConfigurableResource):
 
     @model_validator(mode="after")
     def _validate_signal_before_timeout(self) -> "SlurmSessionResource":
+        _validate_relay_options(
+            self.time_min, self.time_limit, self.extra_sbatch_directives
+        )
         _validate_node_placement(self.nodelist, self.exclude)
-        self._effective_signal_before_timeout()
+        signal_spec = self._effective_signal_before_timeout()
+        if (
+            signal_spec
+            and build_pre_timeout_supervisor_script("", signal_spec, "") is None
+        ):
+            raise ValueError(
+                "Session drain requires a trappable signal (not KILL or STOP)"
+            )
+        if self.time_min is not None:
+            validate_signal_before_timeout(signal_spec, self.time_min)
         return self
 
     def _effective_signal_before_timeout(self) -> str | None:
@@ -489,7 +605,9 @@ class SlurmSessionResource(ConfigurableResource):
                     elif self._shared_lifecycle:
                         self._schedule_shared_allocation_cleanup()
                     elif self._owns_allocation:
-                        self._allocation.cancel(self._ssh_pool)  # type: ignore
+                        self._require_ssh_pool().run(
+                            f"scancel --name={shlex.quote(posixpath.basename(self._allocation.session_dir))}"
+                        )
                         self.logger.info(
                             f"Allocation {self._allocation.slurm_job_id} canceled"
                         )
@@ -519,6 +637,7 @@ class SlurmSessionResource(ConfigurableResource):
         step_update_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
         poll_callback: Callable[[SlurmStepExecutionResult], None] | None = None,
         timeout: int | None = None,
+        allocation: "SlurmAllocation | None" = None,
     ) -> SlurmStepExecutionResult:
         """Execute workload in the shared allocation.
         Thread-safe for parallel asset execution.
@@ -534,8 +653,9 @@ class SlurmSessionResource(ConfigurableResource):
 
         # Rate limiting
         with self._execution_semaphore:  # type: ignore
+            allocation = allocation or self.allocation
             # Health check
-            if self.enable_health_checks and not self._allocation.is_healthy(  # type: ignore
+            if self.enable_health_checks and not allocation.is_healthy(
                 self._ssh_pool  # type: ignore
             ):
                 raise RuntimeError(
@@ -543,7 +663,7 @@ class SlurmSessionResource(ConfigurableResource):
                 )
 
             # Execute
-            return self._allocation.execute(  # type: ignore
+            return allocation.execute(
                 execution_plan=execution_plan,
                 asset_key=asset_key,
                 run_dir=run_dir,
@@ -651,6 +771,7 @@ class SlurmSessionResource(ConfigurableResource):
         *,
         allocation_id: str,
         working_dir: str,
+        wait_for_start: bool = True,
     ) -> "SlurmAllocation":
         """Submit a fresh Slurm allocation. Caller must hold the remote lock."""
 
@@ -665,6 +786,11 @@ class SlurmSessionResource(ConfigurableResource):
         signal_before_timeout = self._effective_signal_before_timeout()
         if signal_before_timeout:
             script_lines.append(f"#SBATCH --signal=B:{signal_before_timeout}")
+        if self.time_min:
+            script_lines.append(f"#SBATCH --time-min={self.time_min}")
+        script_lines.extend(
+            f"#SBATCH {directive}" for directive in self.extra_sbatch_directives
+        )
 
         if partition:
             script_lines.append(f"#SBATCH --partition={partition}")
@@ -747,13 +873,17 @@ class SlurmSessionResource(ConfigurableResource):
                 "",
                 "# Keep allocation alive for srun jobs",
                 f"working_dir={quoted_working_dir}",
+                'working_dir="$working_dir/jobs/${SLURM_JOB_ID:?}"',
                 'mkdir -p "$working_dir"',
+                self._render_allocation_drain_trap(),
                 'echo "Allocation started"',
                 'hostname > "${working_dir}/head_node.txt"',
                 'scontrol show hostname $SLURM_JOB_NODELIST > "${working_dir}/nodes.txt"',
                 "",
                 "# Wait for cancellation",
-                "sleep infinity",
+                "sleep infinity &",
+                "keeper=$!",
+                'while kill -0 "$keeper" 2>/dev/null; do wait "$keeper" || true; done',
             ]
         )
 
@@ -774,23 +904,55 @@ class SlurmSessionResource(ConfigurableResource):
 
         # Query estimated start time for pending allocation
         self._log_estimated_start_time(job_id)
-
-        # Wait for allocation to start
-        self._wait_for_allocation_start(job_id, working_dir, timeout=120)
-
-        # Read node list
-        nodes_path = f"{working_dir}/nodes.txt"
-        nodes_output = self._ssh_pool.run(f"cat {shlex.quote(nodes_path)}")  # type: ignore
-        nodes = [n.strip() for n in nodes_output.strip().split("\n") if n.strip()]
-
-        self.logger.info(f"Allocation ready: {len(nodes)} nodes: {nodes}")
-
-        return SlurmAllocation(
+        allocation = SlurmAllocation(
             slurm_job_id=job_id,
-            nodes=nodes,
-            working_dir=working_dir,
+            nodes=[],
+            working_dir=f"{working_dir}/jobs/{job_id}",
+            session_dir=working_dir,
             config=self,
         )
+        if wait_for_start:
+            try:
+                self._wait_for_allocation_start(
+                    job_id, allocation.working_dir, timeout=120
+                )
+                self._load_allocation_nodes(allocation)
+            except Exception:
+                allocation.cancel(self._require_ssh_pool())
+                raise
+        return allocation
+
+    def _render_allocation_drain_trap(self) -> str:
+        signal_name = (self._effective_signal_before_timeout() or "TERM@1").split("@")[
+            0
+        ]
+        return f"""
+drain_payloads() {{
+  printf '%s\\n' {shlex.quote(signal_name)} > "$working_dir/drain_signal"
+  # Only registered driver steps are signalled. Ray steps never register here.
+  for marker in "$working_dir"/payloads/*/id; do
+    [ -f "$marker" ] || continue
+    [ ! -f "${{marker%/id}}/status" ] || continue
+    step_id=$(cat "$marker")
+    if [[ "$step_id" =~ ^${{SLURM_JOB_ID}}\\.[0-9]+$ ]]; then
+      scancel --signal={shlex.quote(signal_name)} "$step_id" || true
+    fi
+  done
+}}
+trap drain_payloads {shlex.quote(signal_name)}
+"""
+
+    def _load_allocation_nodes(self, allocation: "SlurmAllocation") -> None:
+        output = self._require_ssh_pool().run(
+            f"cat {shlex.quote(allocation.working_dir + '/nodes.txt')}"
+        )
+        allocation.nodes = [
+            node.strip() for node in output.splitlines() if node.strip()
+        ]
+        if not allocation.nodes:
+            raise RuntimeError(
+                f"Allocation {allocation.slurm_job_id} has no ready nodes"
+            )
 
     def _allocation_metadata_path(self, working_dir: str) -> str:
         return f"{working_dir}/allocation.json"
@@ -799,6 +961,26 @@ class SlurmSessionResource(ConfigurableResource):
         self,
         working_dir: str,
     ) -> "SlurmAllocation | None":
+        metadata = self._read_session_metadata(working_dir)
+        if metadata is None:
+            return None
+        try:
+            allocation = self._allocation_from_record(metadata, working_dir)
+        except (KeyError, TypeError, ValueError) as exc:
+            self.logger.warning(f"Ignoring invalid allocation metadata: {exc}")
+            return None
+        state = self._get_job_state(allocation.slurm_job_id)
+        if state in TERMINAL_STATES:
+            successor = metadata.get("successor")
+            if (
+                not successor
+                or self._get_job_state(int(successor["slurm_job_id"]))
+                in TERMINAL_STATES
+            ):
+                return None
+        return allocation
+
+    def _read_session_metadata(self, working_dir: str) -> dict[str, Any] | None:
         ssh_pool = self._require_ssh_pool()
         metadata_path = self._allocation_metadata_path(working_dir)
         output = ssh_pool.run(f"cat {shlex.quote(metadata_path)} 2>/dev/null || true")
@@ -807,47 +989,234 @@ class SlurmSessionResource(ConfigurableResource):
 
         try:
             metadata = json.loads(output)
-            job_id = int(metadata["slurm_job_id"])
-            nodes = [str(node) for node in metadata["nodes"]]
+            if not isinstance(metadata, dict):
+                raise ValueError("allocation metadata must be an object")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self.logger.warning(
                 f"Ignoring invalid allocation metadata at {metadata_path}: {exc}"
             )
             return None
 
-        state = self._get_job_state(job_id)
-        if state in TERMINAL_STATES:
-            self.logger.warning(
-                f"Ignoring stale allocation metadata for job {job_id} "
-                f"with state {state}"
-            )
-            return None
+        return metadata
 
+    def _allocation_from_record(
+        self, record: dict[str, Any], session_dir: str
+    ) -> "SlurmAllocation":
+        config = self
+        if record.get("config"):
+            config = SlurmSessionResource(slurm=self.slurm, **record["config"])
+            object.__setattr__(config, "_ssh_pool", self._require_ssh_pool())
         return SlurmAllocation(
-            slurm_job_id=job_id,
-            nodes=nodes,
-            working_dir=working_dir,
-            config=self,
+            slurm_job_id=int(record["slurm_job_id"]),
+            nodes=[str(node) for node in record["nodes"]],
+            working_dir=record.get("working_dir", session_dir),
+            session_dir=session_dir,
+            config=config,
         )
 
-    def _write_allocation_metadata(self, allocation: "SlurmAllocation") -> None:
-        metadata = {
+    def _allocation_record(self, allocation: "SlurmAllocation") -> dict[str, Any]:
+        return {
             "slurm_job_id": allocation.slurm_job_id,
             "nodes": allocation.nodes,
             "working_dir": allocation.working_dir,
+            "config": {
+                key: getattr(allocation.config, key)
+                for key in SlurmRunAllocationConfig.model_fields
+                if key != "cleanup_policy"
+            },
         }
-        metadata_path = self._allocation_metadata_path(allocation.working_dir)
+
+    def _write_allocation_metadata(self, allocation: "SlurmAllocation") -> None:
+        self._write_session_metadata(
+            allocation.session_dir, self._allocation_record(allocation)
+        )
+
+    def _write_session_metadata(
+        self, session_dir: str, metadata: dict[str, Any]
+    ) -> None:
+        metadata_path = self._allocation_metadata_path(session_dir)
         tmp_path = f"{metadata_path}.tmp.{uuid.uuid4().hex}"
         ssh_pool = self._require_ssh_pool()
         ssh_pool.write_file(json.dumps(metadata, sort_keys=True), tmp_path)
         ssh_pool.run(f"mv {shlex.quote(tmp_path)} {shlex.quote(metadata_path)}")
+
+    @contextmanager
+    def _session_lock(
+        self, session_dir: str, ssh_pool: SSHConnectionPool | None = None
+    ):
+        ssh_pool = ssh_pool or self._require_ssh_pool()
+        lock_dir = f"{session_dir}/.allocation.lock"
+        owner = uuid.uuid4().hex
+        deadline = time.monotonic() + _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS
+        while not _try_acquire_remote_lock(ssh_pool, lock_dir=lock_dir, owner=owner):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Timed out waiting for the session lifecycle lock")
+            time.sleep(0.1)
+        try:
+            yield
+        finally:
+            _release_remote_lock(ssh_pool, lock_dir=lock_dir, owner=owner)
+
+    @property
+    def allocation(self) -> "SlurmAllocation":
+        """Current allocation, refreshed from the session's published identity."""
+        with self._lifecycle_lock:
+            if self._allocation is None:
+                raise RuntimeError("Session is not initialized")
+            metadata = self._read_session_metadata(self._allocation.session_dir)
+            if (
+                metadata
+                and int(metadata["slurm_job_id"]) != self._allocation.slurm_job_id
+            ):
+                object.__setattr__(
+                    self,
+                    "_allocation",
+                    self._allocation_from_record(
+                        metadata, self._allocation.session_dir
+                    ),
+                )
+            return self._allocation
+
+    def submit_successor(
+        self, config: SlurmRunAllocationConfig | None = None
+    ) -> "SlurmAllocation":
+        """Publish a queued successor immediately, inheriting unspecified fields.
+
+        Only one successor may be outstanding. All allocations keep the session
+        job name so terminal-run cleanup also cancels pending successors.
+        """
+        with self._lifecycle_lock:
+            current = self.allocation
+            with self._session_lock(current.session_dir):
+                metadata = self._read_session_metadata(current.session_dir)
+                if metadata is None:
+                    raise RuntimeError("Session allocation metadata is missing")
+                if metadata.get("successor"):
+                    raise RuntimeError("A successor is already published")
+                shape = dict(
+                    metadata.get("config") or self._allocation_record(current)["config"]
+                )
+                if config is not None:
+                    shape.update(
+                        config.model_dump(
+                            exclude_unset=True, exclude={"cleanup_policy"}
+                        )
+                    )
+                successor_config = SlurmSessionResource(slurm=self.slurm, **shape)
+                object.__setattr__(
+                    successor_config, "_ssh_pool", self._require_ssh_pool()
+                )
+                successor = successor_config._submit_allocation(
+                    allocation_id=posixpath.basename(current.session_dir),
+                    working_dir=current.session_dir,
+                    wait_for_start=False,
+                )
+                metadata["successor"] = self._allocation_record(successor)
+                try:
+                    self._write_session_metadata(current.session_dir, metadata)
+                except Exception:
+                    successor.cancel(self._require_ssh_pool())
+                    raise
+                return successor
+
+    def promote_successor(
+        self,
+        *,
+        launcher: Any = None,
+        activation_script: str | None = None,
+        startup_timeout: int = 120,
+    ) -> "SlurmAllocation":
+        """Promote a RUNNING successor after predecessor payloads have drained.
+
+        Call ``allocation.request_drain()`` and wait for payload invocations to
+        finish first. Ray is started before publication, using the predecessor's
+        recorded launcher/environment unless explicitly supplied here.
+        """
+        with self._lifecycle_lock:
+            current = self.allocation
+            ssh_pool = self._require_ssh_pool()
+            with self._session_lock(current.session_dir):
+                metadata = self._read_session_metadata(current.session_dir)
+                if (
+                    metadata
+                    and not metadata.get("successor")
+                    and metadata.get("predecessors")
+                ):
+                    self._finish_promotion(current, metadata)
+                    return current
+                if not metadata or not metadata.get("successor"):
+                    raise RuntimeError("No successor is published")
+                if int(metadata["slurm_job_id"]) != current.slurm_job_id:
+                    raise RuntimeError("Current allocation changed; retry promotion")
+                successor = self._allocation_from_record(
+                    metadata["successor"], current.session_dir
+                )
+                if self._get_job_state(successor.slurm_job_id) != "RUNNING":
+                    raise RuntimeError("Successor allocation is not RUNNING")
+                if current.has_active_payloads(ssh_pool):
+                    raise RuntimeError(
+                        "Predecessor payloads are still active; request_drain and wait before promotion"
+                    )
+                self._load_allocation_nodes(successor)
+                ray_options = current._read_ray_start_options(ssh_pool)
+                if launcher is not None:
+                    ray_options = {
+                        "launcher": launcher,
+                        "activation_script": activation_script
+                        if activation_script is not None
+                        else (ray_options or {}).get("activation_script", ""),
+                    }
+                if ray_options:
+                    successor.ensure_ray_cluster(
+                        ssh_pool=ssh_pool,
+                        startup_timeout=startup_timeout,
+                        **ray_options,
+                    )
+                updated = self._allocation_record(successor)
+                updated["predecessors"] = [
+                    *metadata.get("predecessors", []),
+                    self._allocation_record(current),
+                ]
+                self._write_session_metadata(current.session_dir, updated)
+                object.__setattr__(self, "_allocation", successor)
+                self._finish_promotion(successor, updated)
+                return successor
+
+    def _finish_promotion(
+        self, allocation: "SlurmAllocation", metadata: dict[str, Any]
+    ) -> None:
+        self._publish_allocation_tags(allocation)
+        for record in metadata.get("predecessors", []):
+            job_id = int(record["slurm_job_id"])
+            if self._get_job_state(job_id) not in TERMINAL_STATES:
+                self._require_ssh_pool().run(f"scancel {job_id}")
+
+    def _publish_allocation_tags(self, allocation: "SlurmAllocation") -> None:
+        context = self._context
+        if context is None or not context.run:
+            return
+        run = context.instance.get_run_by_id(context.run.run_id)
+        tags = {
+            "dagster_slurm/job_id": str(allocation.slurm_job_id),
+            _SESSION_ALLOCATION_DIR_TAG: allocation.session_dir,
+            "dagster_slurm/run_dir": "",
+        }
+        if run is not None:
+            tags.update(
+                {
+                    key: ""
+                    for key in run.tags
+                    if key.startswith("dagster_slurm/session_step_")
+                }
+            )
+        context.instance.add_run_tags(context.run.run_id, tags)
 
     def _register_allocation_lease(self) -> None:
         if not self._allocation:
             return
         ssh_pool = self._require_ssh_pool()
         lease_id = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
-        lease_dir = f"{self._allocation.working_dir}/leases"
+        lease_dir = f"{self._allocation.session_dir}/leases"
         lease_path = f"{lease_dir}/{lease_id}.lease"
         ssh_pool.run(
             f"mkdir -p {shlex.quote(lease_dir)} && "
@@ -860,7 +1229,7 @@ class SlurmSessionResource(ConfigurableResource):
             return
         ssh_pool = self._require_ssh_pool()
         lease_path = (
-            f"{self._allocation.working_dir}/leases/{self._allocation_lease_id}.lease"
+            f"{self._allocation.session_dir}/leases/{self._allocation_lease_id}.lease"
         )
         ssh_pool.run(f"rm -f {shlex.quote(lease_path)}")
         object.__setattr__(self, "_allocation_lease_id", None)
@@ -870,7 +1239,7 @@ class SlurmSessionResource(ConfigurableResource):
             return
         ssh_pool = self._require_ssh_pool()
 
-        lease_dir = f"{self._allocation.working_dir}/leases"
+        lease_dir = f"{self._allocation.session_dir}/leases"
         job_id = self._allocation.slurm_job_id
         grace = _SHARED_ALLOCATION_CLEANUP_GRACE_SECONDS
         cmd = f"""
@@ -881,7 +1250,7 @@ class SlurmSessionResource(ConfigurableResource):
     active="$(find {shlex.quote(lease_dir)} -type f -name '*.lease' -print -quit 2>/dev/null || true)"
   fi
   if [ -z "$active" ]; then
-    scancel {job_id} 2>/dev/null || true
+    scancel --name={shlex.quote(posixpath.basename(self._allocation.session_dir))} 2>/dev/null || true
   fi
 ) >/dev/null 2>&1 &
 """
@@ -954,10 +1323,12 @@ class SlurmAllocation:
         nodes: List[str],
         working_dir: str,
         config: SlurmSessionResource,
+        session_dir: str | None = None,
     ):
         self.slurm_job_id = slurm_job_id
         self.nodes = nodes
         self.working_dir = working_dir
+        self.session_dir = session_dir or working_dir
         self.config = config
         self.logger = get_dagster_logger()
         self._failed_nodes: Set[str] = set()
@@ -967,6 +1338,41 @@ class SlurmAllocation:
         self._ray_address: Optional[str] = None
         self._ray_dashboard_url: Optional[str] = None
         self._ray_fingerprint: Optional[tuple[Any, ...]] = None
+
+    @property
+    def end_time(self) -> str | None:
+        """Current scheduler EndTime in the cluster's timezone (None if unknown).
+
+        Read on every access: backfill and TimeLimit updates can change it.
+        """
+        output = (
+            self.config._require_ssh_pool()
+            .run(f"squeue -h -j {self.slurm_job_id} -o %e")
+            .strip()
+        )
+        return (
+            output if output and output not in {"N/A", "Unknown", "UNLIMITED"} else None
+        )
+
+    def request_drain(self) -> None:
+        """Ask the allocation shell to drain payload steps, keeping Ray alive."""
+        signal_name = (
+            self.config._effective_signal_before_timeout() or "TERM@1"
+        ).split("@")[0]
+        self.config._require_ssh_pool().run(
+            f"scancel --batch --signal={shlex.quote(signal_name)} {self.slurm_job_id}"
+        )
+
+    def has_active_payloads(self, ssh_pool: SSHConnectionPool) -> bool:
+        if self.config._get_job_state(self.slurm_job_id) in TERMINAL_STATES:
+            return False
+        output = ssh_pool.run(f"""
+for invocation in {shlex.quote(self.working_dir)}/payloads/*; do
+  [ -d "$invocation" ] || continue
+  if [ ! -f "$invocation/status" ]; then printf active; break; fi
+done
+""")
+        return bool(output.strip())
 
     @property
     def ray_dashboard_url(self) -> str | None:
@@ -986,7 +1392,7 @@ class SlurmAllocation:
         """Execute plan in this allocation via srun."""
         with self._exec_lock:
             self._exec_count += 1
-            exec_id = self._exec_count
+            exec_id = f"{self._exec_count}-{uuid.uuid4().hex}"
 
         auxiliary_scripts = getattr(execution_plan, "auxiliary_scripts", {})
         safe_auxiliary_scripts = [
@@ -999,15 +1405,24 @@ class SlurmAllocation:
             safe_asset_key = "asset"
         script_name = f"asset_{exec_id}_{safe_asset_key}.sh"
         script_path = f"{run_dir}/{script_name}"
-        step_id_path = f"{run_dir}/.slurm-step-{exec_id}.id"
+        invocation_dir = f"{self.working_dir}/payloads/{exec_id}"
+        step_id_path = f"{invocation_dir}/id"
+        drain_marker_path = f"{invocation_dir}/drain_signal"
         step_id_capture = (
             'printf \'%s.%s\\n\' "${SLURM_JOB_ID:?}" "${SLURM_STEP_ID:?}" > '
             f"{shlex.quote(step_id_path)}"
         )
-        script_lines = list(execution_plan.payload)
-        capture_index = 1 if script_lines and script_lines[0].startswith("#!") else 0
-        script_lines.insert(capture_index, step_id_capture)
-        ssh_pool.write_file("\n".join(script_lines), script_path)
+        workload_path = f"{run_dir}/workload_{exec_id}.sh"
+        ssh_pool.write_file("\n".join(execution_plan.payload), workload_path)
+        supervisor = build_pre_timeout_supervisor_script(
+            workload_path,
+            self.config._effective_signal_before_timeout() or "TERM@1",
+            drain_marker_path,
+            registration_script=step_id_capture,
+            drain_request_path=f"{self.working_dir}/drain_signal",
+        )
+        assert supervisor is not None
+        ssh_pool.write_file(supervisor, script_path)
         ssh_pool.run(f"chmod +x {shlex.quote(script_path)}")
 
         for safe_aux_name, aux_content in safe_auxiliary_scripts:
@@ -1018,13 +1433,13 @@ class SlurmAllocation:
         log_name = f"slurm-{self.slurm_job_id}-step-{exec_id}_{safe_asset_key}"
         stdout_path = f"{run_dir}/{log_name}.out"
         stderr_path = f"{run_dir}/{log_name}.err"
-        status_path = f"{run_dir}/.slurm-step-{exec_id}.status"
+        status_path = f"{invocation_dir}/status"
 
         # Launch the step from a detached remote wrapper. The wrapper and its
         # status marker survive a local Dagster supervisor restart, allowing a
         # retry to reattach to this exact invocation instead of resubmitting it.
         srun_cmd = (
-            f"srun --overlap --jobid={self.slurm_job_id} "
+            f"srun --overlap --jobid={self.slurm_job_id} --nodes=1 --ntasks=1 "
             f"--job-name=asset_{exec_id} {shlex.quote(script_path)} "
             f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
         )
@@ -1044,13 +1459,30 @@ class SlurmAllocation:
         )
 
         self.logger.info(f"Executing in allocation {self.slurm_job_id}: {script_name}")
-        ssh_pool.run(launch_cmd)
+        # Registration and promotion share a lock, including steps queued in
+        # srun that have not published their Slurm step ID yet.
+        with self.config._session_lock(self.session_dir, ssh_pool=ssh_pool):
+            metadata = ssh_pool.run(
+                f"cat {shlex.quote(self.session_dir + '/allocation.json')} 2>/dev/null || true"
+            ).strip()
+            if (
+                metadata
+                and int(json.loads(metadata)["slurm_job_id"]) != self.slurm_job_id
+            ):
+                raise RuntimeError(
+                    "Allocation was replaced; prepare the payload in the current allocation"
+                )
+            ssh_pool.run(f"mkdir -p {shlex.quote(invocation_dir)}")
+            # Keep registration if SSH disconnects after launching srun: the
+            # payload may still be active, so promotion must not discard it.
+            ssh_pool.run(launch_cmd)
         result = SlurmStepExecutionResult(
             job_id=self.slurm_job_id,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             step_id_path=step_id_path,
             status_path=status_path,
+            drain_marker_path=drain_marker_path,
         )
         if step_update_callback is not None:
             step_update_callback(result)
@@ -1093,13 +1525,24 @@ class SlurmAllocation:
             status = ssh_pool.run(
                 f"cat {shlex.quote(result.status_path)} 2>/dev/null || true"
             ).strip()
+            drain_marker_path = result.drain_marker_path or (
+                f"{posixpath.dirname(result.status_path)}/drain_signal"
+            )
+            drain_signal = (
+                ssh_pool.run(
+                    f"cat {shlex.quote(drain_marker_path)} 2>/dev/null || true"
+                ).strip()
+                or None
+            )
+            current = dataclass_replace(current, drain_signal=drain_signal)
             if status:
                 if not re.fullmatch(r"\d+", status):
                     raise RuntimeError(
                         f"Invalid session step status {status!r} at {result.status_path}"
                     )
                 return_code = int(status)
-                if return_code != 0:
+                current = dataclass_replace(current, exit_code=return_code)
+                if return_code != 0 and not current.drained:
                     stdout_tail = _tail_remote_file_for_error(
                         ssh_pool, result.stdout_path
                     )
@@ -1120,6 +1563,21 @@ class SlurmAllocation:
                     result.job_id,
                 )
                 return current
+
+            state_output = ssh_pool.run(
+                f"squeue -h -j {result.job_id} -o '%T' 2>/dev/null || true"
+            ).strip()
+            if not state_output:
+                state_output = ssh_pool.run(
+                    f"sacct -X -n -j {result.job_id} -o State%20 2>/dev/null || true"
+                ).strip()
+            state = (
+                normalize_slurm_state(state_output.split()[0]) if state_output else ""
+            )
+            if state in TERMINAL_STATES:
+                raise SlurmAllocationEnded(
+                    dataclass_replace(current, allocation_state=state)
+                )
 
             if poll_callback is not None:
                 poll_callback(current)
@@ -1192,6 +1650,22 @@ class SlurmAllocation:
                             self._ray_fingerprint = fingerprint
                             return existing_address
 
+                        ray_dir = f"{self.working_dir}/ray_cluster"
+                        ssh_pool.run(f"mkdir -p {shlex.quote(ray_dir)}")
+                        options_path = f"{ray_dir}/launch.json"
+                        options_tmp_path = f"{options_path}.{uuid.uuid4().hex}.tmp"
+                        ssh_pool.write_file(
+                            json.dumps(
+                                {
+                                    "launcher": launcher.model_dump(mode="json"),
+                                    "activation_script": activation_script,
+                                }
+                            ),
+                            options_tmp_path,
+                        )
+                        ssh_pool.run(
+                            f"mv {shlex.quote(options_tmp_path)} {shlex.quote(options_path)}"
+                        )
                         self._ray_address = self._start_ray_cluster(
                             ssh_pool=ssh_pool,
                             launcher=launcher,
@@ -1227,6 +1701,20 @@ class SlurmAllocation:
                 "Timed out waiting for persistent Ray cluster lock at "
                 f"{lock_dir}. Existing lock details:\n{lock_details}"
             )
+
+    def _read_ray_start_options(
+        self, ssh_pool: SSHConnectionPool
+    ) -> dict[str, Any] | None:
+        output = ssh_pool.run(
+            f"cat {shlex.quote(self.working_dir + '/ray_cluster/launch.json')} 2>/dev/null || true"
+        ).strip()
+        if not output:
+            return None
+        options = json.loads(output)
+        return {
+            "launcher": RayLauncher(**options["launcher"]),
+            "activation_script": options["activation_script"],
+        }
 
     def _ray_launcher_fingerprint(
         self,

@@ -3,6 +3,9 @@
 from .session import (
     SlurmAllocation,
     SlurmAllocationScope,
+    SlurmStepExecutionResult,
+    SlurmStepDrained,
+    SlurmAllocationEnded,
     SlurmRunAllocationConfig,
     SlurmSessionResource,
 )
@@ -17,5 +20,8 @@ __all__ = [
     "SlurmSessionResource",
     "SlurmAllocation",
     "SlurmAllocationScope",
+    "SlurmStepExecutionResult",
+    "SlurmStepDrained",
+    "SlurmAllocationEnded",
     "SlurmRunAllocationConfig",
 ]

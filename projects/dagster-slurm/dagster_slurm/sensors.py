@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+import json
+import shlex
 from collections.abc import Sequence
 from typing import Any
 
@@ -87,6 +89,32 @@ def _should_reconcile(
 
     heartbeat_age = _heartbeat_age_seconds(run, now=now)
     return heartbeat_age is not None and heartbeat_age > stale_after_seconds
+
+
+def _has_live_relay_allocation(
+    run: dg.DagsterRun, job_id: int, ssh_pool: SSHConnectionPool
+) -> bool:
+    """A terminal predecessor is expected while a published successor is live."""
+    session_dir = run.tags.get(_TAG_SESSION_ALLOCATION_DIR)
+    if not session_dir:
+        return False
+    output = ssh_pool.run(
+        f"cat {shlex.quote(session_dir + '/allocation.json')} 2>/dev/null || true"
+    )
+    try:
+        metadata = json.loads(output)
+        records = [metadata, metadata.get("successor") or {}]
+        job_ids = {
+            int(record["slurm_job_id"])
+            for record in records
+            if "slurm_job_id" in record
+        }
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return any(
+        _get_slurm_job_state(relay_id, ssh_pool) in ACTIVE_STATES
+        for relay_id in job_ids - {job_id}
+    )
 
 
 def _build_reattach_run_request(
@@ -180,6 +208,10 @@ def reconcile_orphaned_slurm_runs(
 
             slurm_state = _get_slurm_job_state(job_id, ssh_pool)
             if not slurm_state:
+                continue
+            if slurm_state in TERMINAL_STATES and _has_live_relay_allocation(
+                run, job_id, ssh_pool
+            ):
                 continue
 
             if not _should_reconcile(
