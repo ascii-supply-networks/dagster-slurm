@@ -7,6 +7,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -33,6 +34,7 @@ from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.launchers.base import ExecutionPlan
 from dagster_slurm.config.runtime import RuntimeVariant
 from dagster_slurm.resources.session import SlurmAllocation
+import dagster_slurm.resources.session as session_module
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
 from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
 from dagster_slurm_test.test_resources import (
@@ -489,6 +491,70 @@ def test_stale_supervisor_with_live_successor_still_gets_recovery(tmp_path):
         )
 
 
+def test_live_session_wait_refreshes_heartbeat_and_detach_enables_recovery(
+    tmp_path, monkeypatch
+):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    first = session.allocation
+    session.submit_successor()
+    pool.states[700] = "TIMEOUT"
+    stamp = [1.0]
+    refreshed = threading.Event()
+    monkeypatch.setattr(session_module.time, "time", lambda: stamp[0])
+    monkeypatch.setattr(session_module, "_SESSION_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    with dg.DagsterInstance.ephemeral() as instance:
+        run = dg.DagsterRun(
+            job_name="relay",
+            run_id="relay",
+            status=dg.DagsterRunStatus.STARTED,
+            tags={
+                "dagster_slurm/job_id": "700",
+                "dagster_slurm/run_dir": str(tmp_path),
+                "dagster_slurm/session_allocation_dir": first.session_dir,
+            },
+        )
+        instance.add_run(run)
+
+        def record(run_id, tags):
+            instance.add_run_tags(run_id, tags)
+            if tags.get("dagster_slurm/last_supervisor_heartbeat") == "1000.0":
+                refreshed.set()
+
+        context = SimpleNamespace(
+            run=run, instance=SimpleNamespace(add_run_tags=record)
+        )
+        object.__setattr__(session, "_initialized", True)
+        object.__setattr__(session, "_preserve_allocation_on_teardown", True)
+        session._start_supervisor_heartbeat(context)
+        thread = session._heartbeat_thread
+        try:
+            # The caller is alive but has had no payload for longer than the
+            # sensor's stale threshold. A session heartbeat still advances.
+            stamp[0] = 1000.0
+            assert refreshed.wait(timeout=2)
+            context_pool = MagicMock()
+            context_pool.__enter__.return_value = pool
+            with patch(
+                "dagster_slurm.sensors.SSHConnectionPool", return_value=context_pool
+            ):
+                assert (
+                    reconcile_orphaned_slurm_runs(instance, session.slurm, now=1001)
+                    == []
+                )
+        finally:
+            session.teardown_after_execution(cast(Any, context))
+        assert thread is not None and not thread.is_alive()
+        assert pool.states[701] == "PENDING"
+        with patch(
+            "dagster_slurm.sensors.SSHConnectionPool", return_value=context_pool
+        ):
+            assert (
+                len(reconcile_orphaned_slurm_runs(instance, session.slurm, now=1201))
+                == 1
+            )
+
+
 def test_drained_nonzero_step_is_reattached_but_retired_allocation_is_not(tmp_path):
     pool = RelayPool()
     session = make_session(tmp_path, pool)
@@ -652,7 +718,11 @@ def test_slurm_session_drain_and_successor(
             if activation is None:
                 deployment = request.getfixturevalue("deployment_metadata")
                 activation = f"{deployment['deployment_path']}/activate.sh"
-            launcher = RayLauncher(num_gpus_per_node=0, object_store_memory_gb=1)
+            launcher = RayLauncher(
+                num_gpus_per_node=0,
+                object_store_memory_gb=1,
+                ray_start_args=["--num-cpus=1"],
+            )
             address = allocation.ensure_ray_cluster(
                 ssh_pool=pool,
                 launcher=launcher,
@@ -714,10 +784,7 @@ def test_slurm_session_drain_and_successor(
         assert "RUNNING" in pool.run(f"scontrol show step {shlex.quote(step_id)}")
         assert allocation.end_time is not None
         if persistent_cluster:
-            check = f"source {shlex.quote(activation)} && ray status --address={shlex.quote(address)}"
-            assert "Healthy:" in pool.run(
-                f"srun --overlap --jobid={allocation.slurm_job_id} -N1 -n1 bash -c {shlex.quote(check)}"
-            )
+            _assert_cluster_executes(pool, allocation, activation, address)
 
         successor = session.submit_successor(
             SlurmRunAllocationConfig(
@@ -737,10 +804,8 @@ def test_slurm_session_drain_and_successor(
         assert promoted.slurm_job_id == successor.slurm_job_id
         if persistent_cluster:
             assert promoted._ray_address is not None
-            check = f"source {shlex.quote(activation)} && ray status --address={shlex.quote(promoted._ray_address)}"
-            assert "Healthy:" in pool.run(
-                f"srun --overlap --jobid={promoted.slurm_job_id} -N1 -n1 bash -c {shlex.quote(check)}"
-            )
+            _assert_cluster_executes(pool, promoted, activation, promoted._ray_address)
+
         next_result = promoted.execute(
             ExecutionPlan(
                 kind=RuntimeVariant.SHELL,
@@ -756,3 +821,16 @@ def test_slurm_session_drain_and_successor(
         assert next_result.job_id == promoted.slurm_job_id and not next_result.drained
     finally:
         session.teardown_after_execution(cast(Any, context))
+
+
+def _assert_cluster_executes(pool, allocation, activation, address):
+    code = (
+        f"import ray; ray.init(address={address!r}); "
+        "assert ray.get(ray.remote(lambda: 217).remote(), timeout=30) == 217; "
+        "print('relay-cluster-ready'); ray.shutdown()"
+    )
+    check = f"source {shlex.quote(activation)} && python -c {shlex.quote(code)}"
+    assert "relay-cluster-ready" in pool.run(
+        f"srun --overlap --jobid={allocation.slurm_job_id} -N1 -n1 bash -c {shlex.quote(check)}",
+        timeout=60,
+    )

@@ -54,6 +54,8 @@ Unspecified successor fields inherit the current allocation's configuration. Onl
 
 Each job keeps its node markers, payload status files, and Ray directory under `jobs/<job_id>/`. The session's `allocation.json` and leases stay at a stable location. A restarted process can find a pending successor even after its predecessor ends. Repeating a completed promotion repairs tag publication and predecessor cleanup while preserving any active successor step's tags. The orphan sensor recognises a live published successor and still recovers supervisors with stale heartbeats. Session teardown cancels all allocations with the session job name, including pending successors.
 
+The session maintains its supervisor heartbeat between payload calls, including while your caller waits for a queued successor. Teardown stops that heartbeat, including when allocations are preserved for reattachment.
+
 ## Handle drained work
 
 The allocation shell traps the configured pre-walltime signal, records it, and forwards it only to registered payload steps. It stays alive, and persistent Ray head and worker steps remain available while the payload drains. `request_drain()` sends that same signal to the allocation shell; without a configured pre-walltime signal, on-demand drain uses `TERM`. Draining is permanent for that allocation: later payload starts return a drained outcome without starting work.
