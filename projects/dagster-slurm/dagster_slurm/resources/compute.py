@@ -4,7 +4,12 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from dagster import ConfigurableResource, InitResourceContext, get_dagster_logger
+from dagster import (
+    AssetExecutionContext,
+    ConfigurableResource,
+    InitResourceContext,
+    get_dagster_logger,
+)
 from pydantic import Field, PrivateAttr, model_validator
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 
@@ -443,7 +448,7 @@ class ComputeResource(ConfigurableResource):
             )
 
     def get_run_allocation_session(
-        self, context: InitResourceContext
+        self, context: InitResourceContext | AssetExecutionContext
     ) -> SlurmSessionResource:
         """Get or initialize the run session for caller-managed walltime relays."""
         if (
@@ -455,7 +460,7 @@ class ComputeResource(ConfigurableResource):
 
     def _get_or_create_run_allocation_session(
         self,
-        context: InitResourceContext,
+        context: InitResourceContext | AssetExecutionContext,
     ) -> SlurmSessionResource:
         """Return the run-owned allocation session for allocation_scope='run'."""
         if not self.slurm:

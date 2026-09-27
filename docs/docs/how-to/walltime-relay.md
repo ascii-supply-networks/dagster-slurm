@@ -52,7 +52,7 @@ Unspecified successor fields inherit the current allocation's configuration. Onl
 
 `promote_successor()` requires a RUNNING successor and no active predecessor payloads, including payloads still waiting for `srun` to start. It starts the persistent Ray cluster using the recorded launcher and environment, publishes the successor, updates Dagster run tags, and releases the predecessor. Pass `launcher=...` and `activation_script=...` when the successor needs a different Ray configuration. Coordinate promotion with your payload submissions; a plan prepared against a retired allocation is rejected and must be prepared again.
 
-Each job keeps its node markers, payload status files, and Ray directory under `jobs/<job_id>/`. The session's `allocation.json` and leases stay at a stable location. A restarted process can find a pending successor even after its predecessor ends. Repeating a completed promotion repairs tag publication and predecessor cleanup. The orphan sensor recognises a live published successor, and session teardown cancels all allocations with the session job name, including pending successors.
+Each job keeps its node markers, payload status files, and Ray directory under `jobs/<job_id>/`. The session's `allocation.json` and leases stay at a stable location. A restarted process can find a pending successor even after its predecessor ends. Repeating a completed promotion repairs tag publication and predecessor cleanup while preserving any active successor step's tags. The orphan sensor recognises a live published successor and still recovers supervisors with stale heartbeats. Session teardown cancels all allocations with the session job name, including pending successors.
 
 ## Handle drained work
 
@@ -81,4 +81,4 @@ except SlurmStepDrained as drained:
     # Promote when the successor is ready, then launch remaining documents.
 ```
 
-Use `defer_cleanup=True` for repeated invocations in one asset, then call `compute.cleanup_deferred_run_dir(context)` when that loop is finished. Allocation selection, successor readiness, checkpointing, and relaunch policy remain in your application.
+Fresh session invocations use separate subdirectories and Pipes message streams; reattachment reads the original invocation. Use `defer_cleanup=True` to retain invocation files throughout a relay loop, then call `compute.cleanup_deferred_run_dir(context)` when that loop is finished. Allocation selection, successor readiness, checkpointing, and relaunch policy remain in your application.

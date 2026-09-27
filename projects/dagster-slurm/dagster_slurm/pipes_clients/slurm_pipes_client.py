@@ -549,6 +549,13 @@ class SlurmPipesClient(PipesClient):
                         f"'{old_job_state}' — submitting a new job."
                     )
 
+                if use_session:
+                    # Reattachment above uses its original directory; every
+                    # fresh session invocation gets a new Pipes message stream.
+                    run_dir = self._new_session_invocation_dir(run_dir)
+                    messages_path = f"{run_dir}/messages.jsonl"
+                    ssh_pool.run(f"mkdir -p {shlex.quote(run_dir)}")
+
                 activation_script, python_executable = self._prepare_environment(
                     ssh_pool=ssh_pool,
                     remote_base=remote_base,
@@ -989,6 +996,10 @@ class SlurmPipesClient(PipesClient):
         step_dir_name = self._sanitize_remote_path_component(execution_key)
         return f"{remote_base}/runs/{run_id}/{step_dir_name}"
 
+    @staticmethod
+    def _new_session_invocation_dir(step_dir: str) -> str:
+        return f"{step_dir}/invocations/{uuid.uuid4().hex}"
+
     def _get_execution_key_string(
         self, op_context: Optional[OpExecutionContext]
     ) -> str:
@@ -1310,14 +1321,26 @@ class SlurmPipesClient(PipesClient):
             try:
                 session_status_path = cand.get(_TAG_SESSION_STEP_STATUS_PATH)
                 if session_status_path:
+                    if (
+                        self.session is not None
+                        and self.session._allocation is not None
+                    ):
+                        if int(cand["job_id"]) != self.session.allocation.slurm_job_id:
+                            # Cached Dagster context/parent tags can still name
+                            # a predecessor after promotion. Never replay it.
+                            continue
                     session_status = ssh_pool.run(
                         f"cat {shlex.quote(str(session_status_path))} "
                         "2>/dev/null || true"
                     ).strip()
                     if session_status.isdigit() and int(session_status) != 0:
-                        # A known failed step should be resubmitted inside the
-                        # recovered allocation, not adopted by the retry.
-                        continue
+                        drain_marker = f"{posixpath.dirname(str(session_status_path))}/drain_signal"
+                        # Preserve a typed drain outcome across a restart;
+                        # ordinary failed steps may be resubmitted.
+                        if not ssh_pool.run(
+                            f"cat {shlex.quote(drain_marker)} 2>/dev/null || true"
+                        ).strip():
+                            continue
 
                 state = self._get_job_state(int(cand["job_id"]), ssh_pool)
                 if not state:

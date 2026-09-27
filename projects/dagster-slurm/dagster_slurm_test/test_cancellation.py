@@ -487,7 +487,7 @@ def test_find_reattachable_job_skips_failed_session_step():
     }
     mock_op_context.instance.get_run_by_id.return_value = parent_run
     ssh_pool = MagicMock()
-    ssh_pool.run.return_value = "1"
+    ssh_pool.run.side_effect = lambda cmd: "1" if ".step.status" in cmd else ""
 
     result = client._find_reattachable_job(
         mock_op_context,

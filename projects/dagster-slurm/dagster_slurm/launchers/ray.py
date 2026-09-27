@@ -450,7 +450,9 @@ class RayLauncher(ComputeLauncher):
             if activation_script:
                 script += f"source {shlex.quote(activation_script)}\n"
                 script += self._library_path_export(python_executable)
-            script += f"{python_command}\n"
+            # Let the supervised process remain the Python driver while its
+            # signal handler checkpoints; an intermediate Bash would exit first.
+            script += f"exec {python_command}\n"
 
         elif allocation_context:
             # Mode: Start cluster in pre-existing allocation (session mode)

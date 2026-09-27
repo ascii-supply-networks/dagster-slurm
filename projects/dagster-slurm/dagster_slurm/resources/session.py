@@ -15,6 +15,7 @@ from typing import Any, Callable, List, Literal, Optional, Set
 import uuid
 
 from dagster import (
+    AssetExecutionContext,
     Config,
     ConfigurableResource,
     InitResourceContext,
@@ -551,7 +552,9 @@ class SlurmSessionResource(ConfigurableResource):
     def logger(self) -> Any:
         return self._logger or get_dagster_logger()
 
-    def setup_for_execution(self, context: InitResourceContext) -> None:
+    def setup_for_execution(
+        self, context: InitResourceContext | AssetExecutionContext
+    ) -> None:
         """Called by Dagster when resource is initialized for a run.
         This is the proper Dagster resource lifecycle hook.
         """
@@ -1137,6 +1140,11 @@ trap drain_payloads {shlex.quote(signal_name)}
             ssh_pool = self._require_ssh_pool()
             with self._session_lock(current.session_dir):
                 metadata = self._read_session_metadata(current.session_dir)
+                if metadata and int(metadata["slurm_job_id"]) != current.slurm_job_id:
+                    current = self._allocation_from_record(
+                        metadata, current.session_dir
+                    )
+                    object.__setattr__(self, "_allocation", current)
                 if (
                     metadata
                     and not metadata.get("successor")
@@ -1166,6 +1174,8 @@ trap drain_payloads {shlex.quote(signal_name)}
                         if activation_script is not None
                         else (ray_options or {}).get("activation_script", ""),
                     }
+                elif activation_script is not None and ray_options is not None:
+                    ray_options["activation_script"] = activation_script
                 if ray_options:
                     successor.ensure_ray_cluster(
                         ssh_pool=ssh_pool,
@@ -1199,9 +1209,14 @@ trap drain_payloads {shlex.quote(signal_name)}
         tags = {
             "dagster_slurm/job_id": str(allocation.slurm_job_id),
             _SESSION_ALLOCATION_DIR_TAG: allocation.session_dir,
-            "dagster_slurm/run_dir": "",
         }
-        if run is not None:
+        if run is None or run.tags.get("dagster_slurm/job_id") != str(
+            allocation.slurm_job_id
+        ):
+            tags["dagster_slurm/run_dir"] = ""
+        if run is not None and run.tags.get("dagster_slurm/job_id") != str(
+            allocation.slurm_job_id
+        ):
             tags.update(
                 {
                     key: ""
