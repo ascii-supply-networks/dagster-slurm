@@ -212,7 +212,11 @@ def reconcile_orphaned_slurm_runs(
             if slurm_state in TERMINAL_STATES and _has_live_relay_allocation(
                 run, job_id, ssh_pool
             ):
-                continue
+                # A live relay makes predecessor termination expected, but a
+                # dead supervisor still needs the normal heartbeat recovery.
+                heartbeat_age = _heartbeat_age_seconds(run, now=timestamp)
+                if heartbeat_age is None or heartbeat_age <= stale_after_seconds:
+                    continue
 
             if not _should_reconcile(
                 run,

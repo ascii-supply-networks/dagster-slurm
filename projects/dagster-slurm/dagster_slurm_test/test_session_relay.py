@@ -6,8 +6,10 @@ import selectors
 import shlex
 import signal
 import subprocess
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,22 +20,30 @@ import pytest
 
 from dagster_slurm import (
     ComputeResource,
+    BashLauncher,
     RayLauncher,
     SlurmAllocationEnded,
     SlurmRunAllocationConfig,
     SlurmSessionResource,
     SlurmStepExecutionResult,
+    SlurmStepDrained,
 )
 from dagster_slurm.helpers.signals import build_pre_timeout_supervisor_script
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.launchers.base import ExecutionPlan
 from dagster_slurm.config.runtime import RuntimeVariant
 from dagster_slurm.resources.session import SlurmAllocation
+from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
 from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
 from dagster_slurm_test.test_resources import (
     LocalSlurmFakeSSHPool,
     _mock_slurm_resource,
     _render_allocation_script,
+)
+from dagster_slurm_test.test_env_caching import (
+    FakePool,
+    configure_client_for_local_run,
+    make_context,
 )
 
 
@@ -408,12 +418,215 @@ def test_orphan_sensor_respects_published_successor(tmp_path, state, healthy):
         assert (stored.status == dg.DagsterRunStatus.STARTED) == healthy
 
 
+def test_promotion_refreshes_under_lock_and_preserves_successor_step_tags(
+    tmp_path, monkeypatch
+):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    first = session.allocation
+    successor = session.submit_successor()
+    successor.nodes = ["node-a"]
+    pool.states[701] = "RUNNING"
+    original_lock = session._session_lock
+
+    @contextmanager
+    def concurrent_promotion(session_dir):
+        with original_lock(session_dir):
+            # A second supervisor won the lock and promoted before this one.
+            metadata = session._allocation_record(successor)
+            metadata["predecessors"] = [session._allocation_record(first)]
+            session._write_session_metadata(session_dir, metadata)
+            yield
+
+    with dg.DagsterInstance.ephemeral() as instance:
+        step_tags = {
+            "dagster_slurm/job_id": "701",
+            "dagster_slurm/run_dir": "/successor/invocation",
+            "dagster_slurm/session_step_id": "701.1",
+            "dagster_slurm/session_step_status_path": "/successor/status",
+        }
+        run = dg.DagsterRun(job_name="relay", run_id="relay", tags=step_tags)
+        instance.add_run(run)
+        object.__setattr__(
+            session, "_context", SimpleNamespace(run=run, instance=instance)
+        )
+        monkeypatch.setattr(session, "_session_lock", concurrent_promotion)
+        assert session.promote_successor().slurm_job_id == 701
+        stored = instance.get_run_by_id("relay")
+        assert stored is not None
+        assert all(stored.tags[key] == value for key, value in step_tags.items())
+
+
+def test_stale_supervisor_with_live_successor_still_gets_recovery(tmp_path):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    first = session.allocation
+    session.submit_successor()
+    pool.states[700] = "TIMEOUT"
+    with dg.DagsterInstance.ephemeral() as instance:
+        run = dg.DagsterRun(
+            job_name="relay",
+            run_id="relay",
+            status=dg.DagsterRunStatus.STARTED,
+            tags={
+                "dagster_slurm/job_id": "700",
+                "dagster_slurm/run_dir": str(tmp_path),
+                "dagster_slurm/session_allocation_dir": first.session_dir,
+                "dagster_slurm/last_supervisor_heartbeat": "1",
+            },
+        )
+        instance.add_run(run)
+        context_pool = MagicMock()
+        context_pool.__enter__.return_value = pool
+        with patch(
+            "dagster_slurm.sensors.SSHConnectionPool", return_value=context_pool
+        ):
+            requests = reconcile_orphaned_slurm_runs(instance, session.slurm, now=1000)
+        assert len(requests) == 1
+        assert (
+            requests[0].tags["dagster_slurm/session_allocation_dir"]
+            == first.session_dir
+        )
+
+
+def test_drained_nonzero_step_is_reattached_but_retired_allocation_is_not(tmp_path):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    client = SlurmPipesClient(
+        slurm_resource=session.slurm, launcher=BashLauncher(), session_resource=session
+    )
+    status = tmp_path / "status"
+    status.write_text("7")
+    (tmp_path / "drain_signal").write_text("TERM")
+    context = MagicMock()
+    context.dagster_run.tags = {
+        "dagster_slurm/job_id": "700",
+        "dagster_slurm/run_dir": "/old",
+        "dagster_slurm/session_step_status_path": str(status),
+    }
+    context.dagster_run.parent_run_id = None
+    assert (
+        client._find_reattachable_job(context, cast(SSHConnectionPool, pool), None)
+        is not None
+    )
+    session.submit_successor()
+    pool.states[701] = "RUNNING"
+    session.promote_successor()
+    assert (
+        client._find_reattachable_job(context, cast(SSHConnectionPool, pool), None)
+        is None
+    )
+
+
+def test_fresh_pipes_invocations_have_separate_streams_after_drain(
+    monkeypatch, tmp_path
+):
+    pool = FakePool()
+    slurm = _mock_slurm_resource()
+    session = SlurmSessionResource(slurm=slurm)
+    object.__setattr__(session, "_ssh_pool", pool)
+    object.__setattr__(session, "_initialized", True)
+    object.__setattr__(
+        session, "_allocation", SlurmAllocation(42, ["node-a"], "/allocation", session)
+    )
+    client = SlurmPipesClient(
+        slurm_resource=slurm, launcher=BashLauncher(), session_resource=session
+    )
+    configure_client_for_local_run(client, monkeypatch, pool)
+    dirs = []
+    streams = []
+
+    def execute(**kwargs):
+        dirs.append(kwargs["run_dir"])
+        return SlurmStepExecutionResult(
+            job_id=42,
+            stdout_path="out",
+            stderr_path="err",
+            drain_signal="TERM",
+            exit_code=0,
+        )
+
+    monkeypatch.setattr(client, "_execute_in_session", execute)
+    monkeypatch.setattr(
+        "dagster_slurm.pipes_clients.slurm_pipes_client.SSHMessageReader",
+        lambda **kwargs: streams.append(kwargs["remote_path"]),
+    )
+    payload = tmp_path / "payload.py"
+    payload.write_text("print('hello')")
+    for _ in range(2):
+        with pytest.raises(SlurmStepDrained):
+            client.run(
+                context=make_context(),
+                payload_path=str(payload),
+                use_session=True,
+                defer_cleanup=True,
+            )
+    assert len(set(dirs)) == len(set(streams)) == 2
+    assert streams == [f"{directory}/messages.jsonl" for directory in dirs]
+    assert not any(
+        "scancel" in command or "rm -rf" in command for command in pool.commands
+    )
+
+
+def test_attached_driver_finishes_python_checkpoint_before_step_exits(tmp_path):
+    checkpoint = tmp_path / "checkpoint"
+    payload = tmp_path / "driver.py"
+    payload.write_text(
+        "import signal, time\nfrom pathlib import Path\n"
+        "def drain(*args):\n    time.sleep(0.3)\n"
+        f"    Path({str(checkpoint)!r}).write_text('committed')\n"
+        "    raise SystemExit(7)\n"
+        "signal.signal(signal.SIGTERM, drain)\nprint('ready', flush=True)\nsignal.pause()\n"
+    )
+    launcher = RayLauncher(ray_address="127.0.0.1:6379", num_gpus_per_node=0)
+    plan = launcher.prepare_execution(str(payload), sys.executable, str(tmp_path), {})
+    workload = tmp_path / "workload.sh"
+    workload.write_text("\n".join(plan.payload))
+    supervisor = tmp_path / "supervisor.sh"
+    supervisor.write_text(
+        build_pre_timeout_supervisor_script(
+            str(workload), "TERM@120", str(tmp_path / "signal")
+        )
+        or ""
+    )
+    process = subprocess.Popen(
+        ["bash", str(supervisor)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert process.stdout is not None
+        # Launcher headers precede the Python driver's readiness notification.
+        for _ in range(10):
+            if process.stdout.readline().strip() == "ready":
+                break
+        else:
+            pytest.fail("driver never became ready")
+        os.kill(process.pid, signal.SIGTERM)
+        process.communicate(timeout=10)
+        assert process.returncode == 7
+        assert checkpoint.read_text() == "committed"
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate(timeout=5)
+
+
 @pytest.mark.needs_slurm_docker
 @pytest.mark.parametrize(
-    "walltime", [False, pytest.param(True, marks=pytest.mark.slow)]
+    "walltime,persistent_cluster",
+    [(False, False), pytest.param(True, False, marks=pytest.mark.slow), (False, True)],
 )
 def test_slurm_session_drain_and_successor(
-    slurm_resource_for_testing, slurm_cluster_ready, walltime
+    slurm_resource_for_testing,
+    slurm_cluster_ready,
+    walltime,
+    persistent_cluster,
+    request,
 ):
     """A real step drains while an unregistered control-plane step stays alive."""
     session = SlurmSessionResource(
@@ -422,8 +635,8 @@ def test_slurm_session_drain_and_successor(
         partition="normal",
         time_limit="00:03:00" if walltime else "00:10:00",
         signal_before_timeout="TERM@60",
-        cpus_per_task=1,
-        mem="1G",
+        cpus_per_task=2 if persistent_cluster else 1,
+        mem="3G" if persistent_cluster else "1G",
         enable_health_checks=False,
     )
     context = SimpleNamespace(
@@ -434,6 +647,18 @@ def test_slurm_session_drain_and_successor(
     try:
         allocation = session.allocation
         pool = session._require_ssh_pool()
+        if persistent_cluster:
+            activation = os.getenv("DAGSTER_SLURM_RELAY_TEST_ACTIVATE")
+            if activation is None:
+                deployment = request.getfixturevalue("deployment_metadata")
+                activation = f"{deployment['deployment_path']}/activate.sh"
+            launcher = RayLauncher(num_gpus_per_node=0, object_store_memory_gb=1)
+            address = allocation.ensure_ray_cluster(
+                ssh_pool=pool,
+                launcher=launcher,
+                activation_script=activation,
+                startup_timeout=120,
+            )
         run_dir = f"{allocation.working_dir}/test"
         pool.run(
             f"mkdir -p {shlex.quote(run_dir)} && mkfifo {shlex.quote(run_dir + '/ready')}"
@@ -486,10 +711,13 @@ def test_slurm_session_drain_and_successor(
         )
         assert session._get_job_state(allocation.slurm_job_id) == "RUNNING"
         step_id = pool.run(f"cat {shlex.quote(control_id)}").strip()
-        assert "RUNNING" in pool.run(
-            f"squeue --steps -h -j {shlex.quote(step_id)} -o %T"
-        )
+        assert "RUNNING" in pool.run(f"scontrol show step {shlex.quote(step_id)}")
         assert allocation.end_time is not None
+        if persistent_cluster:
+            check = f"source {shlex.quote(activation)} && ray status --address={shlex.quote(address)}"
+            assert "Healthy:" in pool.run(
+                f"srun --overlap --jobid={allocation.slurm_job_id} -N1 -n1 bash -c {shlex.quote(check)}"
+            )
 
         successor = session.submit_successor(
             SlurmRunAllocationConfig(
@@ -507,6 +735,12 @@ def test_slurm_session_drain_and_successor(
         )
         promoted = session.promote_successor()
         assert promoted.slurm_job_id == successor.slurm_job_id
+        if persistent_cluster:
+            assert promoted._ray_address is not None
+            check = f"source {shlex.quote(activation)} && ray status --address={shlex.quote(promoted._ray_address)}"
+            assert "Healthy:" in pool.run(
+                f"srun --overlap --jobid={promoted.slurm_job_id} -N1 -n1 bash -c {shlex.quote(check)}"
+            )
         next_result = promoted.execute(
             ExecutionPlan(
                 kind=RuntimeVariant.SHELL,
