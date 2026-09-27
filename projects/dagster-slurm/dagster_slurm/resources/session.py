@@ -45,6 +45,7 @@ from ..resources.slurm import (
 _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
 _REMOTE_LOCK_POLL_SECONDS = 2
 _SHARED_ALLOCATION_CLEANUP_GRACE_SECONDS = 10
+_SESSION_HEARTBEAT_INTERVAL_SECONDS = 30
 _SAFE_AUXILIARY_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_.=-]+$")
 _SESSION_ALLOCATION_DIR_TAG = "dagster_slurm/session_allocation_dir"
 
@@ -547,6 +548,8 @@ class SlurmSessionResource(ConfigurableResource):
     _shared_lifecycle: bool = PrivateAttr(default=False)
     _preserve_allocation_on_teardown: bool = PrivateAttr(default=False)
     _allocation_lease_id: Optional[str] = PrivateAttr(default=None)
+    _heartbeat_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _heartbeat_thread: threading.Thread | None = PrivateAttr(default=None)
 
     @property
     def logger(self) -> Any:
@@ -583,6 +586,41 @@ class SlurmSessionResource(ConfigurableResource):
                 self.logger.info("Session mode disabled")
 
             self._initialized = True
+            if self.enable_session:
+                self._start_supervisor_heartbeat(context)
+
+    def _start_supervisor_heartbeat(self, context: Any) -> None:
+        """Keep queued relay waits healthy even when no Pipes step is active."""
+        instance = getattr(context, "instance", None)
+        if not context.run or instance is None:
+            return
+        run_id = context.run.run_id
+        stop = threading.Event()
+        object.__setattr__(self, "_heartbeat_stop", stop)
+
+        def heartbeat() -> None:
+            try:
+                instance.add_run_tags(
+                    run_id,
+                    {
+                        "dagster_slurm/last_supervisor_heartbeat": str(time.time()),
+                    },
+                )
+            except Exception as exc:
+                self.logger.debug(
+                    f"Could not refresh session supervisor heartbeat: {exc}"
+                )
+
+        def keep_alive() -> None:
+            while not stop.wait(_SESSION_HEARTBEAT_INTERVAL_SECONDS):
+                heartbeat()
+
+        heartbeat()
+        thread = threading.Thread(
+            target=keep_alive, name="slurm-session-heartbeat", daemon=True
+        )
+        object.__setattr__(self, "_heartbeat_thread", thread)
+        thread.start()
 
     def teardown_after_execution(self, context: InitResourceContext) -> None:
         """Called by Dagster when resource is torn down after run completion.
@@ -593,6 +631,10 @@ class SlurmSessionResource(ConfigurableResource):
                 return
 
             self.logger.info("Tearing down session resource...")
+            self._heartbeat_stop.set()
+            if self._heartbeat_thread is not None:
+                self._heartbeat_thread.join(timeout=5)
+                object.__setattr__(self, "_heartbeat_thread", None)
 
             if self._shared_lifecycle:
                 self._release_allocation_lease()
