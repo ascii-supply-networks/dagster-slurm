@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.20.0-rc.1 (2026-09-28)
+
+### Bug Fixes
+
+- Address session relay review feedback
+  ([`4979d46`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4979d4669547d22ce3e7d75af4025a77d06c9718))
+
+- Keep queued relay sessions healthy between payloads
+  ([`e0fc39f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/e0fc39f0e10dae49cd7b75f754fb79dbc4afe536))
+
+- Preserve relay recovery and Python drain completion
+  ([`3247f23`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3247f2335f8b970aecb09710c886408318ef7615))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`67201a7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/67201a775e7f8f502f72cbb505f142d64cae78c5))
+
+### Features
+
+- Support draining and successor allocations in Slurm sessions
+  ([`5b6ed4e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5b6ed4e1a30f33fd6ec64a5b41a8f566c5783456))
+
+
 ## v1.20.0 (2026-09-25)
 
 ### Chores
