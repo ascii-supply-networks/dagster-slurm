@@ -48,9 +48,11 @@ session.promote_successor()
 # Subsequent compute.run(...) calls use the successor allocation.
 ```
 
-Unspecified successor fields inherit the current allocation's configuration. Only one successor can be outstanding. `extra_sbatch_directives` accepts one long-form `--option[=value]` per list entry, for example `--dependency=afterany:123`. Whitespace, duplicate options, and overrides of library-managed directives are rejected. Use the first-class fields for allocation shape, walltime, and signalling. A dependency that prevents overlap requires the predecessor to finish before promotion.
+Unspecified successor fields inherit the current allocation's configuration, except `extra_sbatch_directives`: these apply to one submission and default to an empty list on every successor. Pass them explicitly each time they are needed; a delayed `--begin` or dependency from an earlier allocation will not repeat. Only one successor can be outstanding. `extra_sbatch_directives` accepts one long-form `--option[=value]` per list entry, for example `--dependency=afterany:123`. Whitespace, duplicate options, and overrides of library-managed directives are rejected. Use the first-class fields for allocation shape, walltime, and signalling. A dependency that prevents overlap requires the predecessor to finish before promotion.
 
 `promote_successor()` requires a RUNNING successor and no active predecessor payloads, including payloads still waiting for `srun` to start. It starts the persistent Ray cluster using the recorded launcher and environment, publishes the successor, updates Dagster run tags, and releases the predecessor. Pass `launcher=...` and `activation_script=...` when the successor needs a different Ray configuration. Coordinate promotion with your payload submissions; a plan prepared against a retired allocation is rejected and must be prepared again.
+
+Ray startup runs outside the session lifecycle locks. Before publishing, promotion checks both allocation identities, successor readiness, and predecessor payloads again. A payload admitted during startup makes promotion fail until that payload finishes. Session subclasses retain their public configuration, SSH pool, logger and Dagster context across submission and reattachment. Override `_make_allocation(...)` to supply an allocation subclass (including custom Ray startup), and `_clone_allocation_config(...)` when extra operational dependencies must be carried over.
 
 Each job keeps its node markers, payload status files, and Ray directory under `jobs/<job_id>/`. The session's `allocation.json` and leases stay at a stable location. A restarted process can find a pending successor even after its predecessor ends. Repeating a completed promotion repairs tag publication and predecessor cleanup while preserving any active successor step's tags. The orphan sensor recognises a live published successor and still recovers supervisors with stale heartbeats. Session teardown cancels all allocations with the session job name, including pending successors.
 
@@ -62,9 +64,11 @@ The allocation shell traps the configured pre-walltime signal, records it, and f
 
 Payloads must handle the signal themselves and finish at a safe boundary. Slurm may deliver a pre-walltime signal up to 60 seconds early. KILL and STOP cannot provide a drain window and are rejected for sessions.
 
+A drain received before workload launch skips the workload and records a drained exit zero. If it arrives while `setsid` is creating the workload process group, the supervisor retains the signal until the group exists. The workload must install its handler promptly; a signal received before its handler is installed can still terminate it.
+
 The lower-level `SlurmAllocation.execute()` and `SlurmSessionResource.execute_in_session()` return `SlurmStepExecutionResult` with `drained`, `drain_signal`, and the payload's `exit_code`. A drained non-zero exit is returned as a typed result; an ordinary non-zero exit still raises an error with its log tails. `SlurmAllocationEnded` carries a `.result` with `allocation_state` when the allocation ends before a step writes its status.
 
-The Pipes/Compute API raises `SlurmStepDrained` for a drained invocation, including exit code zero, so partial work is not silently materialized. Catch it inside your asset's relay loop, inspect `.result`, and decide whether work remains:
+The Pipes/Compute API raises `SlurmStepDrained` for a drained invocation, including exit code zero, so partial work is not silently materialized. Both fresh invocations and reattachments finish reading Pipes messages and emit final logs before raising. The exception exposes `.result` and `.invocation`, a `PipesClientCompletedInvocation` containing all reported custom messages and materializations. Catch it inside your asset's relay loop and use your payload's completion report to decide whether work remains. Exit zero alone does not establish completion (a prelaunch drain also exits zero):
 
 ```python
 from dagster_slurm import SlurmStepDrained
@@ -80,6 +84,10 @@ except SlurmStepDrained as drained:
         f"Payload drained on {drained.result.drain_signal}; "
         f"exit code {drained.result.exit_code}"
     )
+    reports = drained.invocation.get_custom_messages()
+    if any(report.get("remaining") == 0 for report in reports):
+        # Your payload explicitly reported that all work was committed.
+        return drained.invocation.get_results(implicit_materializations=False)
     # Promote when the successor is ready, then launch remaining documents.
 ```
 

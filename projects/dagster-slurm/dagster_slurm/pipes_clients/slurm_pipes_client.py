@@ -701,8 +701,6 @@ class SlurmPipesClient(PipesClient):
                             allocation=allocation,
                         )
                         job_id = step_result.job_id
-                        if step_result.drained:
-                            raise SlurmStepDrained(step_result)
                     else:
                         self.logger.info("Executing as standalone Slurm job")
                         job_id = self._execute_standalone(
@@ -771,6 +769,10 @@ class SlurmPipesClient(PipesClient):
                         )
 
                 self._current_job_id = None
+                if step_result is not None and step_result.drained:
+                    raise SlurmStepDrained(
+                        step_result, invocation=PipesClientCompletedInvocation(session)
+                    )
                 self._raise_if_pipes_process_failed(
                     message_reader,
                     job_id=job_id,
@@ -2966,8 +2968,6 @@ rm -rf {pack_root_quoted}
                 poll_callback=poll_step,
                 timeout=poll_timeout,
             )
-            if step_result.drained:
-                raise SlurmStepDrained(step_result)
             self._maybe_emit_final_logs(
                 message_reader=message_reader,
                 ssh_pool=ssh_pool,
@@ -2991,6 +2991,10 @@ rm -rf {pack_root_quoted}
                 custom_metrics_collector=metrics_collector,
             )
 
+        if step_result.drained:
+            raise SlurmStepDrained(
+                step_result, invocation=PipesClientCompletedInvocation(session)
+            )
         self._raise_if_pipes_process_failed(
             message_reader,
             job_id=allocation_job_id,

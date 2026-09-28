@@ -53,38 +53,62 @@ set -uo pipefail
 
 _dagster_slurm_signal={quoted_signal}
 _dagster_slurm_signal_received=0
+_dagster_slurm_signal_pending=0
 _dagster_slurm_workload_pid=""
 _dagster_slurm_isolated_group=0
 
-_dagster_slurm_forward_signal() {{
-  _dagster_slurm_signal_received=1
-  # Recorded for the Dagster side; the exit code stays the workload's own.
-  printf '%s\n' "$_dagster_slurm_signal" > {quoted_marker_path} 2>/dev/null || true
-  echo "Dagster Slurm workload received pre-timeout signal $_dagster_slurm_signal; forwarding it and preserving the workload exit code." >&2
+_dagster_slurm_deliver_signal() {{
   if [[ -z "$_dagster_slurm_workload_pid" ]]; then
     return
   fi
 
   if [[ "$_dagster_slurm_isolated_group" -eq 1 ]]; then
-    kill -s "$_dagster_slurm_signal" -- "-$_dagster_slurm_workload_pid" 2>/dev/null || true
+    if kill -s "$_dagster_slurm_signal" -- "-$_dagster_slurm_workload_pid" 2>/dev/null; then
+      _dagster_slurm_signal_pending=0
+    fi
   else
-    kill -s "$_dagster_slurm_signal" "$_dagster_slurm_workload_pid" 2>/dev/null || true
+    if kill -s "$_dagster_slurm_signal" "$_dagster_slurm_workload_pid" 2>/dev/null; then
+      _dagster_slurm_signal_pending=0
+    fi
   fi
+}}
+
+_dagster_slurm_forward_signal() {{
+  _dagster_slurm_signal_received=1
+  _dagster_slurm_signal_pending=1
+  # Recorded for the Dagster side; the exit code stays the workload's own.
+  printf '%s\n' "$_dagster_slurm_signal" > {quoted_marker_path} 2>/dev/null || true
+  echo "Dagster Slurm workload received pre-timeout signal $_dagster_slurm_signal; forwarding it and preserving the workload exit code." >&2
+  _dagster_slurm_deliver_signal
 }}
 
 trap _dagster_slurm_forward_signal "$_dagster_slurm_signal"
 {registration_script}
 {drain_guard}
 
+# A drain before launch has no in-flight work to checkpoint.
+if [[ "$_dagster_slurm_signal_received" -eq 1 ]]; then
+  exit 0
+fi
+
 if command -v setsid >/dev/null 2>&1; then
-  setsid bash {quoted_workload_path} &
   _dagster_slurm_isolated_group=1
+  setsid bash {quoted_workload_path} &
 else
   bash {quoted_workload_path} &
 fi
 _dagster_slurm_workload_pid=$!
-if [[ "$_dagster_slurm_signal_received" -eq 1 ]]; then
-  _dagster_slurm_forward_signal
+if [[ "$_dagster_slurm_isolated_group" -eq 1 ]]; then
+  # The child PID exists before setsid establishes its process group. A trap
+  # during that window records the signal; defer re-forwarding until the
+  # group exists (or the child has already exited).
+  while ! kill -0 -- "-$_dagster_slurm_workload_pid" 2>/dev/null; do
+    kill -0 "$_dagster_slurm_workload_pid" 2>/dev/null || break
+    sleep 0.01
+  done
+fi
+if [[ "$_dagster_slurm_signal_pending" -eq 1 ]]; then
+  _dagster_slurm_deliver_signal
 fi
 
 _dagster_slurm_workload_exit=0
