@@ -19,6 +19,7 @@ from dagster import (
     Config,
     ConfigurableResource,
     InitResourceContext,
+    PipesClientCompletedInvocation,
     get_dagster_logger,
 )
 from loguru import logger
@@ -46,6 +47,7 @@ _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
 _REMOTE_LOCK_POLL_SECONDS = 2
 _SHARED_ALLOCATION_CLEANUP_GRACE_SECONDS = 10
 _SESSION_HEARTBEAT_INTERVAL_SECONDS = 30
+_STEP_SCHEDULER_CHECK_INTERVAL_SECONDS = 30
 _SAFE_AUXILIARY_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_.=-]+$")
 _SESSION_ALLOCATION_DIR_TAG = "dagster_slurm/session_allocation_dir"
 
@@ -417,10 +419,16 @@ class SlurmStepExecutionResult:
 
 
 class SlurmStepDrained(RuntimeError):
-    """A Pipes invocation drained; callers can inspect the durable step result."""
+    """A drained step, with its finalized Pipes results available to the caller."""
 
-    def __init__(self, result: SlurmStepExecutionResult):
+    def __init__(
+        self,
+        result: SlurmStepExecutionResult,
+        *,
+        invocation: PipesClientCompletedInvocation,
+    ):
         self.result = result
+        self.invocation = invocation
         super().__init__(
             f"Slurm step {result.step_id or result.job_id} drained ({result.drain_signal})"
         )
@@ -949,12 +957,11 @@ class SlurmSessionResource(ConfigurableResource):
 
         # Query estimated start time for pending allocation
         self._log_estimated_start_time(job_id)
-        allocation = SlurmAllocation(
+        allocation = self._make_allocation(
             slurm_job_id=job_id,
             nodes=[],
             working_dir=f"{working_dir}/jobs/{job_id}",
             session_dir=working_dir,
-            config=self,
         )
         if wait_for_start:
             try:
@@ -1049,14 +1056,45 @@ trap drain_payloads {shlex.quote(signal_name)}
     ) -> "SlurmAllocation":
         config = self
         if record.get("config"):
-            config = SlurmSessionResource(slurm=self.slurm, **record["config"])
-            object.__setattr__(config, "_ssh_pool", self._require_ssh_pool())
-        return SlurmAllocation(
+            config = self._clone_allocation_config(record["config"])
+        return config._make_allocation(
             slurm_job_id=int(record["slurm_job_id"]),
             nodes=[str(node) for node in record["nodes"]],
             working_dir=record.get("working_dir", session_dir),
             session_dir=session_dir,
-            config=config,
+        )
+
+    def _clone_allocation_config(
+        self, overrides: dict[str, Any]
+    ) -> "SlurmSessionResource":
+        """Validate an allocation config without copying lifecycle workers/state.
+
+        Subclasses can extend this hook for additional operational dependencies.
+        Public configuration, the SSH pool, logger and Dagster context survive.
+        """
+        values = {
+            key: getattr(self, key) for key in type(self).model_fields if key != "slurm"
+        }
+        config = type(self)(slurm=self.slurm, **{**values, **overrides})
+        for name in ("_ssh_pool", "_logger", "_context"):
+            object.__setattr__(config, name, getattr(self, name))
+        return config
+
+    def _make_allocation(
+        self,
+        *,
+        slurm_job_id: int,
+        nodes: list[str],
+        working_dir: str,
+        session_dir: str,
+    ) -> "SlurmAllocation":
+        """Factory used for submission, reattachment and successor promotion."""
+        return SlurmAllocation(
+            slurm_job_id=slurm_job_id,
+            nodes=nodes,
+            working_dir=working_dir,
+            session_dir=session_dir,
+            config=self,
         )
 
     def _allocation_record(self, allocation: "SlurmAllocation") -> dict[str, Any]:
@@ -1064,11 +1102,7 @@ trap drain_payloads {shlex.quote(signal_name)}
             "slurm_job_id": allocation.slurm_job_id,
             "nodes": allocation.nodes,
             "working_dir": allocation.working_dir,
-            "config": {
-                key: getattr(allocation.config, key)
-                for key in SlurmRunAllocationConfig.model_fields
-                if key != "cleanup_policy"
-            },
+            "config": allocation.config.model_dump(mode="json", exclude={"slurm"}),
         }
 
     def _write_allocation_metadata(self, allocation: "SlurmAllocation") -> None:
@@ -1141,16 +1175,15 @@ trap drain_payloads {shlex.quote(signal_name)}
                 shape = dict(
                     metadata.get("config") or self._allocation_record(current)["config"]
                 )
+                # Timing/dependencies belong to one submission, not the relay.
+                shape["extra_sbatch_directives"] = []
                 if config is not None:
                     shape.update(
                         config.model_dump(
                             exclude_unset=True, exclude={"cleanup_policy"}
                         )
                     )
-                successor_config = SlurmSessionResource(slurm=self.slurm, **shape)
-                object.__setattr__(
-                    successor_config, "_ssh_pool", self._require_ssh_pool()
-                )
+                successor_config = self._clone_allocation_config(shape)
                 successor = successor_config._submit_allocation(
                     allocation_id=posixpath.basename(current.session_dir),
                     working_dir=current.session_dir,
@@ -1207,22 +1240,51 @@ trap drain_payloads {shlex.quote(signal_name)}
                     raise RuntimeError(
                         "Predecessor payloads are still active; request_drain and wait before promotion"
                     )
-                self._load_allocation_nodes(successor)
-                ray_options = current._read_ray_start_options(ssh_pool)
-                if launcher is not None:
-                    ray_options = {
-                        "launcher": launcher,
-                        "activation_script": activation_script
-                        if activation_script is not None
-                        else (ray_options or {}).get("activation_script", ""),
-                    }
-                elif activation_script is not None and ray_options is not None:
-                    ray_options["activation_script"] = activation_script
-                if ray_options:
-                    successor.ensure_ray_cluster(
-                        ssh_pool=ssh_pool,
-                        startup_timeout=startup_timeout,
-                        **ray_options,
+
+        # Startup can take minutes. Keep both lifecycle locks available to
+        # sibling payload registrations, then revalidate before publication.
+        successor.config._load_allocation_nodes(successor)
+        ray_options = current._read_ray_start_options(ssh_pool)
+        if launcher is not None:
+            ray_options = {
+                "launcher": launcher,
+                "activation_script": activation_script
+                if activation_script is not None
+                else (ray_options or {}).get("activation_script", ""),
+            }
+        elif activation_script is not None and ray_options is not None:
+            ray_options["activation_script"] = activation_script
+        if ray_options:
+            successor.ensure_ray_cluster(
+                ssh_pool=ssh_pool,
+                startup_timeout=startup_timeout,
+                **ray_options,
+            )
+
+        with self._lifecycle_lock:
+            with self._session_lock(current.session_dir):
+                metadata = self._read_session_metadata(current.session_dir)
+                if metadata and int(metadata["slurm_job_id"]) == successor.slurm_job_id:
+                    # Another supervisor completed the same promotion.
+                    published = self._allocation_from_record(
+                        metadata, current.session_dir
+                    )
+                    object.__setattr__(self, "_allocation", published)
+                    self._finish_promotion(published, metadata)
+                    return published
+                if (
+                    not metadata
+                    or int(metadata["slurm_job_id"]) != current.slurm_job_id
+                    or not metadata.get("successor")
+                    or int(metadata["successor"]["slurm_job_id"])
+                    != successor.slurm_job_id
+                ):
+                    raise RuntimeError("Session allocations changed; retry promotion")
+                if self._get_job_state(successor.slurm_job_id) != "RUNNING":
+                    raise RuntimeError("Successor allocation is not RUNNING")
+                if current.has_active_payloads(ssh_pool):
+                    raise RuntimeError(
+                        "Predecessor payloads are still active; request_drain and wait before promotion"
                     )
                 updated = self._allocation_record(successor)
                 updated["predecessors"] = [
@@ -1566,18 +1628,17 @@ done
             raise ValueError("Session step reattachment requires id and status paths")
 
         started_at = time.monotonic()
+        next_scheduler_check = started_at
         current = result
         while True:
-            step_id = ssh_pool.run(
-                f"cat {shlex.quote(result.step_id_path)} 2>/dev/null || true"
-            ).strip()
-            if current.step_id is None and re.fullmatch(
-                rf"{result.job_id}\.[A-Za-z0-9_+-]+",
-                step_id,
-            ):
-                current = dataclass_replace(current, step_id=step_id)
-                if step_update_callback is not None:
-                    step_update_callback(current)
+            if current.step_id is None:
+                step_id = ssh_pool.run(
+                    f"cat {shlex.quote(result.step_id_path)} 2>/dev/null || true"
+                ).strip()
+                if re.fullmatch(rf"{result.job_id}\.[A-Za-z0-9_+-]+", step_id):
+                    current = dataclass_replace(current, step_id=step_id)
+                    if step_update_callback is not None:
+                        step_update_callback(current)
 
             status = ssh_pool.run(
                 f"cat {shlex.quote(result.status_path)} 2>/dev/null || true"
@@ -1621,20 +1682,26 @@ done
                 )
                 return current
 
-            state_output = ssh_pool.run(
-                f"squeue -h -j {result.job_id} -o '%T' 2>/dev/null || true"
-            ).strip()
-            if not state_output:
-                state_output = ssh_pool.run(
-                    f"sacct -X -n -j {result.job_id} -o State%20 2>/dev/null || true"
-                ).strip()
-            state = (
-                normalize_slurm_state(state_output.split()[0]) if state_output else ""
-            )
-            if state in TERMINAL_STATES:
-                raise SlurmAllocationEnded(
-                    dataclass_replace(current, allocation_state=state)
+            if time.monotonic() >= next_scheduler_check:
+                next_scheduler_check = (
+                    time.monotonic() + _STEP_SCHEDULER_CHECK_INTERVAL_SECONDS
                 )
+                state_output = ssh_pool.run(
+                    f"squeue -h -j {result.job_id} -o '%T' 2>/dev/null || true"
+                ).strip()
+                if not state_output:
+                    state_output = ssh_pool.run(
+                        f"sacct -X -n -j {result.job_id} -o State%20 2>/dev/null || true"
+                    ).strip()
+                state = (
+                    normalize_slurm_state(state_output.split()[0])
+                    if state_output
+                    else ""
+                )
+                if state in TERMINAL_STATES:
+                    raise SlurmAllocationEnded(
+                        dataclass_replace(current, allocation_state=state)
+                    )
 
             if poll_callback is not None:
                 poll_callback(current)

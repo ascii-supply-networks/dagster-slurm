@@ -613,9 +613,14 @@ def test_fresh_pipes_invocations_have_separate_streams_after_drain(
         )
 
     monkeypatch.setattr(client, "_execute_in_session", execute)
+
+    class RecordingReader:
+        def __init__(self, **kwargs):
+            streams.append(kwargs["remote_path"])
+
     monkeypatch.setattr(
         "dagster_slurm.pipes_clients.slurm_pipes_client.SSHMessageReader",
-        lambda **kwargs: streams.append(kwargs["remote_path"]),
+        RecordingReader,
     )
     payload = tmp_path / "payload.py"
     payload.write_text("print('hello')")
@@ -685,7 +690,7 @@ def test_attached_driver_finishes_python_checkpoint_before_step_exits(tmp_path):
 @pytest.mark.needs_slurm_docker
 @pytest.mark.parametrize(
     "walltime,persistent_cluster",
-    [(False, False), pytest.param(True, False, marks=pytest.mark.slow), (False, True)],
+    [(False, False), (True, False), (False, True)],
 )
 def test_slurm_session_drain_and_successor(
     slurm_resource_for_testing,
