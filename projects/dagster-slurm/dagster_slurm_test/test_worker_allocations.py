@@ -1049,6 +1049,40 @@ def test_only_sessions_with_workers_watch_their_head(tmp_path, monkeypatch):
     assert watching == [plain, sibling]
 
 
+def test_a_watch_that_outlives_teardown_submits_nothing(tmp_path):
+    """A watch iteration that waited for teardown's lock must not queue jobs."""
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    config = session.worker_allocation
+    assert config is not None
+    session._ensure_worker_allocation(config)
+    object.__setattr__(session, "_initialized", True)
+    submitted = list(pool.submitted_jobs)
+    refused: list[RuntimeError] = []
+
+    def keep_head() -> None:
+        try:
+            session._keep_head()
+        except RuntimeError as exc:
+            refused.append(exc)
+
+    late = [
+        threading.Thread(target=keep_head),
+        threading.Thread(target=session._ensure_worker_allocation, args=(config,)),
+    ]
+    context = SimpleNamespace(run=SimpleNamespace(run_id="relay", tags={}))
+    with session._lifecycle_lock:  # Teardown holds it while the watch wakes.
+        for thread in late:
+            thread.start()
+        session.teardown_after_execution(cast(Any, context))
+    for thread in late:
+        thread.join(timeout=10)
+
+    assert set(pool.states.values()) == {"CANCELLED"}
+    assert pool.submitted_jobs == submitted  # No new head or worker leaks.
+    assert len(refused) == 1
+
+
 def test_the_election_claim_is_refreshed_while_ray_starts(tmp_path, monkeypatch):
     pool = ElectionPool()
     session = _head_only_session(tmp_path, pool)

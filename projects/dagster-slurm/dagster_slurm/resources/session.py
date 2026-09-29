@@ -657,6 +657,8 @@ class SlurmSessionResource(ConfigurableResource):
     _ssh_pool: Optional[SSHConnectionPool] = PrivateAttr(default=None)
     _execution_semaphore: Optional[threading.Semaphore] = PrivateAttr(default=None)
     _initialized: bool = PrivateAttr(default=False)
+    # Set by teardown, so background work that waited for it submits nothing.
+    _torn_down: bool = PrivateAttr(default=False)
     _lifecycle_lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
     _logger: Any = PrivateAttr(default=None)
     _context: Any = PrivateAttr(default=None)
@@ -682,6 +684,7 @@ class SlurmSessionResource(ConfigurableResource):
             if self._initialized:
                 return
 
+            self._torn_down = False
             self._logger = get_dagster_logger()
             self._context = context
             self._execution_semaphore = threading.Semaphore(self.max_concurrent_jobs)
@@ -771,9 +774,10 @@ class SlurmSessionResource(ConfigurableResource):
                     if self.worker_allocation is not None:
                         self._ensure_worker_allocation(self.worker_allocation)
                 except Exception as exc:
-                    self.logger.warning(
-                        f"Could not check the session's Ray head: {exc}"
-                    )
+                    if not self._torn_down:
+                        self.logger.warning(
+                            f"Could not check the session's Ray head: {exc}"
+                        )
 
         thread = threading.Thread(target=watch, name="slurm-head-watch", daemon=True)
         object.__setattr__(self, "_head_watch_thread", thread)
@@ -788,6 +792,7 @@ class SlurmSessionResource(ConfigurableResource):
                 return
 
             self.logger.info("Tearing down session resource...")
+            self._torn_down = True
             self._heartbeat_stop.set()
             for name in ("_heartbeat_thread", "_head_watch_thread"):
                 thread = getattr(self, name)
@@ -1697,6 +1702,8 @@ echo "Ray workers left the cluster"
     def _ensure_worker_allocation(self, config: SlurmWorkerAllocationConfig) -> None:
         """Submit ``config`` unless the session already has live compute."""
         with self._lifecycle_lock:
+            if self._torn_down:
+                return  # Teardown cancelled the run's jobs; keep it that way.
             session_dir = self.allocation.session_dir
             with self._session_lock(session_dir):
                 metadata = self._read_session_metadata(session_dir) or {}
@@ -1723,6 +1730,8 @@ echo "Ray workers left the cluster"
         session_locked: bool = False,
     ) -> "SlurmAllocation":
         with self._lifecycle_lock:
+            if self._torn_down:
+                raise RuntimeError("Session is not initialized")
             session_dir = self.allocation.session_dir
             with nullcontext() if session_locked else self._session_lock(session_dir):
                 metadata = self._read_session_metadata(session_dir)
@@ -1854,7 +1863,7 @@ echo "Ray workers left the cluster"
         """
         ssh_pool = self._require_ssh_pool()
         with self._lifecycle_lock:
-            if self._allocation is None:
+            if self._allocation is None or self._torn_down:
                 raise RuntimeError("Session is not initialized")
             session_dir = self._allocation.session_dir
             metadata = self._read_session_metadata(session_dir)
