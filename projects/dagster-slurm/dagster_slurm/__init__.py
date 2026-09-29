@@ -33,6 +33,7 @@ from .resources.session import (
     SlurmStepDrained,
     SlurmAllocationEnded,
     SlurmRunAllocationConfig,
+    SlurmWorkerAllocationConfig,
     SlurmSessionResource,
 )
 from .resources.slurm import SlurmQueueConfig, SlurmResource
@@ -55,6 +56,7 @@ __all__ = [
     "SlurmStepDrained",
     "SlurmAllocationEnded",
     "SlurmRunAllocationConfig",
+    "SlurmWorkerAllocationConfig",
     # Launchers
     "BashLauncher",
     "RayLauncher",

@@ -1,6 +1,6 @@
 # Continue a run in a successor allocation
 
-A run-scoped session can queue a successor allocation while its current allocation runs. The caller chooses when to submit, drains its payload at a checkpoint boundary, promotes the successor, and launches the remaining work. Finished work must be committed outside the allocation so the next payload can skip it.
+A run-scoped session can queue a successor allocation while its current allocation runs. The caller chooses when to submit, drains its payload at a checkpoint boundary, promotes the successor, and launches the remaining work. Finished work must be committed outside the allocation so the next payload can skip it. To use several allocations at the same time, see [Add worker allocations to a run's Ray cluster](elastic-worker-allocations.md).
 
 Configure a drain signal and, optionally, a minimum backfill walltime:
 
@@ -66,7 +66,7 @@ Payloads must handle the signal themselves and finish at a safe boundary. Slurm 
 
 A drain received before workload launch skips the workload and records a drained exit zero. If it arrives while `setsid` is creating the workload process group, the supervisor retains the signal until the group exists. The workload must install its handler promptly; a signal received before its handler is installed can still terminate it.
 
-The lower-level `SlurmAllocation.execute()` and `SlurmSessionResource.execute_in_session()` return `SlurmStepExecutionResult` with `drained`, `drain_signal`, and the payload's `exit_code`. A drained non-zero exit is returned as a typed result; an ordinary non-zero exit still raises an error with its log tails. `SlurmAllocationEnded` carries a `.result` with `allocation_state` when the allocation ends before a step writes its status.
+The lower-level `SlurmAllocation.execute()` and `SlurmSessionResource.execute_in_session()` return `SlurmStepExecutionResult` with `drained`, `drain_signal`, and the payload's `exit_code`. A drained non-zero exit is returned as a typed result; an ordinary non-zero exit still raises an error with its log tails. `SlurmAllocationEnded` carries a `.result` with `allocation_state` when the allocation ends while a step runs, whether or not the step wrote an exit status first.
 
 The Pipes/Compute API raises `SlurmStepDrained` for a drained invocation, including exit code zero, so partial work is not silently materialized. Both fresh invocations and reattachments finish reading Pipes messages and emit final logs before raising. The exception exposes `.result` and `.invocation`, a `PipesClientCompletedInvocation` containing all reported custom messages and materializations. Catch it inside your asset's relay loop and use your payload's completion report to decide whether work remains. Exit zero alone does not establish completion (a prelaunch drain also exits zero):
 

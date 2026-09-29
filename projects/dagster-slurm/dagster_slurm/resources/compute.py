@@ -26,6 +26,7 @@ from .session import (
     SlurmAllocationScope,
     SlurmRunAllocationConfig,
     SlurmSessionResource,
+    SlurmWorkerAllocationConfig,
 )
 from .slurm import SlurmResource, validate_signal_before_timeout
 
@@ -146,6 +147,15 @@ class ComputeResource(ConfigurableResource):
     run_allocation: SlurmRunAllocationConfig = Field(
         default_factory=SlurmRunAllocationConfig,
         description="Run-owned Slurm allocation shape when allocation_scope='run'.",
+    )
+
+    ray_head_allocation: Optional[SlurmRunAllocationConfig] = Field(
+        default=None,
+        description=(
+            "Run the Ray head and payload drivers in a separate allocation of this "
+            "shape, for example one small CPU node. run_allocation then joins as "
+            "a worker allocation, so losing it does not end the Ray cluster."
+        ),
     )
 
     # Launcher configuration
@@ -295,6 +305,11 @@ class ComputeResource(ConfigurableResource):
             raise ValueError(
                 "allocation_scope='run' is only supported with mode='slurm'"
             )
+        if (
+            self.ray_head_allocation is not None
+            and self.allocation_scope != SlurmAllocationScope.RUN
+        ):
+            raise ValueError("ray_head_allocation requires allocation_scope='run'")
 
         # Validate cluster reuse only works in session mode
         if self.enable_cluster_reuse and self.mode != ExecutionMode.SLURM_SESSION:
@@ -469,26 +484,27 @@ class ComputeResource(ConfigurableResource):
         with self._run_allocation_session_lock:
             session = self._run_allocation_session
             if session is None:
-                shape = self._run_allocation_shape()
-                session = SlurmSessionResource(
-                    slurm=self.slurm,
-                    num_nodes=shape["num_nodes"],
-                    time_limit=shape["time_limit"],
-                    time_min=shape["time_min"],
-                    extra_sbatch_directives=shape["extra_sbatch_directives"],
-                    signal_before_timeout=shape["signal_before_timeout"],
-                    partition=shape["partition"],
-                    nodelist=shape["nodelist"],
-                    exclude=shape["exclude"],
-                    gpus_per_node=shape["gpus_per_node"],
-                    cpus_per_task=shape["cpus_per_task"],
-                    mem=shape["mem"],
-                    mem_per_cpu=shape["mem_per_cpu"],
-                    qos=shape["qos"],
-                    account=shape["account"],
-                    reservation=shape["reservation"],
-                    constraint=shape["constraint"],
-                )
+                if self.ray_head_allocation is None:
+                    session = SlurmSessionResource(
+                        slurm=self.slurm, **self._run_allocation_shape()
+                    )
+                else:
+                    # The head gets its own allocation; the run's compute joins it.
+                    head = self.ray_head_allocation
+                    head_shape = {
+                        **self._run_allocation_shape(head),
+                        # Queue defaults describe compute, not the head.
+                        "num_nodes": head.num_nodes or 1,
+                        "gpus_per_node": head.gpus_per_node or 0,
+                    }
+                    session = SlurmSessionResource(
+                        slurm=self.slurm,
+                        ray_head_only=True,
+                        worker_allocation=SlurmWorkerAllocationConfig(
+                            **self._run_allocation_shape(self.run_allocation)
+                        ),
+                        **head_shape,
+                    )
                 object.__setattr__(session, "_shared_lifecycle", True)
                 object.__setattr__(self, "_run_allocation_session", session)
 
@@ -497,17 +513,22 @@ class ComputeResource(ConfigurableResource):
 
         return session
 
-    def _run_allocation_shape(self) -> Dict[str, Any]:
-        """Resolve the effective run-owned Slurm allocation shape."""
+    def _run_allocation_shape(
+        self, cfg: SlurmRunAllocationConfig | SlurmSessionResource | None = None
+    ) -> Dict[str, Any]:
+        """Resolve a run allocation shape, by default the run's compute."""
         if not self.slurm:
             raise ValueError("slurm resource is required for run-scoped allocation")
 
-        cfg = self.run_allocation
-        if (
-            self._run_allocation_session is not None
-            and self._run_allocation_session._allocation is not None
-        ):
-            cfg = self._run_allocation_session.allocation.config
+        if cfg is None:
+            cfg = self.run_allocation
+            # A relay can change the shape; a separate head never holds compute.
+            if (
+                self.ray_head_allocation is None
+                and self._run_allocation_session is not None
+                and self._run_allocation_session._allocation is not None
+            ):
+                cfg = self._run_allocation_session.allocation.config
         queue = self.slurm.queue
         time_limit = cfg.time_limit or queue.time_limit
         signal_before_timeout = validate_signal_before_timeout(
