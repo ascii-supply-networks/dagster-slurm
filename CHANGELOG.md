@@ -2,6 +2,56 @@
 
 <!-- version list -->
 
+## v1.21.0-rc.1 (2026-09-29)
+
+### Bug Fixes
+
+- Address review of elastic worker allocations
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+- Fall back when a worker allocation cannot host the Ray head
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+- Limit head elections to elastic sessions and bound their claims
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+- Stop an elector's head only when no other elector uses it
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+- Submit nothing from the head watch after session teardown
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`05e5132`](https://github.com/ascii-supply-networks/dagster-slurm/commit/05e51321aa19420d9dd9093e9bd07a2a15879fd5))
+
+### Features
+
+- Elastic worker allocations 219
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+- Elastic worker allocations with a separate, fail-over Ray head
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+- Elect a new Ray head when its allocation leaves
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+### Testing
+
+- Stop the heartbeat relay test racing on in-memory SQLite
+  ([#220](https://github.com/ascii-supply-networks/dagster-slurm/pull/220),
+  [`8fdb7d4`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8fdb7d4d742b93572d9ecaf01c606fd833233ee9))
+
+
 ## v1.21.0 (2026-09-28)
 
 ### Chores
