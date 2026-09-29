@@ -515,9 +515,15 @@ def test_live_session_wait_refreshes_heartbeat_and_detach_enables_recovery(
             },
         )
         instance.add_run(run)
+        # The ephemeral instance is a shared-cache SQLite database, which
+        # fails a read that overlaps a write ("database table is locked").
+        # The heartbeat thread writes every 10 ms, so serialize it with the
+        # reconcile below.
+        storage_lock = threading.Lock()
 
         def record(run_id, tags):
-            instance.add_run_tags(run_id, tags)
+            with storage_lock:
+                instance.add_run_tags(run_id, tags)
             if tags.get("dagster_slurm/last_supervisor_heartbeat") == "1000.0":
                 refreshed.set()
 
@@ -535,8 +541,11 @@ def test_live_session_wait_refreshes_heartbeat_and_detach_enables_recovery(
             assert refreshed.wait(timeout=2)
             context_pool = MagicMock()
             context_pool.__enter__.return_value = pool
-            with patch(
-                "dagster_slurm.sensors.SSHConnectionPool", return_value=context_pool
+            with (
+                storage_lock,
+                patch(
+                    "dagster_slurm.sensors.SSHConnectionPool", return_value=context_pool
+                ),
             ):
                 assert (
                     reconcile_orphaned_slurm_runs(instance, session.slurm, now=1001)

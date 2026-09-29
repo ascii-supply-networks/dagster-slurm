@@ -94,7 +94,10 @@ def _should_reconcile(
 def _has_live_relay_allocation(
     run: dg.DagsterRun, job_id: int, ssh_pool: SSHConnectionPool
 ) -> bool:
-    """A terminal predecessor is expected while a published successor is live."""
+    """A terminal head is expected while a successor or worker allocation lives.
+
+    The supervisor is then moving the Ray head; workers wait to re-join it.
+    """
     session_dir = run.tags.get(_TAG_SESSION_ALLOCATION_DIR)
     if not session_dir:
         return False
@@ -103,7 +106,11 @@ def _has_live_relay_allocation(
     )
     try:
         metadata = json.loads(output)
-        records = [metadata, metadata.get("successor") or {}]
+        records = [
+            metadata,
+            metadata.get("successor") or {},
+            *metadata.get("workers", []),
+        ]
         job_ids = {
             int(record["slurm_job_id"])
             for record in records
