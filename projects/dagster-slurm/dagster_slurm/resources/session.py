@@ -71,6 +71,8 @@ _WORKER_NODE_RESTART_DELAY_SECONDS = 30
 _WORKER_MARKER_RESOURCE = "dagster_slurm_worker"
 # The supervisor checks the head this often and elects a new one if needed.
 _HEAD_WATCH_SECONDS = 30
+# How often a session without workers checks whether another process added one.
+_ELASTIC_CHECK_SECONDS = 120
 # Without a pre-walltime signal, the head is drained this long before walltime.
 _HEAD_HANDOVER_LEAD_SECONDS = 300
 # An election claim older than this belongs to an elector that went away.
@@ -710,10 +712,7 @@ class SlurmSessionResource(ConfigurableResource):
             self._initialized = True
             if self.enable_session:
                 self._start_supervisor_heartbeat(context)
-                assert self._allocation is not None
-                metadata = self._read_session_metadata(self._allocation.session_dir)
-                if self._elastic(metadata):
-                    self._start_head_watch()
+                self._watch_if_elastic()
 
     def _start_supervisor_heartbeat(self, context: Any) -> None:
         """Keep queued relay waits healthy even when no Pipes step is active."""
@@ -738,8 +737,18 @@ class SlurmSessionResource(ConfigurableResource):
                 )
 
         def keep_alive() -> None:
+            next_check = time.monotonic() + _ELASTIC_CHECK_SECONDS
             while not stop.wait(_SESSION_HEARTBEAT_INTERVAL_SECONDS):
                 heartbeat()
+                if time.monotonic() >= next_check:
+                    next_check = time.monotonic() + _ELASTIC_CHECK_SECONDS
+                    try:
+                        # Another step process may have added the first worker.
+                        self._watch_if_elastic()
+                    except Exception as exc:
+                        self.logger.debug(
+                            f"Could not check for worker allocations: {exc}"
+                        )
 
         heartbeat()
         thread = threading.Thread(
@@ -758,6 +767,18 @@ class SlurmSessionResource(ConfigurableResource):
             or metadata.get("worker_template")
             or metadata.get("ray_args") is not None
         )
+
+    def _watch_if_elastic(self) -> None:
+        """Start the head watch once the session uses worker allocations."""
+        with self._lifecycle_lock:
+            if self._torn_down or self._allocation is None:
+                return
+            watch = self._head_watch_thread
+            if watch is not None and watch.is_alive():
+                return
+            metadata = self._read_session_metadata(self._allocation.session_dir)
+            if self._elastic(metadata):
+                self._start_head_watch()
 
     def _start_head_watch(self) -> None:
         """Elect a new head when the current one ends, so the cluster keeps going.
@@ -2004,9 +2025,7 @@ echo "Ray workers left the cluster"
                     ssh_pool=ssh_pool, startup_timeout=startup_timeout, **ray_options
                 )
         except Exception:
-            if started_ray:
-                worker.stop_ray_head(ssh_pool)
-            self._end_election(head, owner)
+            self._end_election(head, owner, started=worker if started_ray else None)
             raise
         finally:
             refreshing.set()
@@ -2018,8 +2037,8 @@ echo "Ray workers left the cluster"
                 published = int(metadata.get("slurm_job_id", 0))
                 if published != head.slurm_job_id or claim.get("owner") != owner:
                     # Someone else finished or took over the election.
-                    if started_ray and published != worker.slurm_job_id:
-                        worker.stop_ray_head(ssh_pool)
+                    if started_ray:
+                        self._stop_unclaimed_head(metadata, worker, owner)
                     return None
                 metadata.pop("election")
                 head_live = self._get_job_state(
@@ -2030,7 +2049,7 @@ echo "Ray workers left the cluster"
                 ):
                     self._write_session_metadata(head.session_dir, metadata)
                     if started_ray:
-                        worker.stop_ray_head(ssh_pool)
+                        self._stop_unclaimed_head(metadata, worker, owner)
                     return None
                 updated = self._allocation_record(worker)
                 updated["predecessors"] = [
@@ -2067,13 +2086,44 @@ echo "Ray workers left the cluster"
                 claim["since"] = time.time()
                 self._write_session_metadata(head.session_dir, metadata)
 
-    def _end_election(self, head: "SlurmAllocation", owner: str) -> None:
+    def _end_election(
+        self,
+        head: "SlurmAllocation",
+        owner: str,
+        started: "SlurmAllocation | None" = None,
+    ) -> None:
+        """Drop this elector's claim, and the head it started if no one uses it."""
         with self._lifecycle_lock:
             with self._session_lock(head.session_dir):
                 metadata = self._read_session_metadata(head.session_dir) or {}
+                if started is not None:
+                    self._stop_unclaimed_head(metadata, started, owner)
                 if (metadata.get("election") or {}).get("owner") == owner:
                     metadata.pop("election")
                     self._write_session_metadata(head.session_dir, metadata)
+
+    def _stop_unclaimed_head(
+        self, metadata: dict[str, Any], worker: "SlurmAllocation", owner: str
+    ) -> None:
+        """Stop the head this elector started on ``worker`` unless another uses it.
+
+        Call with the session lock held, so that no elector can claim or publish
+        ``worker`` between this check and the stop.
+        """
+        claim = metadata.get("election") or {}
+        if int(metadata.get("slurm_job_id", 0)) == worker.slurm_job_id:
+            return  # Another elector published it.
+        if (
+            claim.get("owner") != owner
+            and int(claim.get("slurm_job_id", 0)) == worker.slurm_job_id
+        ):
+            return  # Another elector is promoting the same worker and its head.
+        try:
+            worker.stop_ray_head(self._require_ssh_pool())
+        except Exception as exc:
+            self.logger.warning(
+                f"Could not stop the Ray head in allocation {worker.slurm_job_id}: {exc}"
+            )
 
     def _pick_worker_leader(
         self, metadata: dict[str, Any], session_dir: str
@@ -2453,7 +2503,11 @@ class SlurmAllocation:
         )
 
     def stop_ray_head(self, ssh_pool: SSHConnectionPool) -> None:
-        """Stop the persistent Ray head in this allocation and forget its address."""
+        """Stop the persistent Ray head in this allocation and forget its address.
+
+        The head is marked as exited, so a session that still points at it
+        elects again.
+        """
         ray_dir = f"{self.working_dir}/ray_cluster"
         step = ssh_pool.run(
             f"cat {shlex.quote(ray_dir + '/head_step')} 2>/dev/null || true"
@@ -2469,6 +2523,7 @@ class SlurmAllocation:
                 shlex.quote(f"{ray_dir}/{name}")
                 for name in ("ray_ready", "ray_address", "ray_fingerprint.sha256")
             )
+            + f"; touch {shlex.quote(ray_dir + '/ray_exited')} 2>/dev/null || true"
         )
         with self._ray_cluster_lock:
             self._ray_address = None
@@ -3162,8 +3217,9 @@ source {shlex.quote(activation_script)}
 	{temp_dir_setup}
 
 	cleanup_ray() {{
-	  # Tells the session supervisor that a ready head has stopped.
-	  if [[ -f {shlex.quote(ray_dir)}/ray_ready ]]; then
+	  # Tells the session supervisor that a ready head has stopped, unless a
+	  # newer head in this allocation has replaced this step.
+	  if [[ -f {shlex.quote(ray_dir)}/ray_ready && "$(cat {shlex.quote(ray_dir)}/head_step 2>/dev/null)" == "${{SLURM_JOB_ID:-}}.${{SLURM_STEP_ID:-}}" ]]; then
 	    touch {shlex.quote(ray_dir)}/ray_exited 2>/dev/null || true
 	  fi
 	  echo "[$({date_fmt})] Stopping persistent Ray head..."

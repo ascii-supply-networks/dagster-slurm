@@ -84,7 +84,7 @@ Removing a worker never signals the payload drivers, so it does not raise `Slurm
 
 ## Elect a new head
 
-When the allocation that hosts the head goes away, the session elects a new head, and the Ray cluster continues on the remaining allocations. This covers the run's first allocation reaching its walltime as well as a node failure. The session's supervisor checks the head every 30 seconds. It elects:
+When the allocation that hosts the head goes away, the session elects a new head, and the Ray cluster continues on the remaining allocations. This covers the run's first allocation reaching its walltime as well as a node failure. Every step process of the run checks the head every 30 seconds once the session has a worker allocation or a separate head; a process that started before the first worker allocation was added begins within 2 minutes. It elects:
 
 1. a running successor, if one is published;
 2. otherwise the running, undrained worker allocation with the most time left. It hosts the head on its first node without waiting in the queue: a head-only control plane next to that node's Ray worker, so the node keeps offering its CPUs and GPUs;

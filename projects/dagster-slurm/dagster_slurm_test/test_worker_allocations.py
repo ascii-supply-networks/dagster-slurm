@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -1049,6 +1050,45 @@ def test_only_sessions_with_workers_watch_their_head(tmp_path, monkeypatch):
     assert watching == [plain, sibling]
 
 
+def test_a_running_step_starts_watching_when_another_adds_a_worker(
+    tmp_path, monkeypatch
+):
+    class ContextPool(RelayPool):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    pool = ContextPool()
+    monkeypatch.setattr(session_module, "SSHConnectionPool", lambda *a: pool)
+    monkeypatch.setattr(session_module, "_SESSION_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(session_module, "_ELASTIC_CHECK_SECONDS", 0.05)
+    watching: list[SlurmSessionResource] = []
+    monkeypatch.setattr(
+        SlurmSessionResource, "_start_head_watch", lambda self: watching.append(self)
+    )
+    context = SimpleNamespace(
+        run=SimpleNamespace(run_id="relay", tags={}), instance=MagicMock()
+    )
+    running = SlurmSessionResource(
+        slurm=_mock_slurm_resource(remote_base=str(tmp_path)),
+        num_nodes=1,
+        enable_health_checks=False,
+    )
+    running.setup_for_execution(cast(Any, context))
+    adder = SlurmSessionResource(slurm=running.slurm, enable_health_checks=False)
+    adder.setup_for_execution(cast(Any, context))
+    try:
+        time.sleep(0.2)
+        assert watching == []  # Checked, but no worker yet.
+        adder.add_worker_allocation()
+        _wait_for(lambda: any(session is running for session in watching), 5)
+    finally:
+        adder.teardown_after_execution(cast(Any, context))
+        running.teardown_after_execution(cast(Any, context))
+
+
 def test_a_watch_that_outlives_teardown_submits_nothing(tmp_path):
     """A watch iteration that waited for teardown's lock must not queue jobs."""
     pool = ElectionPool()
@@ -1164,8 +1204,119 @@ def test_an_aborted_election_stops_the_head_it_started(tmp_path, monkeypatch):
     )
     assert not (ray_dir / "ray_ready").exists()
     assert not (ray_dir / "ray_address").exists()
+    assert (ray_dir / "ray_exited").exists()  # Seen as lost if it is ever published.
     metadata = json.loads((ray_dir.parents[2] / "allocation.json").read_text())
     assert metadata["slurm_job_id"] == 700 and "election" not in metadata
+
+
+def _start_a_head_then(tmp_path, monkeypatch, pool, meanwhile):
+    """Elect worker 701; ``meanwhile`` runs once its head is up."""
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    metadata_path = Path(session.allocation.session_dir) / "allocation.json"
+    ray_dir = Path(session.allocation.session_dir) / "jobs" / "701" / "ray_cluster"
+
+    def start_head(self, **kwargs):
+        ray_dir.mkdir(parents=True, exist_ok=True)
+        (ray_dir / "head_step").write_text("701.4\n")
+        (ray_dir / "ray_ready").touch()
+        (ray_dir / "ray_address").write_text("10.0.0.9:20000\n")
+        metadata = json.loads(metadata_path.read_text())
+        meanwhile(metadata)
+        metadata_path.write_text(json.dumps(metadata))
+        if metadata.get("fail"):
+            raise RuntimeError("Ray did not report ready in time")
+
+    monkeypatch.setattr(
+        SlurmAllocation,
+        "_read_ray_start_options",
+        lambda self, ssh_pool: {"launcher": RayLauncher(), "activation_script": "a"},
+    )
+    monkeypatch.setattr(SlurmAllocation, "ensure_ray_cluster", start_head)
+    pool.states[700] = "NODE_FAIL"
+    return session, ray_dir
+
+
+def test_an_elector_that_lost_its_claim_keeps_the_new_electors_head(
+    tmp_path, monkeypatch
+):
+    """The claim lapsed and another elector took the same worker and head."""
+
+    def claim_lapses(metadata):
+        metadata["election"] = {
+            "slurm_job_id": 701,
+            "owner": "elector-b",
+            "since": time.time(),
+        }
+
+    pool = ElectionPool()
+    session, ray_dir = _start_a_head_then(tmp_path, monkeypatch, pool, claim_lapses)
+
+    assert session._keep_head() is None
+    assert "scancel 701.4" not in pool.commands
+    assert (ray_dir / "ray_ready").exists() and not (ray_dir / "ray_exited").exists()
+    metadata_path = ray_dir.parents[2] / "allocation.json"
+    assert json.loads(metadata_path.read_text())["election"]["owner"] == "elector-b"
+
+
+def test_a_failed_elector_keeps_a_head_another_elector_published(tmp_path, monkeypatch):
+    def published_meanwhile(metadata):
+        metadata.pop("election")
+        metadata["slurm_job_id"] = 701
+        metadata["fail"] = True
+
+    pool = ElectionPool()
+    session, ray_dir = _start_a_head_then(
+        tmp_path, monkeypatch, pool, published_meanwhile
+    )
+
+    with pytest.raises(RuntimeError, match="did not report ready"):
+        session._keep_head()
+    assert "scancel 701.4" not in pool.commands
+    assert (ray_dir / "ray_ready").exists() and not (ray_dir / "ray_exited").exists()
+
+
+def test_a_failed_election_stops_the_head_it_started(tmp_path, monkeypatch):
+    def fails(metadata):
+        metadata["fail"] = True
+
+    pool = ElectionPool()
+    session, ray_dir = _start_a_head_then(tmp_path, monkeypatch, pool, fails)
+
+    with pytest.raises(RuntimeError, match="did not report ready"):
+        session._keep_head()
+    assert "scancel 701.4" in pool.commands
+    assert (ray_dir / "ray_exited").exists() and not (ray_dir / "ray_ready").exists()
+    metadata = json.loads((ray_dir.parents[2] / "allocation.json").read_text())
+    assert "election" not in metadata
+
+
+@pytest.mark.parametrize("recorded_step,marked", [("701.4", True), ("701.5", False)])
+def test_a_head_step_marks_its_own_exit_only(tmp_path, recorded_step, marked):
+    """A stopped head's late trap must not mark a newer head as lost."""
+    pool = ElectionPool()
+    session = make_session(tmp_path, pool)
+    allocation = session.add_worker_allocation()
+    allocation.nodes = ["node-a"]
+    ray_dir = tmp_path / "ray"
+    ray_dir.mkdir()
+    script = allocation._render_ray_head_script(
+        launcher=RayLauncher(),
+        activation_script="/env/activate.sh",
+        ray_dir=str(ray_dir),
+    )
+    match = re.search(r"\tcleanup_ray\(\) \{\n.*?\n\t\}\n", script, re.S)
+    assert match is not None
+    (ray_dir / "ray_ready").touch()
+    (ray_dir / "head_step").write_text(f"{recorded_step}\n")
+    subprocess.run(
+        ["bash", "-c", f"stop_ray_process() {{ :; }}\n{match.group(0)}cleanup_ray"],
+        env={**os.environ, "SLURM_JOB_ID": "701", "SLURM_STEP_ID": "4"},
+        check=True,
+        capture_output=True,
+    )
+    assert (ray_dir / "ray_exited").exists() == marked
 
 
 def test_a_head_is_drained_before_its_walltime(tmp_path):
