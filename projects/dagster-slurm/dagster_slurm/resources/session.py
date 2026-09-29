@@ -79,6 +79,8 @@ _HEAD_HANDOVER_LEAD_SECONDS = 300
 # The elector refreshes it; it must stay well below rejoin_timeout.
 _ELECTION_CLAIM_SECONDS = 120
 _HEAD_ELECTION_RETRY_SECONDS = 5
+# A worker allocation that failed this often to host the head no longer leads.
+_LEADER_ATTEMPTS = 2
 # Metadata that follows the session from one head allocation to the next.
 _SESSION_STATE_KEYS = ("workers", "worker_template", "head_config")
 
@@ -1849,8 +1851,10 @@ echo "Ray workers left the cluster"
         ``request_drain()`` on it first. The new head is a running published
         successor, else the running worker allocation with the most time
         left, else a new allocation shaped like the first head (``config``
-        overrides that shape). Worker allocations re-join it. Payloads that
-        ran on the old head must be launched again.
+        overrides that shape). A worker allocation that failed twice to host
+        the head is passed over, and with ``port_strategy="fixed"`` none hosts
+        it. Worker allocations re-join the new head. Payloads that ran on the
+        old head must be launched again.
         """
         deadline = time.monotonic() + timeout
         while True:
@@ -1927,7 +1931,10 @@ echo "Ray workers left the cluster"
                 if not use_successor and not (successor and not ended and not ray_lost):
                     # A planned relay keeps its pending successor; otherwise a
                     # running worker leads now, before anything new can start.
-                    leader = self._pick_worker_leader(metadata, session_dir)
+                    if metadata.get("workers") and self._workers_can_host_head(
+                        head, launcher
+                    ):
+                        leader = self._pick_worker_leader(metadata, session_dir)
                 if not use_successor and leader is None:
                     if not successor:
                         self._publish_successor(head, metadata, config)
@@ -2024,9 +2031,17 @@ echo "Ray workers left the cluster"
                 worker.ensure_ray_cluster(
                     ssh_pool=ssh_pool, startup_timeout=startup_timeout, **ray_options
                 )
-        except Exception:
-            self._end_election(head, owner, started=worker if started_ray else None)
-            raise
+        except Exception as exc:
+            # Count the failure, so that the next attempt can pass this worker
+            # over for another one or a new head allocation.
+            self._end_election(
+                head, owner, started=worker if started_ray else None, failed=worker
+            )
+            self.logger.warning(
+                f"Worker allocation {worker.slurm_job_id} could not host the Ray "
+                f"head: {exc}"
+            )
+            return None
         finally:
             refreshing.set()
             refresher.join(timeout=5)
@@ -2091,15 +2106,30 @@ echo "Ray workers left the cluster"
         head: "SlurmAllocation",
         owner: str,
         started: "SlurmAllocation | None" = None,
+        failed: "SlurmAllocation | None" = None,
     ) -> None:
-        """Drop this elector's claim, and the head it started if no one uses it."""
+        """Drop this elector's claim, and the head it started if no one uses it.
+
+        ``failed`` could not host the head; later elections try it last.
+        """
         with self._lifecycle_lock:
             with self._session_lock(head.session_dir):
                 metadata = self._read_session_metadata(head.session_dir) or {}
                 if started is not None:
                     self._stop_unclaimed_head(metadata, started, owner)
+                changed = False
+                if (
+                    failed is not None
+                    and int(metadata.get("slurm_job_id", 0)) != failed.slurm_job_id
+                ):
+                    failures = metadata.setdefault("failed_leaders", {})
+                    key = str(failed.slurm_job_id)
+                    failures[key] = int(failures.get(key, 0)) + 1
+                    changed = True
                 if (metadata.get("election") or {}).get("owner") == owner:
                     metadata.pop("election")
+                    changed = True
+                if changed:
                     self._write_session_metadata(head.session_dir, metadata)
 
     def _stop_unclaimed_head(
@@ -2128,19 +2158,44 @@ echo "Ray workers left the cluster"
     def _pick_worker_leader(
         self, metadata: dict[str, Any], session_dir: str
     ) -> dict[str, Any] | None:
-        """The running, undrained worker allocation with the most time left."""
-        best, best_left = None, -1.0
+        """The running, undrained worker allocation that should lead.
+
+        Workers that have not failed to host the head go first, then the one
+        with the most time left. After ``_LEADER_ATTEMPTS`` failures, a worker
+        no longer leads.
+        """
+        failures = metadata.get("failed_leaders") or {}
+        best, best_key = None, None
         for record in metadata.get("workers", []):
+            failed = int(failures.get(str(record["slurm_job_id"]), 0))
+            if failed >= _LEADER_ATTEMPTS:
+                continue
             worker = self._allocation_from_record(record, session_dir)
             if self._get_job_state(worker.slurm_job_id) != "RUNNING":
                 continue
             if self._allocation_draining(worker):
                 continue
             left = self._time_left_seconds(worker.slurm_job_id)
-            left = math.inf if left is None else left
-            if left > best_left:
-                best, best_left = record, left
+            key = (-failed, math.inf if left is None else left)
+            if best_key is None or key > best_key:
+                best, best_key = record, key
         return best
+
+    def _workers_can_host_head(self, head: "SlurmAllocation", launcher: Any) -> bool:
+        """Whether a worker allocation can run the head next to its Ray worker.
+
+        With fixed ports, the head would need the ports of the node's worker.
+        """
+        if launcher is None:
+            options = head._read_ray_start_options(self._require_ssh_pool())
+            launcher = (options or {}).get("launcher")
+        if getattr(launcher, "port_strategy", None) == "fixed":
+            self.logger.info(
+                "Worker allocations cannot host the Ray head with fixed ports; "
+                "electing a new head allocation"
+            )
+            return False
+        return True
 
     def _publish_successor(
         self,

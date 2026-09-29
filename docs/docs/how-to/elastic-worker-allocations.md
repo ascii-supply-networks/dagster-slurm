@@ -87,7 +87,7 @@ Removing a worker never signals the payload drivers, so it does not raise `Slurm
 When the allocation that hosts the head goes away, the session elects a new head, and the Ray cluster continues on the remaining allocations. This covers the run's first allocation reaching its walltime as well as a node failure. Every step process of the run checks the head every 30 seconds once the session has a worker allocation or a separate head; a process that started before the first worker allocation was added begins within 2 minutes. It elects:
 
 1. a running successor, if one is published;
-2. otherwise the running, undrained worker allocation with the most time left. It hosts the head on its first node without waiting in the queue: a head-only control plane next to that node's Ray worker, so the node keeps offering its CPUs and GPUs;
+2. otherwise the running, undrained worker allocation with the most time left. It hosts the head on its first node without waiting in the queue: a head-only control plane next to that node's Ray worker, so the node keeps offering its CPUs and GPUs. If the head fails to start there, the next election tries the other worker allocations first, and a worker allocation that failed twice is passed over;
 3. otherwise a new allocation shaped like the session's first head, once it starts.
 
 Worker allocations follow the new head: their nodes leave the old head and join the new one, and the Slurm jobs keep their nodes throughout. A worker allocation without a live head waits up to `rejoin_timeout` seconds, 600 by default, before it releases itself. Raise it when a replacement head can wait longer in the queue; lower it on billed clusters where idle GPUs are costly. Keep it above about 5 minutes, so a worker allocation stays long enough to be elected: when the process running an election dies, its claim blocks the next election for 2 minutes.
@@ -124,4 +124,4 @@ The session's `allocation.json` lists each worker allocation and an election in 
 - Worker nodes must reach the head's Ray ports, and the head must reach the workers' port blocks. This is usually true between the partitions of one cluster.
 - Compute nodes need the Slurm client commands `srun` and `squeue`.
 - The activated environment needs `python3` and the `ray drain-node` command. Draining and head election are tested with Ray 2.55 and 2.58.
-- A worker allocation can host the head only with `port_strategy="random"` (the default) or `"hash_jobid"`, which give the head and the node's worker separate ports.
+- A worker allocation can host the head only with `port_strategy="random"` (the default) or `"hash_jobid"`, which give the head and the node's worker separate ports. With `"fixed"`, the session skips worker allocations and elects a new head allocation instead. Keep that allocation off the nodes of worker allocations, for example in its own partition.

@@ -849,19 +849,77 @@ def test_a_retried_run_elects_a_live_worker_to_lead(tmp_path):
     assert [record["slurm_job_id"] for record in metadata["predecessors"]] == [700]
 
 
-def _record_ray_starts(monkeypatch) -> list[int]:
+def _record_ray_starts(
+    monkeypatch, failing: tuple[int, ...] = (), launcher: RayLauncher | None = None
+) -> list[int]:
     started: list[int] = []
     monkeypatch.setattr(
         SlurmAllocation,
         "_read_ray_start_options",
-        lambda self, ssh_pool: {"launcher": RayLauncher(), "activation_script": "a"},
+        lambda self, ssh_pool: {
+            "launcher": launcher or RayLauncher(),
+            "activation_script": "a",
+        },
     )
-    monkeypatch.setattr(
-        SlurmAllocation,
-        "ensure_ray_cluster",
-        lambda self, **kwargs: started.append(self.slurm_job_id),
-    )
+
+    def start(self, **kwargs):
+        started.append(self.slurm_job_id)
+        if self.slurm_job_id in failing:
+            raise RuntimeError(f"Ray did not start in allocation {self.slurm_job_id}")
+
+    monkeypatch.setattr(SlurmAllocation, "ensure_ray_cluster", start)
     return started
+
+
+def test_a_worker_that_cannot_host_the_head_is_passed_over(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    long, short = session.add_worker_allocation(), session.add_worker_allocation()
+    pool.time_left.update({long.slurm_job_id: "5:00:00", short.slurm_job_id: "1:00"})
+    started = _record_ray_starts(monkeypatch, failing=(long.slurm_job_id,))
+    monkeypatch.setattr(session_module, "_HEAD_ELECTION_RETRY_SECONDS", 0.01)
+    pool.states[700] = "NODE_FAIL"
+
+    # The worker with most time left fails; the next one leads, not it again.
+    assert session.replace_head(timeout=10).slurm_job_id == short.slurm_job_id
+    assert started == [long.slurm_job_id, short.slurm_job_id]
+    assert f"scancel {long.slurm_job_id}" not in pool.commands  # Still a worker.
+
+
+def test_a_worker_that_keeps_failing_gives_way_to_a_new_head(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    started = _record_ray_starts(monkeypatch, failing=(701,))
+    pool.states[700] = "NODE_FAIL"
+
+    assert session._keep_head() is None
+    metadata_path = Path(session.allocation.session_dir) / "allocation.json"
+    assert json.loads(metadata_path.read_text())["failed_leaders"] == {"701": 1}
+    assert session._keep_head() is None  # One more try on the only worker.
+    assert session._keep_head() is None  # Then a head allocation is queued.
+    assert started == [701, 701] and pool.submitted_jobs == [700, 701, 702]
+    head = session.replace_head(timeout=10)
+    assert head.slurm_job_id == 702 and started == [701, 701, 702]
+    assert "failed_leaders" not in json.loads(metadata_path.read_text())
+
+
+def test_fixed_ports_elect_a_new_head_allocation(tmp_path, monkeypatch):
+    """A head next to a worker's Ray node would need the same fixed ports."""
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    started = _record_ray_starts(
+        monkeypatch, launcher=RayLauncher(port_strategy="fixed")
+    )
+    monkeypatch.setattr(session_module, "_HEAD_ELECTION_RETRY_SECONDS", 0.01)
+    pool.states[700] = "NODE_FAIL"
+
+    head = session.replace_head(timeout=10)
+    assert head.slurm_job_id == 702 and started == [702]
+    assert [worker.slurm_job_id for worker in session.worker_allocations] == [701]
 
 
 def test_replace_head_elects_the_running_worker_and_keeps_it(tmp_path, monkeypatch):
@@ -1271,10 +1329,12 @@ def test_a_failed_elector_keeps_a_head_another_elector_published(tmp_path, monke
         tmp_path, monkeypatch, pool, published_meanwhile
     )
 
-    with pytest.raises(RuntimeError, match="did not report ready"):
-        session._keep_head()
+    assert session._keep_head() is None
     assert "scancel 701.4" not in pool.commands
     assert (ray_dir / "ray_ready").exists() and not (ray_dir / "ray_exited").exists()
+    # The published head is not counted against the worker.
+    metadata = json.loads((ray_dir.parents[2] / "allocation.json").read_text())
+    assert "failed_leaders" not in metadata
 
 
 def test_a_failed_election_stops_the_head_it_started(tmp_path, monkeypatch):
@@ -1284,12 +1344,11 @@ def test_a_failed_election_stops_the_head_it_started(tmp_path, monkeypatch):
     pool = ElectionPool()
     session, ray_dir = _start_a_head_then(tmp_path, monkeypatch, pool, fails)
 
-    with pytest.raises(RuntimeError, match="did not report ready"):
-        session._keep_head()
+    assert session._keep_head() is None  # Logged; the next election tries others.
     assert "scancel 701.4" in pool.commands
     assert (ray_dir / "ray_exited").exists() and not (ray_dir / "ray_ready").exists()
     metadata = json.loads((ray_dir.parents[2] / "allocation.json").read_text())
-    assert "election" not in metadata
+    assert "election" not in metadata and metadata["failed_leaders"] == {"701": 1}
 
 
 @pytest.mark.parametrize("recorded_step,marked", [("701.4", True), ("701.5", False)])
