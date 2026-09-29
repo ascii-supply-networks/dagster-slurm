@@ -60,10 +60,15 @@ _WORKER_RELEASE_GRACE_SECONDS = 60
 _RAY_WORKER_MONITOR_NAME = "ray_worker_monitor.py"
 # Session-level file naming the job of the current Ray head, which workers follow.
 _RAY_HEAD_POINTER_NAME = "ray_head"
-_DEFAULT_REJOIN_TIMEOUT_SECONDS = 1800
+_DEFAULT_REJOIN_TIMEOUT_SECONDS = 600
 # Worker allocations ask the scheduler about their head at most this often.
 _WORKER_HEAD_CHECK_SECONDS = 30
 _WORKER_JOIN_POLL_SECONDS = 5
+# A node whose Ray worker ends early is started again, each time a bit later.
+_WORKER_NODE_RESTARTS = 3
+_WORKER_NODE_RESTART_DELAY_SECONDS = 30
+# Every worker node offers this resource, so work can avoid the head node.
+_WORKER_MARKER_RESOURCE = "dagster_slurm_worker"
 
 
 def _validate_relay_options(
@@ -592,8 +597,8 @@ class SlurmSessionResource(ConfigurableResource):
         default=False,
         description=(
             "Keep Ray work off this allocation. Its Ray head advertises no CPUs "
-            "or GPUs and runs only the control plane and payload drivers; "
-            "compute joins through worker allocations."
+            "or GPUs, so compute joins through worker allocations; tasks that "
+            "request no resources can still run on it."
         ),
     )
     worker_allocation: Optional[SlurmWorkerAllocationConfig] = Field(
@@ -1151,9 +1156,51 @@ current_head() {{
 
 head_ended() {{
   case "$(squeue -h -j "$1" -o %T 2>&1)" in
-    *"Invalid job id"*|BOOT_FAIL*|CANCELLED*|COMPLETED*|DEADLINE*|FAILED*|NODE_FAIL*|OUT_OF_MEMORY*|PREEMPTED*|TIMEOUT*) return 0 ;;
+    *"Invalid job id"*|BOOT_FAIL*|CANCELLED*|COMPLET*|DEADLINE*|FAILED*|NODE_FAIL*|OUT_OF_MEMORY*|PREEMPTED*|TIMEOUT*) return 0 ;;
   esac
   return 1
+}}
+
+# Keep one Ray worker step per node joined to a head. A node whose step ends
+# while its head is live and no drain was requested starts again, later each
+# time, at most {_WORKER_NODE_RESTARTS} times per head.
+join_head() {{
+  local head_job=$1 head_ray_dir=$2 ray_address=$3 node pid status restarts
+  local -A step=() due=() restarted=()
+  while read -r node; do
+    [ -n "$node" ] || continue
+    due[$node]=0
+    restarted[$node]=0
+  done < "$working_dir/nodes.txt"
+  while [ "${{#due[@]}}" -gt 0 ]; do
+    for node in "${{!due[@]}}"; do
+      if [ -z "${{step[$node]:-}}" ] && [ "$SECONDS" -ge "${{due[$node]}}" ]; then
+        srun --overlap --nodes=1 --ntasks=1 -w "$node" "$head_ray_dir/ray_worker.sh" "$ray_address" "${{ray_args[@]}}" >> "$ray_node_dir/$node.log" 2>&1 < /dev/null &
+        step[$node]=$!
+      fi
+    done
+    sleep {_WORKER_JOIN_POLL_SECONDS} &
+    wait $! || true
+    for node in "${{!step[@]}}"; do
+      pid=${{step[$node]}}
+      if kill -0 "$pid" 2>/dev/null; then continue; fi
+      wait "$pid"
+      status=$?
+      unset "step[$node]"
+      restarts=${{restarted[$node]}}
+      if [ -s "$ray_node_dir/drain" ] || [ "$(current_head)" != "$head_job" ] || head_ended "$head_job"; then
+        # Drained, or the head moved or ended: leave with the other nodes.
+        unset "due[$node]"
+      elif [ "$restarts" -ge {_WORKER_NODE_RESTARTS} ]; then
+        echo "Ray worker on $node ended $((restarts + 1)) times (exit $status); keeping it out"
+        unset "due[$node]"
+      else
+        restarted[$node]=$((restarts + 1))
+        due[$node]=$((SECONDS + {_WORKER_NODE_RESTART_DELAY_SECONDS} * (restarts + 1)))
+        echo "Ray worker on $node ended early (exit $status); starting it again"
+      fi
+    done
+  done
 }}
 
 ray_args=({quoted_args})
@@ -1184,16 +1231,7 @@ while [ ! -s "$ray_node_dir/drain" ]; do
       ray_address=$(cat "$head_ray_dir/ray_address")
       echo "Joining Ray at $ray_address (head allocation $head_job)"
       export DAGSTER_SLURM_RAY_HEAD_JOB="$head_job"
-      worker_steps=()
-      while read -r node; do
-        [ -n "$node" ] || continue
-        srun --overlap --nodes=1 --ntasks=1 -w "$node" "$head_ray_dir/ray_worker.sh" "$ray_address" "${{ray_args[@]}}" >> "$ray_node_dir/$node.log" 2>&1 < /dev/null &
-        worker_steps+=("$!")
-      done < "$working_dir/nodes.txt"
-      # Nodes leave on a drain, when the head moves, or when it is lost.
-      for step in "${{worker_steps[@]}}"; do
-        while kill -0 "$step" 2>/dev/null; do wait "$step" || true; done
-      done
+      join_head "$head_job" "$head_ray_dir" "$ray_address"
       echo "Ray workers left head allocation $head_job"
       checked_head=""
     fi
@@ -1624,16 +1662,18 @@ echo "Ray workers left the cluster"
                     if worker_config.gpus_per_node is not None
                     else worker_config.slurm.queue.gpus_per_node
                 )
-                ray_args = [f"--num-gpus={gpus_per_node or 0}"]
-                if config.ray_resources:
-                    resources = {
-                        name: int(quantity) if quantity.is_integer() else quantity
-                        for name, quantity in config.ray_resources.items()
-                    }
-                    ray_args.append(
-                        f"--resources={json.dumps(resources, sort_keys=True)}"
-                    )
-                ray_args.extend(config.ray_start_args)
+                resources = {
+                    name: int(quantity) if quantity.is_integer() else quantity
+                    for name, quantity in {
+                        _WORKER_MARKER_RESOURCE: 1.0,
+                        **config.ray_resources,
+                    }.items()
+                }
+                ray_args = [
+                    f"--num-gpus={gpus_per_node or 0}",
+                    f"--resources={json.dumps(resources, sort_keys=True)}",
+                    *config.ray_start_args,
+                ]
                 # Sessions from earlier versions have no head pointer yet.
                 self._publish_ray_head(head)
                 worker = worker_config._submit_allocation(
@@ -2752,6 +2792,12 @@ wait "$RAY_HEAD_PID"
 	}}
 	trap cleanup_ray EXIT INT TERM
 
+	worker_cpus_arg=""
+	if [[ -n "${{DAGSTER_SLURM_RAY_NODE_DIR:-}}" && -n "${{SLURM_CPUS_ON_NODE:-}}" ]]; then
+	  # Offer the CPUs Slurm granted, not every CPU of a shared node.
+	  worker_cpus_arg="--num-cpus=$SLURM_CPUS_ON_NODE"
+	fi
+
 	echo "[$({date_fmt})] Starting persistent Ray worker for $ray_address"
 	ray start --address="$ray_address" --num-gpus={num_gpus} \
 {worker_node_ip_arg}\
@@ -2764,7 +2810,7 @@ wait "$RAY_HEAD_PID"
 	  --metrics-export-port="$metrics_export_port" \
 	  --min-worker-port="$min_worker_port" \
 	  --max-worker-port="$max_worker_port" \
-	  --temp-dir="$RAY_TMP_DIR" {redis_arg} {object_store_arg} "$@" --block &
+	  --temp-dir="$RAY_TMP_DIR" {redis_arg} {object_store_arg} $worker_cpus_arg "$@" --block &
 	RAY_WORKER_PID=$!
 	if [[ -n "${{DAGSTER_SLURM_RAY_NODE_DIR:-}}" ]]; then
 	  # Worker allocations publish this node's Ray ID and drain on request.

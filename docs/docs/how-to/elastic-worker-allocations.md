@@ -29,7 +29,9 @@ compute = ComputeResource(
 )
 ```
 
-The head allocation defaults to one node and no GPUs. Its Ray head advertises no CPUs or GPUs, so no Ray task can take it down. `run_allocation` becomes the run's first worker allocation: its nodes join the head as workers, and later worker allocations inherit its unset fields. The session submits it again whenever it has no live worker, for example when a retried run starts. On an explicitly configured `SlurmSessionResource`, set `ray_head_only=True`, `num_nodes=1` and `worker_allocation=SlurmWorkerAllocationConfig(...)` for the same layout.
+`ray_head_allocation` needs an explicit `partition`, usually a CPU partition. The queue's defaults describe compute, so the head does not use them: it defaults to one node, 2 CPUs, 8 GB and no GPUs. Accounts, QoS and reservations still come from the queue. `run_allocation` becomes the run's first worker allocation: its nodes join the head as workers, and later worker allocations inherit its unset fields. The session submits it again whenever it has no live worker, for example when a retried run starts. On an explicitly configured `SlurmSessionResource`, set `ray_head_only=True`, `num_nodes=1` and `worker_allocation=SlurmWorkerAllocationConfig(...)` for the same layout.
+
+The head's Ray node advertises no CPUs or GPUs, so Ray places no work that requests resources there. Tasks and actors that request no resources can still land on it, such as Ray Data's internal actors or `num_cpus=0` helpers. Size the head's memory for the GCS, the dashboard, the payload drivers and such helpers. Every worker node offers a `dagster_slurm_worker` resource, so helpers can stay off the head with `resources={"dagster_slurm_worker": 0.01}`.
 
 ## Add a worker allocation
 
@@ -60,7 +62,9 @@ node_ids = session.wait_for_worker_allocation(a40, timeout=3600)
 
 When the job starts and the head's Ray cluster is ready, each node starts a Ray worker with the run's launcher settings, environment, port strategy and `redis_password`. Commands in `pre_start_commands`, such as exporting a Ray auth token, run on worker nodes too. If the job starts before the head's Ray cluster, it waits.
 
-Unset fields inherit the session's first worker allocation or, without one, the head allocation. `nodelist` and `extra_sbatch_directives` apply to one submission only. Setting `mem` or `mem_per_cpu` replaces the inherited memory setting of either form. Ray on these nodes reports `gpus_per_node` GPUs. `ray_resources` become Ray custom resources on every node of the allocation, so actors can target them with `resources={"accelerator:a40": 1}`. On NVIDIA nodes, Ray also adds its own `accelerator_type:<model>` resource. `ray_start_args` passes further `ray start` options to these nodes, for example `--num-cpus=8` or `--object-store-memory=...`. They take precedence over the launcher's values.
+Unset fields inherit the session's first worker allocation or, without one, the head allocation. `nodelist` and `extra_sbatch_directives` apply to one submission only. Setting `mem` or `mem_per_cpu` replaces the inherited memory setting of either form. Ray on these nodes reports `gpus_per_node` GPUs, and the CPUs Slurm granted on each node (`SLURM_CPUS_ON_NODE`) rather than every CPU of a shared node. `ray_resources` become Ray custom resources on every node of the allocation, so actors can target them with `resources={"accelerator:a40": 1}`. On NVIDIA nodes, Ray also adds its own `accelerator_type:<model>` resource. `ray_start_args` passes further `ray start` options to these nodes, for example `--num-cpus=8` or `--object-store-memory=...`. They take precedence over the launcher's values and the defaults above.
+
+If the Ray worker on one node ends while its head is live, for example after a raylet crash, that node starts again after a delay while the other nodes keep working. The delay grows each time, and a node that ends three more times stays out until the allocation joins another head.
 
 Payload code sees new nodes as extra Ray capacity. Ray Data actor pools with a `(min, max)` concurrency grow onto them. To launch work once enough capacity has joined, see `wait_for_stable_ray_resources` in `dagster_slurm.ray`. Choosing which allocations to add, and when, stays in your application. For example, you can probe start times with `sbatch --test-only`.
 
@@ -98,7 +102,7 @@ while True:
         session.replace_head(timeout=3600)
 ```
 
-`replace_head()` uses a published successor, or submits one with the head's configuration (or `config`), waits for it to run, starts Ray there with the recorded launcher and environment, and promotes it. It also moves a healthy head once its payloads have drained. A worker allocation without a live head waits up to `rejoin_timeout` seconds, 1800 by default, before it releases itself. A run that is retried after its supervisor died also adopts the live workers: its new head allocation publishes itself, and the workers join it.
+`replace_head()` uses a published successor, or submits one with the head's configuration (or `config`), waits for it to run, starts Ray there with the recorded launcher and environment, and promotes it. It also moves a healthy head once its payloads have drained. A worker allocation without a live head waits up to `rejoin_timeout` seconds, 600 by default, before it releases itself. Raise it when a replacement head can wait longer in the queue; lower it on billed clusters where idle GPUs are costly. A run that is retried after its supervisor died also adopts the live workers: its new head allocation publishes itself, and the workers join it.
 
 ## Recovery and cleanup
 

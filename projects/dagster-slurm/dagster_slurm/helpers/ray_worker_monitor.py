@@ -17,6 +17,7 @@ module uses only the standard library and a lazily imported ``ray``.
 
 from __future__ import annotations
 
+import glob
 from importlib import import_module
 import os
 import socket
@@ -27,6 +28,7 @@ from typing import Callable, Optional
 
 DRAIN_REASON = "DRAIN_NODE_REASON_PREEMPTION"
 POLL_SECONDS = 2.0
+MAX_CONNECT_DELAY_SECONDS = 30.0
 REGISTRATION_TIMEOUT_SECONDS = 300.0
 
 
@@ -83,6 +85,36 @@ def process_alive(pid: int) -> bool:
     return stat[stat.rfind(")") + 2 :].split()[:1] != ["Z"]
 
 
+def wait_unless(stop: Callable[[], bool], seconds: float) -> None:
+    """Sleep for ``seconds``, returning early once ``stop()`` is true."""
+    deadline = time.monotonic() + seconds
+    while not stop() and (remaining := deadline - time.monotonic()) > 0:
+        time.sleep(min(0.5, remaining))
+
+
+def matching_node_ids(
+    nodes: list[dict], temp_dir: str, node_ip: str, host: str
+) -> list[str]:
+    """IDs of live Ray nodes whose raylet runs from ``temp_dir`` on this machine.
+
+    Nodes of one allocation can use the same temp dir path on different
+    machines, so the socket path alone does not identify this node.
+    """
+    prefix = temp_dir.rstrip("/") + "/"
+    matches = []
+    for node in nodes:
+        socket_name = str(node.get("RayletSocketName") or "")
+        if not node.get("Alive") or not socket_name.startswith(prefix):
+            continue
+        if node_ip:
+            if node.get("NodeManagerAddress") != node_ip:
+                continue
+        elif node.get("NodeManagerHostname") not in (None, host):
+            continue
+        matches.append(str(node["NodeID"]))
+    return matches
+
+
 def resolve_node_id(
     address: str,
     temp_dir: str,
@@ -92,28 +124,44 @@ def resolve_node_id(
     stop: Callable[[], bool] = lambda: False,
     timeout: float = REGISTRATION_TIMEOUT_SECONDS,
 ) -> Optional[str]:
-    """Find this node's Ray ID by its raylet socket, which lives in ``temp_dir``."""
-    ray = import_module("ray")
+    """Look up this node's Ray ID in the GCS node table.
 
-    prefix = temp_dir.rstrip("/") + "/"
+    A short-lived driver connects only once the local raylet has created its
+    socket, and waits longer after each attempt, so a join normally costs one
+    connection.
+    """
+    ray = import_module("ray")
+    host = socket.gethostname()
+    raylet_sockets = os.path.join(temp_dir, "session_*", "sockets", "raylet")
     kwargs = {"address": address, "logging_level": "ERROR", "log_to_driver": False}
     if node_ip:
         kwargs["_node_ip_address"] = node_ip
     deadline = time.monotonic() + timeout
+    delay = POLL_SECONDS
     while time.monotonic() < deadline and process_alive(ray_start_pid) and not stop():
+        if not glob.glob(raylet_sockets):
+            wait_unless(stop, POLL_SECONDS)
+            continue
         try:
-            # The driver can only attach once the local raylet has registered.
             ray.init(**kwargs)
             try:
-                for node in ray.nodes():
-                    socket_name = str(node.get("RayletSocketName") or "")
-                    if node.get("Alive") and socket_name.startswith(prefix):
-                        return str(node["NodeID"])
+                matches = matching_node_ids(ray.nodes(), temp_dir, node_ip, host)
             finally:
                 ray.shutdown()
         except Exception as exc:  # noqa: BLE001 - registration races are expected
             print(f"Waiting for the local Ray node to register: {exc}", flush=True)
-        time.sleep(POLL_SECONDS)
+            matches = []
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            print(
+                f"WARNING: {len(matches)} Ray nodes match this node; not publishing an ID",
+                flush=True,
+            )
+            return None
+        # A drain request or a head move must not wait out the backoff.
+        wait_unless(stop, delay)
+        delay = min(delay * 2, MAX_CONNECT_DELAY_SECONDS)
     return None
 
 

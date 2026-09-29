@@ -30,6 +30,10 @@ from .session import (
 )
 from .slurm import SlurmResource, validate_signal_before_timeout
 
+# A separate head runs the GCS, the dashboard and the payload drivers only.
+_DEFAULT_HEAD_CPUS = 2
+_DEFAULT_HEAD_MEM = "8G"
+
 
 def _deep_merge_payload(
     base: Dict[str, Any], override: Dict[str, Any]
@@ -154,7 +158,8 @@ class ComputeResource(ConfigurableResource):
         description=(
             "Run the Ray head and payload drivers in a separate allocation of this "
             "shape, for example one small CPU node. run_allocation then joins as "
-            "a worker allocation, so losing it does not end the Ray cluster."
+            "a worker allocation, so losing it does not end the Ray cluster. "
+            "Requires a partition; defaults to 1 node, 2 CPUs, 8G and no GPUs."
         ),
     )
 
@@ -305,11 +310,15 @@ class ComputeResource(ConfigurableResource):
             raise ValueError(
                 "allocation_scope='run' is only supported with mode='slurm'"
             )
-        if (
-            self.ray_head_allocation is not None
-            and self.allocation_scope != SlurmAllocationScope.RUN
-        ):
-            raise ValueError("ray_head_allocation requires allocation_scope='run'")
+        if self.ray_head_allocation is not None:
+            if self.allocation_scope != SlurmAllocationScope.RUN:
+                raise ValueError("ray_head_allocation requires allocation_scope='run'")
+            # The queue's partition is usually the compute partition.
+            if not self.ray_head_allocation.partition:
+                raise ValueError(
+                    "ray_head_allocation needs an explicit partition, usually a "
+                    "CPU partition"
+                )
 
         # Validate cluster reuse only works in session mode
         if self.enable_cluster_reuse and self.mode != ExecutionMode.SLURM_SESSION:
@@ -493,9 +502,14 @@ class ComputeResource(ConfigurableResource):
                     head = self.ray_head_allocation
                     head_shape = {
                         **self._run_allocation_shape(head),
-                        # Queue defaults describe compute, not the head.
+                        # The queue's shape describes compute; a head is small.
+                        "partition": head.partition,
                         "num_nodes": head.num_nodes or 1,
                         "gpus_per_node": head.gpus_per_node or 0,
+                        "cpus_per_task": head.cpus_per_task or _DEFAULT_HEAD_CPUS,
+                        "mem": head.mem
+                        or (None if head.mem_per_cpu else _DEFAULT_HEAD_MEM),
+                        "mem_per_cpu": head.mem_per_cpu,
                     }
                     session = SlurmSessionResource(
                         slurm=self.slurm,

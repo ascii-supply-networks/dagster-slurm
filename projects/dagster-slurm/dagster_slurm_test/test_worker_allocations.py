@@ -23,7 +23,10 @@ import pytest
 from dagster_slurm import (
     ComputeResource,
     RayLauncher,
+    RayPortConfig,
     SlurmAllocationEnded,
+    SlurmQueueConfig,
+    SlurmResource,
     SlurmRunAllocationConfig,
     SlurmSessionResource,
     SlurmStepExecutionResult,
@@ -39,6 +42,7 @@ from dagster_slurm_test.test_resources import _mock_slurm_resource
 from dagster_slurm_test.test_session_relay import RelayPool, make_session
 
 NODE_ID = "f" * 56
+NODE_IDS = {"node-a": NODE_ID, "node-b": "e" * 56}
 MONITOR_SOURCE = Path(ray_worker_monitor.__file__)
 needs_procfs = pytest.mark.skipif(
     not Path("/proc/self/stat").exists(), reason="the drain monitor reads /proc"
@@ -102,9 +106,9 @@ def test_worker_inherits_head_shape_and_joins_its_ray_head(tmp_path):
         "#SBATCH --begin=now+10minutes",
         f"session_dir={head.session_dir}",
         "fallback_head=700",
-        "rejoin_timeout=1800",
+        "rejoin_timeout=600",
         'ray_args=(--num-gpus=2 \'--resources={"accelerator:a40": 1, '
-        '"vram_48gb": 1}\' --num-cpus=8)',
+        '"dagster_slurm_worker": 1, "vram_48gb": 1}\' --num-cpus=8)',
     ):
         assert line in script
     for inherited_only_by_head in ("--nodelist", "--mem=", "--comment=head"):
@@ -115,7 +119,7 @@ def test_worker_inherits_head_shape_and_joins_its_ray_head(tmp_path):
     assert metadata["slurm_job_id"] == 700
     [record] = metadata["workers"]
     assert record["slurm_job_id"] == 701
-    assert record["rejoin_timeout"] == 1800
+    assert record["rejoin_timeout"] == 600
     assert record["config"]["partition"] == "GPU-a40"
     assert record["config"]["nodelist"] is None
     assert (Path(head.session_dir) / "ray_head").read_text() == "700\n"
@@ -126,7 +130,9 @@ def test_worker_defaults_inherit_head_and_explicit_mem_beats_queue_default(tmp_p
     session = make_session(tmp_path, pool)
     session.add_worker_allocation()
     script = _last_batch_script(pool)
-    assert "ray_args=(--num-gpus=0)" in script
+    assert (
+        "ray_args=(--num-gpus=0 '--resources={\"dagster_slurm_worker\": 1}')" in script
+    )
     assert "#SBATCH --mem=1G" in script  # The queue default.
 
     session.add_worker_allocation(SlurmWorkerAllocationConfig(mem_per_cpu="2G"))
@@ -280,7 +286,8 @@ def test_persistent_worker_script_takes_worker_arguments(tmp_path):
         activation_script="/env/activate.sh",
     )
     assert 'ray_address="$1"\n\t# Further arguments' in script
-    assert '--object-store-memory=2000000000 "$@" --block &' in script
+    assert '--object-store-memory=2000000000 $worker_cpus_arg "$@" --block &' in script
+    assert 'worker_cpus_arg="--num-cpus=$SLURM_CPUS_ON_NODE"' in script
     assert f"{session.allocation.working_dir}/ray_cluster/ray_worker_monitor.py" in (
         script
     )
@@ -302,6 +309,7 @@ def fake_cluster(tmp_path, monkeypatch):
     """Fake Slurm and Ray commands that run the real scripts on this host."""
     monkeypatch.setattr(session_module, "_WORKER_JOIN_POLL_SECONDS", 1)
     monkeypatch.setattr(session_module, "_WORKER_HEAD_CHECK_SECONDS", 1)
+    monkeypatch.setattr(session_module, "_WORKER_NODE_RESTART_DELAY_SECONDS", 1)
     states = tmp_path / "states"
     states.mkdir()
     bin_dir = tmp_path / "bin"
@@ -330,17 +338,22 @@ def fake_cluster(tmp_path, monkeypatch):
         cat "$FAKE_STATE_DIR/$2" 2>/dev/null || echo RUNNING
         """,
     )
-    _write_executable(bin_dir / "scontrol", "#!/bin/bash\necho node-a\n")
+    _write_executable(
+        bin_dir / "scontrol", '#!/bin/bash\nprintf "%s\\n" ${FAKE_NODES:-node-a}\n'
+    )
     # `ray start --block` keeps running after its raylet exits, like the real one.
     _write_executable(
         bin_dir / "ray",
         """
         #!/bin/bash
-        printf '%s\\n' "$*" >> "$FAKE_RAY_LOG"
+        printf '%s: %s\\n' "$SLURMD_NODENAME" "$*" >> "$FAKE_RAY_LOG"
         case "$1" in
           start)
+            echo $$ > "$FAKE_STATE_DIR/ray-$SLURMD_NODENAME.pid"
             raylet &
             echo $! > "$RAY_TMPDIR/raylet.pid"
+            mkdir -p "$RAY_TMPDIR/session_1/sockets"
+            touch "$RAY_TMPDIR/session_1/sockets/raylet"
             trap 'kill "$(cat "$RAY_TMPDIR/raylet.pid")" 2>/dev/null; exit 0' TERM
             while true; do sleep 0.1; done ;;
           drain-node)
@@ -358,9 +371,10 @@ def fake_cluster(tmp_path, monkeypatch):
             def shutdown(): pass
             def nodes():
                 socket_name = os.environ["RAY_TMPDIR"] + "/session_1/sockets/raylet"
+                node_id = {NODE_IDS!r}[os.environ["SLURMD_NODENAME"]]
                 return [
                     {{"Alive": False, "NodeID": "0" * 56, "RayletSocketName": socket_name}},
-                    {{"Alive": True, "NodeID": "{NODE_ID}", "RayletSocketName": socket_name}},
+                    {{"Alive": True, "NodeID": node_id, "RayletSocketName": socket_name}},
                 ]
             """
         )
@@ -391,14 +405,18 @@ def fake_cluster(tmp_path, monkeypatch):
 
 
 def _prepare_head(
-    head: SlurmAllocation, activation: Path, address: str = "10.0.0.1:6379"
+    head: SlurmAllocation,
+    activation: Path,
+    address: str = "10.0.0.1:6379",
+    launcher: RayLauncher | None = None,
 ) -> Path:
     ray_dir = Path(head.working_dir) / "ray_cluster"
     ray_dir.mkdir(parents=True)
     worker_script = ray_dir / "ray_worker.sh"
     worker_script.write_text(
         head._render_ray_worker_script(
-            launcher=RayLauncher(
+            launcher=launcher
+            or RayLauncher(
                 num_gpus_per_node=1,
                 object_store_memory_gb=1,
                 port_strategy="hash_jobid",
@@ -436,7 +454,7 @@ def test_worker_batch_joins_ray_then_drains_and_releases(tmp_path, fake_cluster)
     batch_file.write_text(_last_batch_script(pool))
     batch = subprocess.Popen(
         ["bash", str(batch_file)],
-        env=fake_cluster.env,
+        env={**fake_cluster.env, "SLURM_CPUS_ON_NODE": "3"},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -450,11 +468,13 @@ def test_worker_batch_joins_ray_then_drains_and_releases(tmp_path, fake_cluster)
             worker, timeout=5, poll_interval=0.1
         ) == {"node-a": NODE_ID}
         start = fake_cluster.ray_log.read_text().splitlines()[0]
-        assert start.startswith("start --address=10.0.0.1:6379 --num-gpus=1 ")
+        assert start.startswith("node-a: start --address=10.0.0.1:6379 --num-gpus=1 ")
         # Worker allocation arguments come last, so they override the head's.
+        # Without an explicit value Ray would get the CPUs Slurm granted (3).
         assert start.endswith(
-            "--object-store-memory=1000000000 --num-gpus=0 "
-            '--resources={"accelerator:test": 1} --num-cpus=1 --block'
+            "--object-store-memory=1000000000 --num-cpus=3 --num-gpus=0 "
+            '--resources={"accelerator:test": 1, "dagster_slurm_worker": 1} '
+            "--num-cpus=1 --block"
         )
         node_tmp = Path(fake_cluster.env["SLURM_TMPDIR"])
         raylet_pid = int(next(node_tmp.glob("r701-*/raylet.pid")).read_text())
@@ -466,7 +486,7 @@ def test_worker_batch_joins_ray_then_drains_and_releases(tmp_path, fake_cluster)
         assert "Ray workers left the cluster" in output
         drain = fake_cluster.ray_log.read_text().splitlines()[1]
         assert drain == (
-            f"drain-node --address=10.0.0.1:6379 --node-id={NODE_ID} "
+            f"node-a: drain-node --address=10.0.0.1:6379 --node-id={NODE_ID} "
             "--reason=DRAIN_NODE_REASON_PREEMPTION --reason-message=Slurm worker "
             "allocation 701 is draining --deadline-remaining-seconds=33"
         )
@@ -543,9 +563,9 @@ def test_worker_batch_rejoins_a_replacement_head(tmp_path, fake_cluster):
             lambda: node_file.exists() and node_file.read_text().split()[1:] == ["702"]
         )
         starts = [
-            line.split()[1]
+            line.split()[2]
             for line in fake_cluster.ray_log.read_text().splitlines()
-            if line.startswith("start ")
+            if line.startswith("node-a: start ")
         ]
         assert starts == ["--address=10.0.0.1:6379", "--address=10.0.0.2:6379"]
         assert batch.poll() is None
@@ -732,7 +752,7 @@ def test_separate_head_submits_compute_as_its_first_worker(tmp_path):
         "#SBATCH --partition=GPU-rtx6000",
         "#SBATCH --gres=gpu:3",
         "#SBATCH --time=08:00:00",
-        "ray_args=(--num-gpus=3)",
+        "ray_args=(--num-gpus=3 '--resources={\"dagster_slurm_worker\": 1}')",
     ):
         assert line in worker_script
     assert pool.submitted_jobs == [700, 701]  # One live worker is enough.
@@ -865,6 +885,207 @@ def test_orphan_sensor_waits_while_workers_await_a_new_head(tmp_path, state, hea
         ):
             requests = reconcile_orphaned_slurm_runs(instance, session.slurm)
     assert (requests == []) == healthy
+
+
+def test_nodes_with_the_same_temp_dir_resolve_to_their_own_ids(tmp_path, monkeypatch):
+    """With hash_jobid ports, all nodes of an allocation share the temp dir path."""
+    temp_dir = tmp_path / "r701-10000"
+    sockets = temp_dir / "session_1" / "sockets"
+    sockets.mkdir(parents=True)
+    (sockets / "raylet").touch()
+    socket_name = str(sockets / "raylet")
+    nodes = [
+        {
+            "Alive": True,
+            "NodeID": "a" * 56,
+            "RayletSocketName": socket_name,
+            "NodeManagerAddress": "10.0.0.1",
+            "NodeManagerHostname": "gpu-01",
+        },
+        {
+            "Alive": True,
+            "NodeID": "b" * 56,
+            "RayletSocketName": socket_name,
+            "NodeManagerAddress": "10.0.0.2",
+            "NodeManagerHostname": "gpu-02",
+        },
+    ]
+    connections = []
+    fake_ray = SimpleNamespace(
+        init=lambda **kwargs: connections.append(kwargs),
+        shutdown=lambda: None,
+        nodes=lambda: nodes,
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(ray_worker_monitor.socket, "gethostname", lambda: "gpu-02")
+
+    def resolve(node_ip: str) -> str | None:
+        return ray_worker_monitor.resolve_node_id(
+            "head:1", str(temp_dir), node_ip, os.getpid(), timeout=5
+        )
+
+    assert resolve("") == "b" * 56  # Matched by hostname.
+    assert resolve("10.0.0.1") == "a" * 56  # Matched by the configured address.
+    assert len(connections) == 2  # One driver connection per lookup.
+    # If two nodes still match, publishing either ID would drain the wrong one.
+    nodes[0]["NodeManagerHostname"] = "gpu-02"
+    assert resolve("") is None
+
+
+def test_resolve_node_id_waits_for_the_raylet_socket(tmp_path, monkeypatch):
+    connections = []
+    fake_ray = SimpleNamespace(
+        init=lambda **kwargs: connections.append(kwargs),
+        shutdown=lambda: None,
+        nodes=lambda: [],
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setattr(ray_worker_monitor, "POLL_SECONDS", 0.01)
+    node_id = ray_worker_monitor.resolve_node_id(
+        "head:1", str(tmp_path), "", os.getpid(), timeout=0.2
+    )
+    assert node_id is None
+    assert connections == []  # No driver before the local raylet exists.
+
+
+def test_a_drain_request_cuts_the_registration_backoff_short(tmp_path, monkeypatch):
+    sockets = tmp_path / "session_1" / "sockets"
+    sockets.mkdir(parents=True)
+    (sockets / "raylet").touch()
+    connected = []
+    fake_ray = SimpleNamespace(
+        init=lambda **kwargs: connected.append(True),
+        shutdown=lambda: None,
+        nodes=lambda: [],
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    # The first backoff after a failed lookup would last five seconds.
+    monkeypatch.setattr(ray_worker_monitor, "POLL_SECONDS", 5.0)
+    started = time.monotonic()
+    node_id = ray_worker_monitor.resolve_node_id(
+        "head:1",
+        str(tmp_path),
+        "",
+        os.getpid(),
+        stop=lambda: bool(connected),
+        timeout=60,
+    )
+    assert node_id is None and connected == [True]
+    assert time.monotonic() - started < 2
+
+
+@needs_procfs
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
+def test_worker_batch_restarts_only_the_node_whose_ray_worker_died(
+    tmp_path, fake_cluster
+):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    # Both fake nodes run on this host, so give them separate port blocks.
+    _prepare_head(
+        session.allocation,
+        fake_cluster.activation,
+        launcher=RayLauncher(
+            port_strategy="random",
+            port_config=RayPortConfig(lock_dir=str(tmp_path / "port-locks")),
+            grace_period=2,
+        ),
+    )
+    worker = session.add_worker_allocation()
+    batch_file = tmp_path / "worker_batch.sh"
+    batch_file.write_text(_last_batch_script(pool))
+    batch = subprocess.Popen(
+        ["bash", str(batch_file)],
+        env={**fake_cluster.env, "FAKE_NODES": "node-a node-b"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    nodes_dir = Path(worker.working_dir) / "ray_nodes"
+
+    def ray_pid(node: str) -> int:
+        return int((fake_cluster.states / f"ray-{node}.pid").read_text())
+
+    def starts(node: str) -> int:
+        lines = fake_cluster.ray_log.read_text().splitlines()
+        return sum(line.startswith(f"{node}: start ") for line in lines)
+
+    try:
+        pool.states[worker.slurm_job_id] = "RUNNING"
+        assert (
+            session.wait_for_worker_allocation(worker, timeout=20, poll_interval=0.2)
+            == NODE_IDS
+        )
+        node_b = ray_pid("node-b")
+
+        # Ray dies on node-a only; node-b keeps serving and node-a comes back.
+        os.kill(ray_pid("node-a"), signal.SIGKILL)
+        _wait_for(lambda: starts("node-a") == 2)
+        _wait_for(lambda: (nodes_dir / "node-a.id").exists())
+        assert starts("node-b") == 1 and ray_pid("node-b") == node_b
+        assert ray_worker_monitor.process_alive(node_b)
+
+        (Path(worker.working_dir) / "drain_timeout").write_text("5\n")
+        os.kill(batch.pid, signal.SIGTERM)
+        output, _ = batch.communicate(timeout=30)
+    finally:
+        try:
+            # Also stops the raylet orphaned by the killed `ray start`.
+            os.killpg(batch.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if batch.returncode is None:
+            batch.communicate(timeout=5)
+    assert batch.returncode == 0, output
+    assert "Ray worker on node-a ended early" in output
+    drains = {
+        line.split(":")[0]: line.split("--node-id=")[1].split()[0]
+        for line in fake_cluster.ray_log.read_text().splitlines()
+        if ": drain-node " in line
+    }
+    assert drains == NODE_IDS  # Each node drained itself, not its neighbour.
+
+
+def test_separate_head_does_not_take_the_compute_queue_shape(monkeypatch):
+    monkeypatch.setattr(SlurmSessionResource, "setup_for_execution", lambda *a: None)
+    gpu_queue = SlurmResource(
+        ssh=_mock_slurm_resource().ssh,
+        queue=SlurmQueueConfig(
+            partition="GPU-a100", cpus=64, mem="400G", gpus_per_node=4
+        ),
+        remote_base="/tmp/dagster_test",
+    )
+    compute = ComputeResource(
+        mode="slurm",
+        slurm=gpu_queue,
+        allocation_scope="run",
+        default_launcher=RayLauncher(num_gpus_per_node=4),
+        ray_head_allocation=SlurmRunAllocationConfig(partition="cpu"),
+    )
+    session = compute.get_run_allocation_session(dg.build_init_resource_context())
+    assert (
+        session.partition,
+        session.num_nodes,
+        session.cpus_per_task,
+        session.mem,
+        session.gpus_per_node,
+    ) == ("cpu", 1, 2, "8G", 0)
+    worker = session.worker_allocation
+    assert worker is not None
+    assert (worker.partition, worker.cpus_per_task, worker.mem) == (
+        "GPU-a100",
+        64,
+        "400G",
+    )
+    with pytest.raises(ValueError, match="explicit partition"):
+        ComputeResource(
+            mode="slurm",
+            slurm=gpu_queue,
+            allocation_scope="run",
+            default_launcher=RayLauncher(),
+            ray_head_allocation=SlurmRunAllocationConfig(),
+        )
 
 
 _DRIVER = """
@@ -1056,7 +1277,11 @@ def test_slurm_worker_allocations_join_drain_and_release(
 def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
     slurm_resource_for_testing, slurm_cluster_ready, request
 ):
-    """A separate head allocation dies; the same worker job joins its replacement."""
+    """A separate head allocation dies; the same worker job joins its replacement.
+
+    The worker spans both Docker nodes with hash_jobid ports, so its nodes share
+    one Ray temp dir path and must still publish and drain their own IDs.
+    """
     session = SlurmSessionResource(
         slurm=slurm_resource_for_testing,
         num_nodes=1,
@@ -1068,12 +1293,13 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
         ray_head_only=True,
         enable_health_checks=False,
         worker_allocation=SlurmWorkerAllocationConfig(
-            num_nodes=1,
+            num_nodes=2,
             cpus_per_task=1,
             mem="2G",
             time_limit="00:20:00",
             ray_resources={"elastic_worker": 1},
-            ray_start_args=["--num-cpus=1", "--object-store-memory=200000000"],
+            # No --num-cpus: each node offers the one CPU Slurm granted.
+            ray_start_args=["--object-store-memory=200000000"],
             rejoin_timeout=600,
         ),
     )
@@ -1091,7 +1317,11 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
             activation = f"{deployment['deployment_path']}/activate.sh"
         address = head.ensure_ray_cluster(
             ssh_pool=pool,
-            launcher=RayLauncher(num_gpus_per_node=0, object_store_memory_gb=1),
+            launcher=RayLauncher(
+                num_gpus_per_node=0,
+                object_store_memory_gb=1,
+                port_strategy="hash_jobid",
+            ),
             activation_script=activation,
             startup_timeout=180,
         )
@@ -1101,14 +1331,15 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
         pool.write_file(_DRIVER, driver)
         # setup_for_execution submitted the compute as the first worker.
         [worker] = session.worker_allocations
-        [(worker_node, first_ray_id)] = session.wait_for_worker_allocation(
-            worker, timeout=300
-        ).items()
+        first_ids = session.wait_for_worker_allocation(worker, timeout=300)
+        assert sorted(first_ids) == sorted(worker.nodes) and len(first_ids) == 2
+        assert len(set(first_ids.values())) == 2  # Each node found its own ID.
         joined = _run_driver(
             pool, head, activation, address, driver, "joined", f"{run_dir}/first"
         )
-        assert joined["host"] == worker_node
-        assert joined["cpus"] == 1  # The head-only node offers Ray no CPUs.
+        assert joined["host"] in first_ids
+        # One CPU per worker node, as granted by Slurm; the head offers none.
+        assert joined["cpus"] == 2
 
         # Kill the head allocation, as a failing node would.
         pool.run(f"scancel {head.slurm_job_id}")
@@ -1118,9 +1349,10 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
         assert new_head._ray_address is not None
 
         node_ids = session.wait_for_worker_allocation(worker, timeout=300)
-        assert list(node_ids) == [worker_node]
-        assert node_ids[worker_node] != first_ray_id
-        # The same Slurm job kept its node through the failover.
+        assert sorted(node_ids) == sorted(first_ids)
+        assert len(set(node_ids.values())) == 2
+        assert not set(node_ids.values()) & set(first_ids.values())
+        # The same Slurm job kept its nodes through the failover.
         assert session._get_job_state(worker.slurm_job_id) == "RUNNING"
         rejoined = _run_driver(
             pool,
@@ -1131,7 +1363,16 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
             "joined",
             f"{run_dir}/second",
         )
-        assert rejoined["host"] == worker_node
-        assert sum(node["alive"] for node in rejoined["nodes"]) == 2
+        assert rejoined["host"] in node_ids
+        assert sum(node["alive"] for node in rejoined["nodes"]) == 3
+
+        # Each node drains its own Ray node, so the job ends without a deadline.
+        state = session.remove_worker_allocation(worker, drain_timeout=120)
+        assert state == "COMPLETED"
+        for node in node_ids:
+            log_path = f"{worker.working_dir}/ray_nodes/{node}.log"
+            log = pool.run(f"cat {shlex.quote(log_path)}")
+            assert "Ray node drained" in log
+            assert "Drain deadline reached" not in log
     finally:
         session.teardown_after_execution(cast(Any, context))
