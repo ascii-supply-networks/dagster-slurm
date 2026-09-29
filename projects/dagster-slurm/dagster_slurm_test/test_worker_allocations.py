@@ -73,6 +73,9 @@ class ElectionPool(StartingPool):
             self.commands.append(cmd)
             args = shlex.split(cmd)
             return self.time_left.get(int(args[args.index("-j") + 1]), "10:00:00")
+        if cmd.startswith("scancel ") and "." in cmd.split()[-1]:
+            self.commands.append(cmd)  # Cancelling one step leaves the job alone.
+            return ""
         return super().run(cmd, timeout)
 
 
@@ -998,6 +1001,139 @@ def test_a_payload_prepared_for_a_replaced_head_reports_the_end(tmp_path):
     assert error.value.result.allocation_state == "REPLACED"
 
 
+def test_sessions_without_workers_keep_their_allocation(tmp_path):
+    pool = ElectionPool()
+    session = make_session(tmp_path, pool)
+    held = session.allocation
+    # A sibling step process promotes a relay successor meanwhile.
+    sibling = make_session(tmp_path, pool)
+    sibling.submit_successor()
+    object.__setattr__(sibling, "_context", None)
+    sibling.promote_successor()
+    assert session._keep_head() is held  # Not swapped behind the step's back.
+
+
+def test_only_sessions_with_workers_watch_their_head(tmp_path, monkeypatch):
+    class ContextPool(RelayPool):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    pool = ContextPool()
+    monkeypatch.setattr(session_module, "SSHConnectionPool", lambda *a: pool)
+    monkeypatch.setattr(
+        SlurmSessionResource, "_start_supervisor_heartbeat", lambda *a: None
+    )
+    watching: list[SlurmSessionResource] = []
+    monkeypatch.setattr(
+        SlurmSessionResource, "_start_head_watch", lambda self: watching.append(self)
+    )
+    context = SimpleNamespace(
+        run=SimpleNamespace(run_id="relay", tags={}), instance=None
+    )
+    plain = SlurmSessionResource(
+        slurm=_mock_slurm_resource(remote_base=str(tmp_path)),
+        num_nodes=1,
+        enable_health_checks=False,
+    )
+    plain.setup_for_execution(cast(Any, context))
+    assert watching == []  # As before worker allocations existed.
+
+    plain.add_worker_allocation()  # The first worker makes the session elastic.
+    assert watching == [plain]
+    # A step process that starts later finds the worker in the metadata.
+    sibling = SlurmSessionResource(slurm=plain.slurm, enable_health_checks=False)
+    sibling.setup_for_execution(cast(Any, context))
+    assert watching == [plain, sibling]
+
+
+def test_the_election_claim_is_refreshed_while_ray_starts(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    monkeypatch.setattr(session_module, "_ELECTION_CLAIM_SECONDS", 0.4)
+    metadata_path = Path(session.allocation.session_dir) / "allocation.json"
+    claims: list[float] = []
+
+    def slow_start(self, **kwargs):
+        for _ in range(3):
+            claims.append(json.loads(metadata_path.read_text())["election"]["since"])
+            time.sleep(0.25)
+
+    monkeypatch.setattr(
+        SlurmAllocation,
+        "_read_ray_start_options",
+        lambda self, ssh_pool: {"launcher": RayLauncher(), "activation_script": "a"},
+    )
+    monkeypatch.setattr(SlurmAllocation, "ensure_ray_cluster", slow_start)
+    pool.states[700] = "NODE_FAIL"
+
+    assert session.replace_head(timeout=10).slurm_job_id == 701
+    assert claims[-1] > claims[0]  # The live elector kept its claim fresh.
+    assert "election" not in json.loads(metadata_path.read_text())
+
+
+def test_a_dead_electors_claim_expires_before_workers_give_up(tmp_path, monkeypatch):
+    assert (
+        session_module._ELECTION_CLAIM_SECONDS
+        < session_module._DEFAULT_REJOIN_TIMEOUT_SECONDS / 2
+    )
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    _record_ray_starts(monkeypatch)
+    metadata_path = Path(session.allocation.session_dir) / "allocation.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["election"] = {
+        "slurm_job_id": 701,
+        "owner": "killed-elector",
+        "since": time.time() - session_module._ELECTION_CLAIM_SECONDS - 1,
+    }
+    metadata_path.write_text(json.dumps(metadata))
+    pool.states[700] = "NODE_FAIL"
+
+    assert session.replace_head(timeout=10).slurm_job_id == 701
+
+
+def test_an_aborted_election_stops_the_head_it_started(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+
+    def start_then_lose_the_worker(self, **kwargs):
+        ray_dir = Path(self.working_dir) / "ray_cluster"
+        ray_dir.mkdir(parents=True, exist_ok=True)
+        (ray_dir / "head_step").write_text(f"{self.slurm_job_id}.4\n")
+        (ray_dir / "ray_ready").touch()
+        (ray_dir / "ray_address").write_text("10.0.0.9:20000\n")
+        pool.states[self.slurm_job_id] = "CANCELLED"  # Ends before publication.
+
+    monkeypatch.setattr(
+        SlurmAllocation,
+        "_read_ray_start_options",
+        lambda self, ssh_pool: {"launcher": RayLauncher(), "activation_script": "a"},
+    )
+    monkeypatch.setattr(
+        SlurmAllocation, "ensure_ray_cluster", start_then_lose_the_worker
+    )
+    pool.states[700] = "NODE_FAIL"
+
+    assert session._keep_head() is None
+    assert "scancel 701.4" in pool.commands
+    ray_dir = (
+        tmp_path / "allocations" / "dagster_relay" / "jobs" / "701" / "ray_cluster"
+    )
+    assert not (ray_dir / "ray_ready").exists()
+    assert not (ray_dir / "ray_address").exists()
+    metadata = json.loads((ray_dir.parents[2] / "allocation.json").read_text())
+    assert metadata["slurm_job_id"] == 700 and "election" not in metadata
+
+
 def test_a_head_is_drained_before_its_walltime(tmp_path):
     pool = ElectionPool()
     session = _head_only_session(tmp_path, pool)
@@ -1052,9 +1188,9 @@ def test_a_head_whose_ray_stopped_is_replaced(tmp_path, monkeypatch):
 def test_sessions_without_workers_are_left_to_their_caller(tmp_path):
     pool = ElectionPool()
     session = make_session(tmp_path, pool)
+    held = session.allocation
     pool.states[700] = "NODE_FAIL"
-    head = session._keep_head()
-    assert head is not None and head.slurm_job_id == 700
+    assert session._keep_head() is held
     assert pool.submitted_jobs == [700]
 
 

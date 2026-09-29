@@ -113,44 +113,22 @@ ray_port_block_in_use() {{
             END {{ exit(found ? 0 : 1) }}
         '
 }}
-# `flock` ships with util-linux, so it is present on Slurm compute nodes but
-# not on macOS. Degrade to the deterministic strategy instead of failing, so
-# the same asset code still runs locally during development.
-if [[ "$_ray_port_strategy" == "random" ]] && ! command -v flock >/dev/null 2>&1; then
-    echo "WARNING: port_strategy=random needs flock (util-linux), which is unavailable here." >&2
-    echo "WARNING: Falling back to port_strategy=hash_jobid; concurrent Ray clusters on this node may collide." >&2
-    _ray_port_strategy="hash_jobid"
-fi
-if [[ "$_ray_port_strategy" == "random" ]]; then
-    _port_lock_root={shlex.quote(port_config.lock_dir)}
-    if [[ ! -d "$_port_lock_root" ]]; then
-        if (umask 000; mkdir "$_port_lock_root") 2>/dev/null; then
-            chmod 1777 "$_port_lock_root"
-        elif [[ ! -d "$_port_lock_root" ]]; then
-            echo "ERROR: Cannot create Ray port lock directory $_port_lock_root" >&2
-            exit 1
-        fi
-    fi
-    if [[ ! -r "$_port_lock_root" || ! -w "$_port_lock_root" || ! -x "$_port_lock_root" ]]; then
-        echo "ERROR: Ray port lock directory is not accessible: $_port_lock_root" >&2
-        exit 1
-    fi
-    _port_seed="${{RAY_PORT_SEED:-}}"
-    if [[ -z "$_port_seed" ]]; then
-        _port_seed="$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')"
-    fi
-    if [[ -z "$_port_seed" ]]; then
-        _port_seed="$(date +%s%N | cksum)"
-        _port_seed="${{_port_seed%% *}}"
-    fi
-    if [[ ! "$_port_seed" =~ ^[0-9]+$ ]]; then
-        _port_seed="$(printf '%s' "$_port_seed" | cksum)"
-        _port_seed="${{_port_seed%% *}}"
-    fi
-    for ((_port_attempt = 0; _port_attempt < {block_count}; _port_attempt++)); do
-        _port_slot=$(( (_port_seed + _port_attempt) % {block_count} ))
+# Claim a free port block, trying slots from $1 on. With $2 = 1, a flock on the
+# block's lock directory keeps Ray processes that start together apart;
+# without it, only ports already in use rule a block out.
+ray_claim_port_block() {{
+    local first_slot="$1" use_lock="$2" attempt
+    for ((attempt = 0; attempt < {block_count}; attempt++)); do
+        _port_slot=$(( (first_slot + attempt) % {block_count} ))
         _port_candidate=$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))
         _port_candidate_end=$(( _port_candidate + {port_config.block_size - 1} ))
+        if [[ "$use_lock" != 1 ]]; then
+            if ! ray_port_block_in_use "$_port_candidate" "$_port_candidate_end"; then
+                _port_base="$_port_candidate"
+                return 0
+            fi
+            continue
+        fi
         # The directory is a stable inode for flock, not persisted claim state.
         # Never remove it: the kernel releases the claim when the FD closes.
         _candidate_lock="$_port_lock_root/block-${{_port_candidate}}-${{_port_candidate_end}}.lock.d"
@@ -173,11 +151,51 @@ if [[ "$_ray_port_strategy" == "random" ]]; then
             fi
             _ray_port_lock_fd="$_candidate_lock_fd"
             _port_base="$_port_candidate"
-            break
+            return 0
         fi
         exec {{_candidate_lock_fd}}<&-
     done
-    if [[ -z "$_ray_port_lock_fd" ]]; then
+    return 1
+}}
+# Create the node-local lock directory shared by all users if needed.
+ray_port_lock_root_ready() {{
+    _port_lock_root={shlex.quote(port_config.lock_dir)}
+    if [[ ! -d "$_port_lock_root" ]]; then
+        if (umask 000; mkdir "$_port_lock_root") 2>/dev/null; then
+            chmod 1777 "$_port_lock_root"
+        elif [[ ! -d "$_port_lock_root" ]]; then
+            echo "Cannot create Ray port lock directory $_port_lock_root" >&2
+            return 1
+        fi
+    fi
+    [[ -r "$_port_lock_root" && -w "$_port_lock_root" && -x "$_port_lock_root" ]]
+}}
+# `flock` ships with util-linux, so it is present on Slurm compute nodes but
+# not on macOS. Degrade to the deterministic strategy instead of failing, so
+# the same asset code still runs locally during development.
+if [[ "$_ray_port_strategy" == "random" ]] && ! command -v flock >/dev/null 2>&1; then
+    echo "WARNING: port_strategy=random needs flock (util-linux), which is unavailable here." >&2
+    echo "WARNING: Falling back to port_strategy=hash_jobid; concurrent Ray clusters on this node may collide." >&2
+    _ray_port_strategy="hash_jobid"
+fi
+if [[ "$_ray_port_strategy" == "random" ]]; then
+    if ! ray_port_lock_root_ready; then
+        echo "ERROR: Ray port lock directory is not accessible: $_port_lock_root" >&2
+        exit 1
+    fi
+    _port_seed="${{RAY_PORT_SEED:-}}"
+    if [[ -z "$_port_seed" ]]; then
+        _port_seed="$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')"
+    fi
+    if [[ -z "$_port_seed" ]]; then
+        _port_seed="$(date +%s%N | cksum)"
+        _port_seed="${{_port_seed%% *}}"
+    fi
+    if [[ ! "$_port_seed" =~ ^[0-9]+$ ]]; then
+        _port_seed="$(printf '%s' "$_port_seed" | cksum)"
+        _port_seed="${{_port_seed%% *}}"
+    fi
+    if ! ray_claim_port_block "$(( _port_seed % {block_count} ))" 1; then
         echo "ERROR: No free Ray port block in {port_config.range_start}-{port_config.range_end}" >&2
         exit 1
     fi
@@ -187,18 +205,21 @@ elif [[ "$_ray_port_strategy" == "hash_jobid" ]]; then
         _port_seed="$(printf '%s' "$_port_seed" | cksum)"
         _port_seed="${{_port_seed%% *}}"
     fi
-    _port_slot=$(( _port_seed % {block_count} ))
     # Keep the job's block while it is free, else take the next free one:
     # several Ray nodes, such as a head beside a worker, can share a node.
-    _port_base=""
-    for ((_port_attempt = 0; _port_attempt < {block_count}; _port_attempt++)); do
-        _port_candidate=$(( {port_config.range_start} + ((_port_slot + _port_attempt) % {block_count}) * {port_config.block_size} ))
-        if ! ray_port_block_in_use "$_port_candidate" "$(( _port_candidate + {port_config.block_size - 1} ))"; then
-            _port_base="$_port_candidate"
-            break
+    _port_home=$(( _port_seed % {block_count} ))
+    _port_use_lock=0
+    if command -v flock >/dev/null 2>&1 && ray_port_lock_root_ready 2>/dev/null; then
+        _port_use_lock=1
+    fi
+    if ray_claim_port_block "$_port_home" "$_port_use_lock"; then
+        if [[ "$_port_slot" != "$_port_home" ]]; then
+            echo "WARNING: Ray port block $(( {port_config.range_start} + (_port_home * {port_config.block_size}) )) is in use on this node; using $_port_base" >&2
         fi
-    done
-    _port_base="${{_port_base:-$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))}}"
+    else
+        _port_base=$(( {port_config.range_start} + (_port_home * {port_config.block_size}) ))
+        echo "WARNING: No free Ray port block in {port_config.range_start}-{port_config.range_end} on this node; using $_port_base anyway" >&2
+    fi
 fi
 if [[ "$_ray_port_strategy" != "fixed" ]]; then
     port="$_port_base"
@@ -319,8 +340,10 @@ class RayLauncher(ComputeLauncher):
         default="random",
         description=(
             "'random' claims an available random per-node port block; 'fixed' uses "
-            "fixed ports; 'hash_jobid' deterministically selects a block from "
-            "RAY_PORT_SEED, SLURM_JOB_ID, or the local PID."
+            "fixed ports; 'hash_jobid' starts at a block derived from "
+            "RAY_PORT_SEED, SLURM_JOB_ID, or the local PID, and moves to the "
+            "next free block, with a warning, when another process on the node "
+            "uses it."
         ),
     )
     port_config: RayPortConfig = Field(

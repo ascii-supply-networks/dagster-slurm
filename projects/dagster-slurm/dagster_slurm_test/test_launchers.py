@@ -583,8 +583,19 @@ def test_random_port_strategy_falls_back_when_flock_is_missing():
     assert "ERROR: port_strategy=random requires flock" not in script
 
 
-@pytest.mark.parametrize("listening,expected", [("", 16000), ("16005", 17000)])
-def test_hash_jobid_skips_a_port_block_in_use(tmp_path, listening, expected):
+@pytest.mark.parametrize(
+    "listening,expected,warning",
+    [
+        ([], 16000, None),
+        ([16005], 17000, "Ray port block 16000 is in use on this node; using 17000"),
+        (
+            range(10005, 30000, 1000),
+            16000,
+            "No free Ray port block in 10000-29999 on this node; using 16000",
+        ),
+    ],
+)
+def test_hash_jobid_skips_a_port_block_in_use(tmp_path, listening, expected, warning):
     """A second Ray node on the node, such as a head beside a worker, moves on."""
     from dagster_slurm.launchers.ray import RayPortConfig, _render_ray_port_assignments
 
@@ -592,17 +603,15 @@ def test_hash_jobid_skips_a_port_block_in_use(tmp_path, listening, expected):
         ray_port=6379,
         dashboard_port=8265,
         port_strategy="hash_jobid",
-        port_config=RayPortConfig(),
+        port_config=RayPortConfig(lock_dir=str(tmp_path / "locks")),
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     ss = fake_bin / "ss"
     ss.write_text(
         "#!/bin/bash\n"
-        + (
-            f"echo 'tcp LISTEN 0 128 0.0.0.0:{listening} 0.0.0.0:*'\n"
-            if listening
-            else ""
+        + "".join(
+            f"echo 'tcp LISTEN 0 128 0.0.0.0:{port} 0.0.0.0:*'\n" for port in listening
         )
     )
     ss.chmod(0o755)
@@ -618,6 +627,47 @@ def test_hash_jobid_skips_a_port_block_in_use(tmp_path, listening, expected):
         check=True,
     )
     assert int(result.stdout.split()[-1]) == expected
+    # Sites that open these ports learn when the job's block is taken.
+    if warning:
+        assert f"WARNING: {warning}" in result.stderr
+    else:
+        assert "WARNING" not in result.stderr
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock")
+def test_hash_jobid_does_not_share_a_block_with_a_process_starting_with_it(tmp_path):
+    """Two Ray processes starting together cannot both see a block as free."""
+    from dagster_slurm.launchers.ray import RayPortConfig, _render_ray_port_assignments
+
+    script = _render_ray_port_assignments(
+        ray_port=6379,
+        dashboard_port=8265,
+        port_strategy="hash_jobid",
+        port_config=RayPortConfig(lock_dir=str(tmp_path / "locks")),
+    )
+    env = {**os.environ, "SLURM_JOB_ID": "6"}
+    # The first process holds its block's lock but listens on no port yet.
+    first = subprocess.Popen(
+        ["bash", "-c", f'{script}\necho "$_port_base"\nsleep 30'],
+        env=env,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert first.stdout is not None
+        assert first.stdout.readline().strip() == "16000"
+        second = subprocess.run(
+            ["bash", "-c", f'{script}\necho "$_port_base"'],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert second.stdout.split()[-1] == "17000"
+    finally:
+        os.killpg(first.pid, 9)
+        first.wait(timeout=5)
 
 
 def test_port_strategy_branches_read_the_runtime_variable():
