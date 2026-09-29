@@ -35,6 +35,8 @@ from dagster_slurm import (
 from dagster_slurm.helpers import ray_worker_monitor
 from dagster_slurm.helpers.ssh_helpers import TERMINAL_STATES
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
+from dagster_slurm.launchers.base import ExecutionPlan
+from dagster_slurm.config.runtime import RuntimeVariant
 import dagster_slurm.resources.session as session_module
 from dagster_slurm.resources.session import SlurmAllocation
 from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
@@ -57,6 +59,21 @@ class StartingPool(RelayPool):
         if cmd.startswith("sbatch "):
             self.states[self.submitted_jobs[-1]] = "RUNNING"
         return output
+
+
+class ElectionPool(StartingPool):
+    """Also answers time-left queries: ten hours unless a test sets one."""
+
+    def __init__(self):
+        super().__init__()
+        self.time_left: dict[int, str] = {}
+
+    def run(self, cmd: str, timeout: int | None = None) -> str:
+        if cmd.startswith("squeue ") and "%L" in cmd:
+            self.commands.append(cmd)
+            args = shlex.split(cmd)
+            return self.time_left.get(int(args[args.index("-j") + 1]), "10:00:00")
+        return super().run(cmd, timeout)
 
 
 def _last_batch_script(pool: RelayPool) -> str:
@@ -575,6 +592,38 @@ def test_worker_batch_rejoins_a_replacement_head(tmp_path, fake_cluster):
     assert "Joining Ray at 10.0.0.2:6379 (head allocation 702)" in output
 
 
+def test_a_drained_allocation_stays_while_it_hosts_the_head(tmp_path, fake_cluster):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    worker = session.add_worker_allocation()
+    pointer = Path(worker.session_dir) / "ray_head"
+    pointer.write_text(f"{worker.slurm_job_id}\n")  # This allocation leads.
+    batch_file = tmp_path / "worker_batch.sh"
+    batch_file.write_text(_last_batch_script(pool))
+    batch = subprocess.Popen(
+        ["bash", str(batch_file)],
+        env=fake_cluster.env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait_for((Path(worker.working_dir) / "ray_nodes" / "drain").exists)
+        os.kill(batch.pid, signal.SIGTERM)  # Its walltime approaches.
+        # It keeps the head alive until the session moves the head away.
+        with pytest.raises(subprocess.TimeoutExpired):
+            batch.wait(timeout=3)
+        pointer.write_text("700\n")
+        output, _ = batch.communicate(timeout=20)
+    finally:
+        if batch.poll() is None:
+            os.killpg(batch.pid, signal.SIGKILL)
+            batch.communicate(timeout=5)
+    assert batch.returncode == 0, output
+    assert "Ray workers left the cluster" in output
+
+
 def test_read_drain_seconds(tmp_path):
     path = tmp_path / "drain"
     assert ray_worker_monitor.read_drain_seconds(str(path)) is None
@@ -770,31 +819,34 @@ def test_separate_head_submits_compute_as_its_first_worker(tmp_path):
     assert pool.submitted_jobs == [700, 701, 702, 703]
 
 
-def test_a_retried_run_adopts_workers_after_its_head_ended(tmp_path):
-    pool = StartingPool()
+def test_a_retried_run_elects_a_live_worker_to_lead(tmp_path):
+    pool = ElectionPool()
     session = _head_only_session(tmp_path, pool)
     assert session.worker_allocation is not None
     session._ensure_worker_allocation(session.worker_allocation)
     pool.states.update({700: "NODE_FAIL", 701: "RUNNING"})
 
+    # A retry after the supervisor died: the running worker leads, no new job.
     retried = _head_only_session(tmp_path, pool)
-    assert retried.allocation.slurm_job_id == 702
+    assert retried.allocation.slurm_job_id == 701
+    assert retried.allocation.worker_ray_args is not None
     assert retried.worker_allocation is not None
     retried._ensure_worker_allocation(retried.worker_allocation)
-    assert pool.submitted_jobs == [700, 701, 702]
-    assert [worker.slurm_job_id for worker in retried.worker_allocations] == [701]
+    assert pool.submitted_jobs == [700, 701]
+    assert retried.worker_allocations == []
     session_dir = Path(retried.allocation.session_dir)
-    assert (session_dir / "ray_head").read_text() == "702\n"
+    assert (session_dir / "ray_head").read_text() == "701\n"
     metadata = json.loads((session_dir / "allocation.json").read_text())
-    assert metadata["worker_template"]["partition"] == "GPU-rtx6000"
+    assert metadata["ray_args"] == [
+        "--num-gpus=3",
+        '--resources={"dagster_slurm_worker": 1}',
+    ]
+    assert metadata["head_config"]["partition"] == "cpu"
+    assert [record["slurm_job_id"] for record in metadata["predecessors"]] == [700]
 
 
-def test_replace_head_fails_over_and_keeps_workers(tmp_path, monkeypatch):
-    pool = StartingPool()
-    session = _head_only_session(tmp_path, pool)
-    assert session.worker_allocation is not None
-    session._ensure_worker_allocation(session.worker_allocation)
-    started_ray = []
+def _record_ray_starts(monkeypatch) -> list[int]:
+    started: list[int] = []
     monkeypatch.setattr(
         SlurmAllocation,
         "_read_ray_start_options",
@@ -803,18 +855,223 @@ def test_replace_head_fails_over_and_keeps_workers(tmp_path, monkeypatch):
     monkeypatch.setattr(
         SlurmAllocation,
         "ensure_ray_cluster",
-        lambda self, **kwargs: started_ray.append(self.slurm_job_id),
+        lambda self, **kwargs: started.append(self.slurm_job_id),
     )
+    return started
+
+
+def test_replace_head_elects_the_running_worker_and_keeps_it(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    started = _record_ray_starts(monkeypatch)
     pool.states[700] = "NODE_FAIL"
 
     head = session.replace_head(timeout=10)
 
-    assert head.slurm_job_id == 702 and started_ray == [702]
-    assert head.config.ray_head_only and head.config.partition == "cpu"
-    assert session.allocation.slurm_job_id == 702
+    # No queue wait: worker allocation 701 now also hosts the head.
+    assert head.slurm_job_id == 701 and started == [701]
+    assert head.worker_ray_args is not None
+    assert session.allocation.slurm_job_id == 701
+    assert pool.submitted_jobs == [700, 701]
     assert pool.states[701] == "RUNNING"
-    assert (Path(head.session_dir) / "ray_head").read_text() == "702\n"
+    assert (Path(head.session_dir) / "ray_head").read_text() == "701\n"
+    # The elected worker is the head now; later heads still use the head shape.
+    metadata = json.loads((Path(head.session_dir) / "allocation.json").read_text())
+    assert metadata["workers"] == [] and "election" not in metadata
+    assert metadata["head_config"]["partition"] == "cpu"
+
+
+def test_replace_head_submits_a_head_when_no_worker_runs(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    started = _record_ray_starts(monkeypatch)
+    pool.states.update({700: "NODE_FAIL", 701: "PENDING"})
+    monkeypatch.setattr(session_module, "_HEAD_ELECTION_RETRY_SECONDS", 0.01)
+
+    head = session.replace_head(timeout=10)
+
+    # A new allocation shaped like the first head, not like the worker.
+    assert head.slurm_job_id == 702 and started == [702]
+    assert head.config.ray_head_only and head.config.partition == "cpu"
     assert [worker.slurm_job_id for worker in session.worker_allocations] == [701]
+
+
+def test_concurrent_callers_elect_one_head(tmp_path, monkeypatch):
+    """Every step whose driver ran on the lost head calls replace_head at once."""
+    pool = ElectionPool()
+    first = _head_only_session(tmp_path, pool)
+    assert first.worker_allocation is not None
+    first._ensure_worker_allocation(first.worker_allocation)
+    # Another step process attached to the same session.
+    second = _head_only_session(tmp_path, pool)
+    started = _record_ray_starts(monkeypatch)
+    monkeypatch.setattr(session_module, "_HEAD_ELECTION_RETRY_SECONDS", 0.01)
+    pool.states[700] = "NODE_FAIL"
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        heads = list(
+            executor.map(
+                lambda session: session.replace_head(timeout=20).slurm_job_id,
+                [first, second, first, second],
+            )
+        )
+
+    assert heads == [701, 701, 701, 701]
+    assert started == [701]
+    assert pool.submitted_jobs == [700, 701]
+    metadata = json.loads(
+        (Path(first.allocation.session_dir) / "allocation.json").read_text()
+    )
+    assert [record["slurm_job_id"] for record in metadata["predecessors"]] == [700]
+    # A caller that arrives after the election gets the same head.
+    assert second.replace_head(timeout=1).slurm_job_id == 701
+
+
+def test_watchdog_hands_over_a_draining_head_after_its_payloads(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    started = _record_ray_starts(monkeypatch)
+    head = session.allocation
+    (Path(head.working_dir) / "drain_signal").write_text("TERM\n")
+    payload = Path(head.working_dir) / "payloads" / "one"
+    payload.mkdir(parents=True)
+
+    assert session._keep_head() is None  # Its driver is still checkpointing.
+    assert started == []
+    (payload / "status").write_text("0\n")
+    assert session._keep_head() is not None
+    assert session.allocation.slurm_job_id == 701 and started == [701]
+    # The phased-out head is released once the worker leads.
+    assert pool.states[700] == "CANCELLED"
+
+
+def test_no_extra_worker_is_submitted_while_another_process_elects(
+    tmp_path, monkeypatch
+):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    stale = session.allocation
+    _record_ray_starts(monkeypatch)
+    pool.states[700] = "NODE_FAIL"
+    # Another step process elects worker 701 ...
+    other = _head_only_session(tmp_path, pool)
+    assert other.replace_head(timeout=10).slurm_job_id == 701
+    # ... right after this process read its head without the lock.
+    monkeypatch.setattr(
+        SlurmSessionResource, "allocation", property(lambda self: stale)
+    )
+    session._ensure_worker_allocation(session.worker_allocation)
+    assert pool.submitted_jobs == [700, 701]
+
+
+def test_a_payload_prepared_for_a_replaced_head_reports_the_end(tmp_path):
+    pool = RelayPool()
+    session = make_session(tmp_path, pool)
+    old_head = session.allocation
+    session.submit_successor()
+    pool.states[701] = "RUNNING"
+    object.__setattr__(session, "_context", None)
+    session.promote_successor()  # No Ray was recorded, so none is started.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    with pytest.raises(SlurmAllocationEnded) as error:
+        old_head.execute(
+            ExecutionPlan(
+                kind=RuntimeVariant.SHELL,
+                payload=["#!/bin/bash", "exit 0"],
+                environment={},
+                resources={},
+            ),
+            asset_key="late",
+            run_dir=str(run_dir),
+            ssh_pool=cast(SSHConnectionPool, pool),
+        )
+    # The failover loop catches it, then launches in the current head.
+    assert error.value.result.allocation_state == "REPLACED"
+
+
+def test_a_head_is_drained_before_its_walltime(tmp_path):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    pool.time_left[700] = "04:00"  # Four minutes, no pre-walltime signal.
+
+    head = session._keep_head()
+
+    assert head is not None and head.slurm_job_id == 700
+    assert "scancel --batch --signal=TERM 700" in pool.commands
+
+
+def test_election_prefers_the_worker_with_most_time_left(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    short, long, draining = (session.add_worker_allocation() for _ in range(3))
+    pool.states.update(
+        {worker.slurm_job_id: "RUNNING" for worker in (short, long, draining)}
+    )
+    pool.time_left.update(
+        {
+            short.slurm_job_id: "1:00:00",
+            long.slurm_job_id: "5:00:00",
+            draining.slurm_job_id: "9:00:00",
+        }
+    )
+    Path(draining.working_dir).mkdir(parents=True, exist_ok=True)
+    (Path(draining.working_dir) / "drain_signal").write_text("TERM\n")
+    _record_ray_starts(monkeypatch)
+    pool.states[700] = "TIMEOUT"
+
+    assert session.replace_head(timeout=10).slurm_job_id == long.slurm_job_id
+
+
+def test_a_head_whose_ray_stopped_is_replaced(tmp_path, monkeypatch):
+    pool = ElectionPool()
+    session = _head_only_session(tmp_path, pool)
+    assert session.worker_allocation is not None
+    session._ensure_worker_allocation(session.worker_allocation)
+    started = _record_ray_starts(monkeypatch)
+    ray_dir = Path(session.allocation.working_dir) / "ray_cluster"
+    ray_dir.mkdir(parents=True)
+    (ray_dir / "ray_exited").touch()
+
+    # The head's job still runs, but its Ray is gone: a worker takes over.
+    head = session._keep_head()
+    assert head is not None and head.slurm_job_id == 701
+    assert started == [701] and pool.states[700] == "CANCELLED"
+
+
+def test_sessions_without_workers_are_left_to_their_caller(tmp_path):
+    pool = ElectionPool()
+    session = make_session(tmp_path, pool)
+    pool.states[700] = "NODE_FAIL"
+    head = session._keep_head()
+    assert head is not None and head.slurm_job_id == 700
+    assert pool.submitted_jobs == [700]
+
+
+def test_a_worker_allocation_hosts_a_head_only_head_next_to_its_worker(tmp_path):
+    pool = ElectionPool()
+    session = make_session(tmp_path, pool)
+    allocation = session.add_worker_allocation()
+    allocation.nodes = ["node-a", "node-b"]
+    script = allocation._render_ray_head_script(
+        launcher=RayLauncher(num_gpus_per_node=4),
+        activation_script="/env/activate.sh",
+        ray_dir=str(tmp_path / "ray"),
+    )
+    assert "--num-cpus=0 --num-gpus=0" in script
+    assert "export RAY_PORT_SEED=$((_head_seed + 1))" in script
+    assert "ray_exited" in script
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
 
 
 def test_compute_resource_runs_the_head_in_a_separate_allocation(monkeypatch):
@@ -1061,9 +1318,12 @@ def test_separate_head_does_not_take_the_compute_queue_shape(monkeypatch):
         slurm=gpu_queue,
         allocation_scope="run",
         default_launcher=RayLauncher(num_gpus_per_node=4),
-        ray_head_allocation=SlurmRunAllocationConfig(partition="cpu"),
+        ray_head_allocation=SlurmRunAllocationConfig(
+            partition="cpu", time_limit="7-00:00:00"
+        ),
     )
     session = compute.get_run_allocation_session(dg.build_init_resource_context())
+    assert session.time_limit == "7-00:00:00"
     assert (
         session.partition,
         session.num_nodes,
@@ -1078,14 +1338,19 @@ def test_separate_head_does_not_take_the_compute_queue_shape(monkeypatch):
         64,
         "400G",
     )
-    with pytest.raises(ValueError, match="explicit partition"):
-        ComputeResource(
-            mode="slurm",
-            slurm=gpu_queue,
-            allocation_scope="run",
-            default_launcher=RayLauncher(),
-            ray_head_allocation=SlurmRunAllocationConfig(),
-        )
+    # The queue's walltime is for compute, so the head needs its own.
+    for head in (
+        SlurmRunAllocationConfig(time_limit="7-00:00:00"),
+        SlurmRunAllocationConfig(partition="cpu"),
+    ):
+        with pytest.raises(ValueError, match="explicit partition and time_limit"):
+            ComputeResource(
+                mode="slurm",
+                slurm=gpu_queue,
+                allocation_scope="run",
+                default_launcher=RayLauncher(),
+                ray_head_allocation=head,
+            )
 
 
 _DRIVER = """
@@ -1274,15 +1539,17 @@ def test_slurm_worker_allocations_join_drain_and_release(
 
 
 @pytest.mark.needs_slurm_docker
-def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
-    slurm_resource_for_testing, slurm_cluster_ready, request
+def test_slurm_leaders_are_elected_as_allocations_leave(
+    slurm_resource_for_testing, slurm_cluster_ready, request, monkeypatch
 ):
-    """A separate head allocation dies; the same worker job joins its replacement.
+    """The first allocation dies, then the next leader phases out; Ray goes on.
 
-    The worker spans both Docker nodes with hash_jobid ports, so its nodes share
-    one Ray temp dir path and must still publish and drain their own IDs.
+    Two sessions stand for two step processes of one run. The worker spans
+    both Docker nodes with hash_jobid ports, so its nodes share a Ray temp dir
+    path and must still find their own IDs.
     """
-    session = SlurmSessionResource(
+    monkeypatch.setattr(session_module, "_HEAD_WATCH_SECONDS", 5)
+    settings = dict(
         slurm=slurm_resource_for_testing,
         num_nodes=1,
         partition="normal",
@@ -1295,7 +1562,7 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
         worker_allocation=SlurmWorkerAllocationConfig(
             num_nodes=2,
             cpus_per_task=1,
-            mem="2G",
+            mem="3G",
             time_limit="00:20:00",
             ray_resources={"elastic_worker": 1},
             # No --num-cpus: each node offers the one CPU Slurm granted.
@@ -1303,11 +1570,14 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
             rejoin_timeout=600,
         ),
     )
+    session = SlurmSessionResource(**settings)
+    sibling = SlurmSessionResource(**settings)
     context = SimpleNamespace(
-        run=SimpleNamespace(run_id=f"failover_{uuid.uuid4().hex}", tags={}),
+        run=SimpleNamespace(run_id=f"leaders_{uuid.uuid4().hex}", tags={}),
         instance=MagicMock(),
     )
     session.setup_for_execution(cast(Any, context))
+    sibling.setup_for_execution(cast(Any, context))
     try:
         head = session.allocation
         pool = session._require_ssh_pool()
@@ -1315,64 +1585,93 @@ def test_slurm_killed_head_fails_over_and_keeps_its_worker_allocation(
         if activation is None:
             deployment = request.getfixturevalue("deployment_metadata")
             activation = f"{deployment['deployment_path']}/activate.sh"
-        address = head.ensure_ray_cluster(
-            ssh_pool=pool,
-            launcher=RayLauncher(
-                num_gpus_per_node=0,
-                object_store_memory_gb=1,
-                port_strategy="hash_jobid",
-            ),
-            activation_script=activation,
-            startup_timeout=180,
+        launcher = RayLauncher(
+            num_gpus_per_node=0, object_store_memory_gb=1, port_strategy="hash_jobid"
         )
+
+        def address_of(allocation: SlurmAllocation) -> str:
+            return allocation.ensure_ray_cluster(
+                ssh_pool=pool,
+                launcher=launcher,
+                activation_script=activation,
+                startup_timeout=180,
+            )
+
+        address = address_of(head)
         run_dir = f"{head.session_dir}/elastic"
         driver = f"{run_dir}/driver.py"
         pool.run(f"mkdir -p {shlex.quote(run_dir)}")
         pool.write_file(_DRIVER, driver)
         # setup_for_execution submitted the compute as the first worker.
-        [worker] = session.worker_allocations
-        first_ids = session.wait_for_worker_allocation(worker, timeout=300)
-        assert sorted(first_ids) == sorted(worker.nodes) and len(first_ids) == 2
-        assert len(set(first_ids.values())) == 2  # Each node found its own ID.
+        [first] = session.worker_allocations
+        first_ids = session.wait_for_worker_allocation(first, timeout=300)
+        assert len(first_ids) == 2 and len(set(first_ids.values())) == 2
         joined = _run_driver(
-            pool, head, activation, address, driver, "joined", f"{run_dir}/first"
+            pool, head, activation, address, driver, "joined", f"{run_dir}/1"
         )
         assert joined["host"] in first_ids
-        # One CPU per worker node, as granted by Slurm; the head offers none.
-        assert joined["cpus"] == 2
+        assert joined["cpus"] == 2  # One granted CPU per worker node; none on the head.
 
-        # Kill the head allocation, as a failing node would.
+        # The first allocation goes down. Both steps ask for a head at once.
         pool.run(f"scancel {head.slurm_job_id}")
-        _wait_for_state(session, head.slurm_job_id, TERMINAL_STATES, 120)
-        new_head = session.replace_head(timeout=300)
-        assert new_head.slurm_job_id != head.slurm_job_id
-        assert new_head._ray_address is not None
-
-        node_ids = session.wait_for_worker_allocation(worker, timeout=300)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            leaders = [
+                future.result().slurm_job_id
+                for future in [
+                    executor.submit(member.replace_head, timeout=300)
+                    for member in (session, sibling)
+                ]
+            ]
+        assert leaders == [first.slurm_job_id, first.slurm_job_id]
+        leader = session.allocation
+        node_ids = session.wait_for_worker_allocation(first, timeout=300)
         assert sorted(node_ids) == sorted(first_ids)
-        assert len(set(node_ids.values())) == 2
         assert not set(node_ids.values()) & set(first_ids.values())
-        # The same Slurm job kept its nodes through the failover.
-        assert session._get_job_state(worker.slurm_job_id) == "RUNNING"
         rejoined = _run_driver(
             pool,
-            new_head,
+            leader,
             activation,
-            new_head._ray_address,
+            address_of(leader),
             driver,
             "joined",
-            f"{run_dir}/second",
+            f"{run_dir}/2",
         )
-        assert rejoined["host"] in node_ids
-        assert sum(node["alive"] for node in rejoined["nodes"]) == 3
+        assert rejoined["host"] in node_ids and rejoined["cpus"] == 2
 
-        # Each node drains its own Ray node, so the job ends without a deadline.
-        state = session.remove_worker_allocation(worker, drain_timeout=120)
-        assert state == "COMPLETED"
-        for node in node_ids:
-            log_path = f"{worker.working_dir}/ray_nodes/{node}.log"
-            log = pool.run(f"cat {shlex.quote(log_path)}")
-            assert "Ray node drained" in log
-            assert "Drain deadline reached" not in log
+        # Another worker joins, then the leader phases out as at its walltime.
+        # Ray settings are per allocation; the Slurm shape comes from the first.
+        second = session.add_worker_allocation(
+            SlurmWorkerAllocationConfig(
+                num_nodes=1,
+                ray_resources={"elastic_worker": 1},
+                ray_start_args=["--object-store-memory=200000000"],
+            )
+        )
+        [second_node] = session.wait_for_worker_allocation(second, timeout=300)
+        leader.request_drain()
+        drain_marker = shlex.quote(f"{leader.working_dir}/drain_signal")
+        _wait_for(
+            lambda: (
+                pool.run(f"test -f {drain_marker} && echo yes || true").strip() == "yes"
+            ),
+            timeout=60,
+        )
+        new_leader = sibling.replace_head(timeout=300)
+        assert new_leader.slurm_job_id == second.slurm_job_id
+        assert session.wait_for_worker_allocation(second, timeout=300)
+        final = _run_driver(
+            pool,
+            new_leader,
+            activation,
+            address_of(new_leader),
+            driver,
+            "joined",
+            f"{run_dir}/3",
+        )
+        assert final["host"] == second_node and final["cpus"] == 1
+        # The phased-out leader is released once the head has moved.
+        _wait_for_state(session, first.slurm_job_id, TERMINAL_STATES, 180)
+        assert session._get_job_state(second.slurm_job_id) == "RUNNING"
     finally:
+        sibling.teardown_after_execution(cast(Any, context))
         session.teardown_after_execution(cast(Any, context))

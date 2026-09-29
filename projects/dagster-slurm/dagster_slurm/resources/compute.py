@@ -159,7 +159,8 @@ class ComputeResource(ConfigurableResource):
             "Run the Ray head and payload drivers in a separate allocation of this "
             "shape, for example one small CPU node. run_allocation then joins as "
             "a worker allocation, so losing it does not end the Ray cluster. "
-            "Requires a partition; defaults to 1 node, 2 CPUs, 8G and no GPUs."
+            "Requires a partition and time_limit; defaults to 1 node, 2 CPUs, 8G "
+            "and no GPUs."
         ),
     )
 
@@ -313,11 +314,14 @@ class ComputeResource(ConfigurableResource):
         if self.ray_head_allocation is not None:
             if self.allocation_scope != SlurmAllocationScope.RUN:
                 raise ValueError("ray_head_allocation requires allocation_scope='run'")
-            # The queue's partition is usually the compute partition.
-            if not self.ray_head_allocation.partition:
+            # The queue's partition and walltime usually describe compute.
+            if (
+                not self.ray_head_allocation.partition
+                or not self.ray_head_allocation.time_limit
+            ):
                 raise ValueError(
-                    "ray_head_allocation needs an explicit partition, usually a "
-                    "CPU partition"
+                    "ray_head_allocation needs an explicit partition and time_limit, "
+                    "usually a CPU partition and a walltime covering the whole run"
                 )
 
         # Validate cluster reuse only works in session mode

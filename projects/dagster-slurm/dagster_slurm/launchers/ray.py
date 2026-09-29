@@ -95,6 +95,24 @@ min_worker_port="{port_config.min_worker_port}"
 max_worker_port="{port_config.max_worker_port}"
 _ray_port_lock_fd=""
 _ray_port_strategy="{port_strategy}"
+# Whether another process on this node listens in a port block.
+ray_port_block_in_use() {{
+    local block_start="$1"
+    local block_end="$2"
+    command -v ss >/dev/null 2>&1 || return 1
+    ss -H -lntu 2>/dev/null | awk \
+        -v block_start="$block_start" \
+        -v block_end="$block_end" '
+            {{
+                local_address = $5
+                sub(/^.*:/, "", local_address)
+                if (local_address ~ /^[0-9]+$/ && local_address + 0 >= block_start && local_address + 0 <= block_end) {{
+                    found = 1
+                }}
+            }}
+            END {{ exit(found ? 0 : 1) }}
+        '
+}}
 # `flock` ships with util-linux, so it is present on Slurm compute nodes but
 # not on macOS. Degrade to the deterministic strategy instead of failing, so
 # the same asset code still runs locally during development.
@@ -117,23 +135,6 @@ if [[ "$_ray_port_strategy" == "random" ]]; then
         echo "ERROR: Ray port lock directory is not accessible: $_port_lock_root" >&2
         exit 1
     fi
-    ray_port_block_in_use() {{
-        local block_start="$1"
-        local block_end="$2"
-        command -v ss >/dev/null 2>&1 || return 1
-        ss -H -lntu 2>/dev/null | awk \
-            -v block_start="$block_start" \
-            -v block_end="$block_end" '
-                {{
-                    local_address = $5
-                    sub(/^.*:/, "", local_address)
-                    if (local_address ~ /^[0-9]+$/ && local_address + 0 >= block_start && local_address + 0 <= block_end) {{
-                        found = 1
-                    }}
-                }}
-                END {{ exit(found ? 0 : 1) }}
-            '
-    }}
     _port_seed="${{RAY_PORT_SEED:-}}"
     if [[ -z "$_port_seed" ]]; then
         _port_seed="$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')"
@@ -187,7 +188,17 @@ elif [[ "$_ray_port_strategy" == "hash_jobid" ]]; then
         _port_seed="${{_port_seed%% *}}"
     fi
     _port_slot=$(( _port_seed % {block_count} ))
-    _port_base=$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))
+    # Keep the job's block while it is free, else take the next free one:
+    # several Ray nodes, such as a head beside a worker, can share a node.
+    _port_base=""
+    for ((_port_attempt = 0; _port_attempt < {block_count}; _port_attempt++)); do
+        _port_candidate=$(( {port_config.range_start} + ((_port_slot + _port_attempt) % {block_count}) * {port_config.block_size} ))
+        if ! ray_port_block_in_use "$_port_candidate" "$(( _port_candidate + {port_config.block_size - 1} ))"; then
+            _port_base="$_port_candidate"
+            break
+        fi
+    done
+    _port_base="${{_port_base:-$(( {port_config.range_start} + (_port_slot * {port_config.block_size}) ))}}"
 fi
 if [[ "$_ray_port_strategy" != "fixed" ]]; then
     port="$_port_base"

@@ -583,6 +583,43 @@ def test_random_port_strategy_falls_back_when_flock_is_missing():
     assert "ERROR: port_strategy=random requires flock" not in script
 
 
+@pytest.mark.parametrize("listening,expected", [("", 16000), ("16005", 17000)])
+def test_hash_jobid_skips_a_port_block_in_use(tmp_path, listening, expected):
+    """A second Ray node on the node, such as a head beside a worker, moves on."""
+    from dagster_slurm.launchers.ray import RayPortConfig, _render_ray_port_assignments
+
+    script = _render_ray_port_assignments(
+        ray_port=6379,
+        dashboard_port=8265,
+        port_strategy="hash_jobid",
+        port_config=RayPortConfig(),
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ss = fake_bin / "ss"
+    ss.write_text(
+        "#!/bin/bash\n"
+        + (
+            f"echo 'tcp LISTEN 0 128 0.0.0.0:{listening} 0.0.0.0:*'\n"
+            if listening
+            else ""
+        )
+    )
+    ss.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", f'{script}\necho "$_port_base"'],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "SLURM_JOB_ID": "6",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert int(result.stdout.split()[-1]) == expected
+
+
 def test_port_strategy_branches_read_the_runtime_variable():
     """Every branch must honour the post-fallback strategy, not the configured one."""
     script = "\n".join(

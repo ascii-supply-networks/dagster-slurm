@@ -69,6 +69,15 @@ _WORKER_NODE_RESTARTS = 3
 _WORKER_NODE_RESTART_DELAY_SECONDS = 30
 # Every worker node offers this resource, so work can avoid the head node.
 _WORKER_MARKER_RESOURCE = "dagster_slurm_worker"
+# The supervisor checks the head this often and elects a new one if needed.
+_HEAD_WATCH_SECONDS = 30
+# Without a pre-walltime signal, the head is drained this long before walltime.
+_HEAD_HANDOVER_LEAD_SECONDS = 300
+# An election claim older than this belongs to an elector that went away.
+_ELECTION_CLAIM_SECONDS = 900
+_HEAD_ELECTION_RETRY_SECONDS = 5
+# Metadata that follows the session from one head allocation to the next.
+_SESSION_STATE_KEYS = ("workers", "worker_template", "head_config")
 
 
 def _validate_relay_options(
@@ -654,6 +663,7 @@ class SlurmSessionResource(ConfigurableResource):
     _allocation_lease_id: Optional[str] = PrivateAttr(default=None)
     _heartbeat_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _heartbeat_thread: threading.Thread | None = PrivateAttr(default=None)
+    _head_watch_thread: threading.Thread | None = PrivateAttr(default=None)
 
     @property
     def logger(self) -> Any:
@@ -694,6 +704,7 @@ class SlurmSessionResource(ConfigurableResource):
             self._initialized = True
             if self.enable_session:
                 self._start_supervisor_heartbeat(context)
+                self._start_head_watch()
 
     def _start_supervisor_heartbeat(self, context: Any) -> None:
         """Keep queued relay waits healthy even when no Pipes step is active."""
@@ -728,6 +739,24 @@ class SlurmSessionResource(ConfigurableResource):
         object.__setattr__(self, "_heartbeat_thread", thread)
         thread.start()
 
+    def _start_head_watch(self) -> None:
+        """Elect a new head when the current one ends, so the cluster keeps going."""
+
+        def watch() -> None:
+            while not self._heartbeat_stop.wait(_HEAD_WATCH_SECONDS):
+                try:
+                    self._keep_head()
+                    if self.worker_allocation is not None:
+                        self._ensure_worker_allocation(self.worker_allocation)
+                except Exception as exc:
+                    self.logger.warning(
+                        f"Could not check the session's Ray head: {exc}"
+                    )
+
+        thread = threading.Thread(target=watch, name="slurm-head-watch", daemon=True)
+        object.__setattr__(self, "_head_watch_thread", thread)
+        thread.start()
+
     def teardown_after_execution(self, context: InitResourceContext) -> None:
         """Called by Dagster when resource is torn down after run completion.
         This is the proper Dagster resource lifecycle hook.
@@ -738,9 +767,11 @@ class SlurmSessionResource(ConfigurableResource):
 
             self.logger.info("Tearing down session resource...")
             self._heartbeat_stop.set()
-            if self._heartbeat_thread is not None:
-                self._heartbeat_thread.join(timeout=5)
-                object.__setattr__(self, "_heartbeat_thread", None)
+            for name in ("_heartbeat_thread", "_head_watch_thread"):
+                thread = getattr(self, name)
+                if thread is not None:
+                    thread.join(timeout=5)
+                    object.__setattr__(self, name, None)
 
             if self._shared_lifecycle:
                 self._release_allocation_lease()
@@ -888,16 +919,36 @@ class SlurmSessionResource(ConfigurableResource):
                         )
                         return existing
 
-                    # A retry after the head ended keeps the live workers.
+                    # A retry after the head ended keeps the live workers,
+                    # and one of them leads if it can, instead of a new job.
                     previous = self._read_session_metadata(working_dir) or {}
-                    allocation = self._submit_allocation(
-                        allocation_id=allocation_id,
-                        working_dir=working_dir,
-                    )
-                    record = self._allocation_record(allocation)
-                    for key in ("workers", "worker_template"):
-                        if previous.get(key):
-                            record[key] = previous[key]
+                    leader = self._pick_worker_leader(previous, working_dir)
+                    if leader is not None:
+                        allocation = self._allocation_from_record(leader, working_dir)
+                        allocation.nodes = self._read_allocation_nodes(allocation)
+                        record = self._allocation_record(allocation)
+                        record["predecessors"] = [
+                            *previous.get("predecessors", []),
+                            {
+                                key: previous[key]
+                                for key in ("slurm_job_id", "nodes", "working_dir")
+                                if key in previous
+                            },
+                        ]
+                    else:
+                        allocation = self._submit_allocation(
+                            allocation_id=allocation_id,
+                            working_dir=working_dir,
+                        )
+                        record = self._allocation_record(allocation)
+                    self._carry_session_state(previous, record)
+                    record.setdefault("head_config", record["config"])
+                    if leader is not None:
+                        record["workers"] = [
+                            worker
+                            for worker in record.get("workers", [])
+                            if int(worker["slurm_job_id"]) != allocation.slurm_job_id
+                        ]
                     self._write_session_metadata(working_dir, record)
                     self._publish_ray_head(allocation)
                     object.__setattr__(self, "_owns_allocation", True)
@@ -1209,8 +1260,15 @@ export DAGSTER_SLURM_RAY_HEAD_POINTER="$session_dir/{_RAY_HEAD_POINTER_NAME}"
 checked_head=""
 checked_at=0
 headless_since=""
-while [ ! -s "$ray_node_dir/drain" ]; do
+while :; do
   head_job=$(current_head)
+  if [ -s "$ray_node_dir/drain" ]; then
+    # The session moves a head away from a drained allocation before it ends.
+    [ "$head_job" = "$SLURM_JOB_ID" ] || break
+    sleep {_WORKER_JOIN_POLL_SECONDS} &
+    wait $! || true
+    continue
+  fi
   # A ready marker can outlive its head, so also ask the scheduler, rarely.
   if [ "$head_job" != "$checked_head" ] || (( SECONDS - checked_at >= {_WORKER_HEAD_CHECK_SECONDS} )); then
     checked_head=$head_job
@@ -1305,12 +1363,15 @@ echo "Ray workers left the cluster"
         config = self
         if record.get("config"):
             config = self._clone_allocation_config(record["config"])
-        return config._make_allocation(
+        allocation = config._make_allocation(
             slurm_job_id=int(record["slurm_job_id"]),
             nodes=[str(node) for node in record["nodes"]],
             working_dir=record.get("working_dir", session_dir),
             session_dir=session_dir,
         )
+        if record.get("ray_args") is not None:
+            allocation.worker_ray_args = [str(arg) for arg in record["ray_args"]]
+        return allocation
 
     def _clone_allocation_config(
         self, overrides: dict[str, Any]
@@ -1346,12 +1407,25 @@ echo "Ray workers left the cluster"
         )
 
     def _allocation_record(self, allocation: "SlurmAllocation") -> dict[str, Any]:
-        return {
+        record = {
             "slurm_job_id": allocation.slurm_job_id,
             "nodes": allocation.nodes,
             "working_dir": allocation.working_dir,
             "config": allocation.config.model_dump(mode="json", exclude={"slurm"}),
         }
+        # A worker allocation keeps its Ray arguments after it becomes the head.
+        if getattr(allocation, "worker_ray_args", None) is not None:
+            record["ray_args"] = allocation.worker_ray_args
+        return record
+
+    @staticmethod
+    def _carry_session_state(
+        metadata: dict[str, Any], updated: dict[str, Any]
+    ) -> dict[str, Any]:
+        for key in _SESSION_STATE_KEYS:
+            if metadata.get(key):
+                updated[key] = metadata[key]
+        return updated
 
     def _publish_ray_head(self, allocation: "SlurmAllocation") -> None:
         """Point worker allocations at the session's current head allocation.
@@ -1545,9 +1619,7 @@ echo "Ray workers left the cluster"
                     self._allocation_record(current),
                 ]
                 # Worker allocations follow the head and re-join the successor.
-                for key in ("workers", "worker_template"):
-                    if metadata.get(key):
-                        updated[key] = metadata[key]
+                self._carry_session_state(metadata, updated)
                 self._write_session_metadata(current.session_dir, updated)
                 object.__setattr__(self, "_allocation", successor)
                 self._finish_promotion(successor, updated)
@@ -1601,12 +1673,23 @@ echo "Ray workers left the cluster"
         return self._add_worker_allocation(config or SlurmWorkerAllocationConfig())
 
     def _ensure_worker_allocation(self, config: SlurmWorkerAllocationConfig) -> None:
-        """Submit ``config`` unless the session already has a live worker."""
+        """Submit ``config`` unless the session already has live compute."""
         with self._lifecycle_lock:
-            head = self.allocation
-            with self._session_lock(head.session_dir):
-                metadata = self._read_session_metadata(head.session_dir) or {}
+            session_dir = self.allocation.session_dir
+            with self._session_lock(session_dir):
+                metadata = self._read_session_metadata(session_dir) or {}
+                if not metadata:
+                    return
+                # The head may have changed since it was read without the lock.
+                head = self._adopt_head(metadata)
                 if self._live_worker_records(metadata):
+                    return
+                # A worker allocation elected to lead still offers its nodes.
+                if (
+                    metadata.get("ray_args") is not None
+                    and self._get_job_state(head.slurm_job_id) == "RUNNING"
+                    and not self._allocation_draining(head)
+                ):
                     return
                 self._add_worker_allocation(config, template=True, session_locked=True)
 
@@ -1618,17 +1701,13 @@ echo "Ray workers left the cluster"
         session_locked: bool = False,
     ) -> "SlurmAllocation":
         with self._lifecycle_lock:
-            head = self.allocation
-            with (
-                nullcontext()
-                if session_locked
-                else self._session_lock(head.session_dir)
-            ):
-                metadata = self._read_session_metadata(head.session_dir)
+            session_dir = self.allocation.session_dir
+            with nullcontext() if session_locked else self._session_lock(session_dir):
+                metadata = self._read_session_metadata(session_dir)
                 if metadata is None:
                     raise RuntimeError("Session allocation metadata is missing")
-                if int(metadata["slurm_job_id"]) != head.slurm_job_id:
-                    raise RuntimeError("Current allocation changed; retry")
+                # Join whichever head leads now; workers follow later changes.
+                head = self._adopt_head(metadata)
                 shape = dict(
                     metadata.get("worker_template")
                     or metadata.get("config")
@@ -1684,9 +1763,9 @@ echo "Ray workers left the cluster"
                         head, ray_args, config.rejoin_timeout
                     ),
                 )
+                worker.worker_ray_args = ray_args
                 record = {
                     **self._allocation_record(worker),
-                    "ray_args": ray_args,
                     "rejoin_timeout": config.rejoin_timeout,
                 }
                 metadata["workers"] = [*self._live_worker_records(metadata), record]
@@ -1708,33 +1787,308 @@ echo "Ray workers left the cluster"
         activation_script: str | None = None,
         startup_timeout: int = 120,
     ) -> "SlurmAllocation":
-        """Move the Ray head to a new allocation, keeping the worker allocations.
+        """Return a healthy Ray head, electing a new one if the current head ended.
 
-        Fails over after the head allocation ended, or moves a healthy head
-        once its payloads have drained. Uses the published successor, or
-        submits one from ``config``, waits up to ``timeout`` seconds for it to
-        run and promotes it. Worker allocations then re-join the new head.
-        Payloads that ran on the old head must be launched again.
+        Every step whose driver ran on a lost head can call this, from any
+        process: the first caller elects, the others wait, and all get the
+        same head. A healthy head is returned unchanged; to move one, call
+        ``request_drain()`` on it first. The new head is a running published
+        successor, else the running worker allocation with the most time
+        left, else a new allocation shaped like the first head (``config``
+        overrides that shape). Worker allocations re-join it. Payloads that
+        ran on the old head must be launched again.
         """
+        deadline = time.monotonic() + timeout
+        while True:
+            head = self._keep_head(
+                elect=True,
+                config=config,
+                launcher=launcher,
+                activation_script=activation_script,
+                startup_timeout=startup_timeout,
+            )
+            if head is not None:
+                return head
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"No healthy Ray head within {timeout}s")
+            time.sleep(_HEAD_ELECTION_RETRY_SECONDS)
+
+    def _keep_head(
+        self,
+        *,
+        elect: bool = False,
+        config: SlurmRunAllocationConfig | None = None,
+        launcher: Any = None,
+        activation_script: str | None = None,
+        startup_timeout: int = 120,
+    ) -> "SlurmAllocation | None":
+        """Return the healthy head, or advance an election and return None.
+
+        Elections happen under the session lock, so several threads and
+        processes can run this at once. Without ``elect``, sessions without
+        worker allocations are left to their caller, as before.
+        """
+        ssh_pool = self._require_ssh_pool()
         with self._lifecycle_lock:
-            current = self.allocation
-            metadata = self._read_session_metadata(current.session_dir) or {}
-            if metadata.get("successor"):
-                if config is not None:
-                    raise ValueError("A successor is already published")
-                successor = self._allocation_from_record(
-                    metadata["successor"], current.session_dir
+            if self._allocation is None:
+                raise RuntimeError("Session is not initialized")
+            session_dir = self._allocation.session_dir
+            metadata = self._read_session_metadata(session_dir)
+            if metadata is None:
+                return None
+            head = self._adopt_head(metadata)
+            if not elect and not (
+                metadata.get("workers")
+                or metadata.get("worker_template")
+                or metadata.get("ray_args") is not None
+                or self.worker_allocation is not None
+            ):
+                return head
+            if not any(self._head_status(head)):
+                if self._head_near_walltime(head):
+                    # Let its payloads checkpoint, then hand the head over.
+                    head.request_drain()
+                return head
+            with self._session_lock(session_dir):
+                metadata = self._read_session_metadata(session_dir) or {}
+                head = self._adopt_head(metadata)
+                ended, ray_lost, draining = self._head_status(head)
+                if not (ended or ray_lost or draining):
+                    return head  # Another elector finished first.
+                if draining and not ray_lost and head.has_active_payloads(ssh_pool):
+                    return None  # Let the drivers checkpoint first.
+                claim = metadata.get("election") or {}
+                if claim and time.time() - float(claim.get("since", 0)) < (
+                    _ELECTION_CLAIM_SECONDS
+                ):
+                    return None
+                successor = metadata.get("successor")
+                successor_state = (
+                    self._get_job_state(int(successor["slurm_job_id"]))
+                    if successor
+                    else ""
                 )
-            else:
-                successor = self.submit_successor(config)
-        successor.config._wait_for_allocation_start(
-            successor.slurm_job_id, successor.working_dir, timeout=int(timeout)
-        )
-        return self.promote_successor(
+                if successor and successor_state in TERMINAL_STATES:
+                    metadata.pop("successor")
+                    self._write_session_metadata(session_dir, metadata)
+                    successor = None
+                use_successor = successor_state == "RUNNING"
+                leader = None
+                if not use_successor and not (successor and not ended and not ray_lost):
+                    # A planned relay keeps its pending successor; otherwise a
+                    # running worker leads now, before anything new can start.
+                    leader = self._pick_worker_leader(metadata, session_dir)
+                if not use_successor and leader is None:
+                    if not successor:
+                        self._publish_successor(head, metadata, config)
+                    return None
+                owner = uuid.uuid4().hex
+                if leader is not None:
+                    metadata["election"] = {
+                        "slurm_job_id": int(leader["slurm_job_id"]),
+                        "since": time.time(),
+                        "owner": owner,
+                    }
+                    self._write_session_metadata(session_dir, metadata)
+        if use_successor:
+            try:
+                return self.promote_successor(
+                    launcher=launcher,
+                    activation_script=activation_script,
+                    startup_timeout=startup_timeout,
+                )
+            except RuntimeError as exc:
+                self.logger.info(f"Head election will retry: {exc}")
+                return None
+        assert leader is not None
+        return self._promote_worker(
+            head,
+            leader,
+            owner,
             launcher=launcher,
             activation_script=activation_script,
             startup_timeout=startup_timeout,
         )
+
+    def _adopt_head(self, metadata: dict[str, Any]) -> "SlurmAllocation":
+        """The published head, reusing the current object while it is unchanged."""
+        assert self._allocation is not None
+        if int(metadata["slurm_job_id"]) != self._allocation.slurm_job_id:
+            object.__setattr__(
+                self,
+                "_allocation",
+                self._allocation_from_record(metadata, self._allocation.session_dir),
+            )
+        return self._allocation
+
+    def _head_status(self, head: "SlurmAllocation") -> tuple[bool, bool, bool]:
+        """Whether the head's job ended, its Ray stopped, or it is draining."""
+        if self._get_job_state(head.slurm_job_id) in TERMINAL_STATES:
+            return True, False, False
+        return False, self._head_ray_exited(head), self._allocation_draining(head)
+
+    def _promote_worker(
+        self,
+        head: "SlurmAllocation",
+        leader: dict[str, Any],
+        owner: str,
+        *,
+        launcher: Any,
+        activation_script: str | None,
+        startup_timeout: int,
+    ) -> "SlurmAllocation | None":
+        """Make a running worker allocation host the head, keeping its workers."""
+        ssh_pool = self._require_ssh_pool()
+        worker = self._allocation_from_record(leader, head.session_dir)
+        try:
+            worker.nodes = worker.nodes or self._read_allocation_nodes(worker)
+            ray_options = head._read_ray_start_options(ssh_pool)
+            if launcher is not None:
+                ray_options = {
+                    "launcher": launcher,
+                    "activation_script": activation_script
+                    if activation_script is not None
+                    else (ray_options or {}).get("activation_script", ""),
+                }
+            elif activation_script is not None and ray_options is not None:
+                ray_options["activation_script"] = activation_script
+            if ray_options:
+                # A head-only control plane next to the node's Ray worker.
+                worker.ensure_ray_cluster(
+                    ssh_pool=ssh_pool, startup_timeout=startup_timeout, **ray_options
+                )
+        except Exception:
+            self._end_election(head, owner)
+            raise
+        with self._lifecycle_lock:
+            with self._session_lock(head.session_dir):
+                metadata = self._read_session_metadata(head.session_dir) or {}
+                claim = metadata.get("election") or {}
+                if (
+                    int(metadata.get("slurm_job_id", 0)) != head.slurm_job_id
+                    or claim.get("owner") != owner
+                ):
+                    return None  # Someone else finished or took over the election.
+                metadata.pop("election")
+                head_live = self._get_job_state(
+                    head.slurm_job_id
+                ) not in TERMINAL_STATES and not self._head_ray_exited(head)
+                if self._get_job_state(worker.slurm_job_id) != "RUNNING" or (
+                    head_live and head.has_active_payloads(ssh_pool)
+                ):
+                    self._write_session_metadata(head.session_dir, metadata)
+                    return None
+                updated = self._allocation_record(worker)
+                updated["predecessors"] = [
+                    *metadata.get("predecessors", []),
+                    self._allocation_record(head),
+                ]
+                self._carry_session_state(metadata, updated)
+                updated["workers"] = [
+                    record
+                    for record in updated.get("workers", [])
+                    if int(record["slurm_job_id"]) != worker.slurm_job_id
+                ]
+                successor = metadata.get("successor")
+                if successor and successor.get("elected"):
+                    self._require_ssh_pool().run(
+                        f"scancel {int(successor['slurm_job_id'])}"
+                    )
+                elif successor:
+                    updated["successor"] = successor
+                self._write_session_metadata(head.session_dir, updated)
+                object.__setattr__(self, "_allocation", worker)
+                self._finish_promotion(worker, updated)
+                self.logger.info(
+                    f"Worker allocation {worker.slurm_job_id} now hosts the Ray head "
+                    f"in place of allocation {head.slurm_job_id}"
+                )
+                return worker
+
+    def _end_election(self, head: "SlurmAllocation", owner: str) -> None:
+        with self._lifecycle_lock:
+            with self._session_lock(head.session_dir):
+                metadata = self._read_session_metadata(head.session_dir) or {}
+                if (metadata.get("election") or {}).get("owner") == owner:
+                    metadata.pop("election")
+                    self._write_session_metadata(head.session_dir, metadata)
+
+    def _pick_worker_leader(
+        self, metadata: dict[str, Any], session_dir: str
+    ) -> dict[str, Any] | None:
+        """The running, undrained worker allocation with the most time left."""
+        best, best_left = None, -1.0
+        for record in metadata.get("workers", []):
+            worker = self._allocation_from_record(record, session_dir)
+            if self._get_job_state(worker.slurm_job_id) != "RUNNING":
+                continue
+            if self._allocation_draining(worker):
+                continue
+            left = self._time_left_seconds(worker.slurm_job_id)
+            left = math.inf if left is None else left
+            if left > best_left:
+                best, best_left = record, left
+        return best
+
+    def _publish_successor(
+        self,
+        head: "SlurmAllocation",
+        metadata: dict[str, Any],
+        config: SlurmRunAllocationConfig | None,
+    ) -> None:
+        """Queue a new head shaped like the session's first one. Lock held."""
+        shape = dict(metadata.get("head_config") or metadata.get("config") or {})
+        shape["extra_sbatch_directives"] = []
+        if config is not None:
+            shape.update(
+                config.model_dump(exclude_unset=True, exclude={"cleanup_policy"})
+            )
+        successor_config = self._clone_allocation_config(shape)
+        successor = successor_config._submit_allocation(
+            allocation_id=posixpath.basename(head.session_dir),
+            working_dir=head.session_dir,
+            wait_for_start=False,
+        )
+        # Marked, so a worker elected first can cancel it again.
+        metadata["successor"] = {**self._allocation_record(successor), "elected": True}
+        try:
+            self._write_session_metadata(head.session_dir, metadata)
+        except Exception:
+            successor.cancel(self._require_ssh_pool())
+            raise
+
+    def _allocation_draining(self, allocation: "SlurmAllocation") -> bool:
+        marker = f"{allocation.working_dir}/drain_signal"
+        return bool(
+            self._require_ssh_pool()
+            .run(f"test -f {shlex.quote(marker)} && echo draining || true")
+            .strip()
+        )
+
+    def _head_ray_exited(self, head: "SlurmAllocation") -> bool:
+        """Whether the head's Ray stopped after it had been ready."""
+        marker = f"{head.working_dir}/ray_cluster/ray_exited"
+        return bool(
+            self._require_ssh_pool()
+            .run(f"test -f {shlex.quote(marker)} && echo exited || true")
+            .strip()
+        )
+
+    def _time_left_seconds(self, job_id: int) -> float | None:
+        output = self._require_ssh_pool().run(
+            f"squeue -h -j {job_id} -o %L 2>/dev/null || true"
+        )
+        try:
+            return float(_slurm_time_limit_seconds(output.strip()))
+        except ValueError:
+            return None
+
+    def _head_near_walltime(self, head: "SlurmAllocation") -> bool:
+        """A head without a pre-walltime signal is drained shortly before walltime."""
+        if head.config._effective_signal_before_timeout() is not None:
+            return False
+        left = self._time_left_seconds(head.slurm_job_id)
+        return left is not None and left < _HEAD_HANDOVER_LEAD_SECONDS
 
     def remove_worker_allocation(
         self,
@@ -2009,6 +2363,8 @@ class SlurmAllocation:
         self._ray_address: Optional[str] = None
         self._ray_dashboard_url: Optional[str] = None
         self._ray_fingerprint: Optional[tuple[Any, ...]] = None
+        # `ray start` arguments of a worker allocation's nodes, else None.
+        self.worker_ray_args: Optional[List[str]] = None
 
     @property
     def end_time(self) -> str | None:
@@ -2160,8 +2516,14 @@ done
                 metadata
                 and int(json.loads(metadata)["slurm_job_id"]) != self.slurm_job_id
             ):
-                raise RuntimeError(
-                    "Allocation was replaced; prepare the payload in the current allocation"
+                # A new head took over: launch again in the current allocation.
+                raise SlurmAllocationEnded(
+                    SlurmStepExecutionResult(
+                        job_id=self.slurm_job_id,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                        allocation_state="REPLACED",
+                    )
                 )
             ssh_pool.run(f"mkdir -p {shlex.quote(invocation_dir)}")
             # Keep registration if SSH disconnects after launching srun: the
@@ -2555,7 +2917,9 @@ done
             startup_timeout=startup_timeout,
         )
 
-        for index, node in enumerate(self.nodes[1:], start=1):
+        # A worker allocation's own batch script joins all of its nodes.
+        extra_nodes = [] if self.worker_ray_args is not None else self.nodes[1:]
+        for index, node in enumerate(extra_nodes, start=1):
             worker_log = f"{ray_dir}/ray_worker_{index}.log"
             worker_cmd = (
                 f"nohup srun --overlap --jobid={self.slurm_job_id} "
@@ -2631,9 +2995,23 @@ done
             "  --block",
         ]
         # A head-only allocation schedules no Ray work; these come last to win.
+        # A worker allocation's head is head-only too: its node's Ray worker
+        # already offers the node's CPUs and GPUs.
+        colocated = self.worker_ray_args is not None
         head_only_args = (
             "--num-cpus=0 --num-gpus=0"
-            if getattr(self.config, "ray_head_only", False)
+            if getattr(self.config, "ray_head_only", False) or colocated
+            else ""
+        )
+        # Move a co-located head to another port block than the node's worker.
+        port_seed_shift = (
+            """_head_seed="${RAY_PORT_SEED:-${SLURM_JOB_ID:-0}}"
+if [[ "$_head_seed" =~ ^[0-9]+$ ]]; then
+  export RAY_PORT_SEED=$((_head_seed + 1))
+else
+  export RAY_PORT_SEED="head-$_head_seed"
+fi"""
+            if colocated
             else ""
         )
         ray_start_lines.extend(
@@ -2657,6 +3035,7 @@ done
 set -euo pipefail
 source {shlex.quote(activation_script)}
 {pre_start}
+{port_seed_shift}
 
 {port_assignments}
 {_render_ray_process_cleanup(grace_period)}
@@ -2691,6 +3070,10 @@ source {shlex.quote(activation_script)}
 	{temp_dir_setup}
 
 	cleanup_ray() {{
+	  # Tells the session supervisor that a ready head has stopped.
+	  if [[ -f {shlex.quote(ray_dir)}/ray_ready ]]; then
+	    touch {shlex.quote(ray_dir)}/ray_exited 2>/dev/null || true
+	  fi
 	  echo "[$({date_fmt})] Stopping persistent Ray head..."
 	  stop_ray_process "${{RAY_HEAD_PID:-}}"
 	  if [[ -n "${{RAY_TMP_DIR:-}}" && -d "$RAY_TMP_DIR" ]]; then
