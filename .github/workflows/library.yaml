@@ -484,7 +484,8 @@ jobs:
         run: |
           set -e
 
-          pixi run -e build --frozen uv run semantic-release version --prerelease
+          # Commit and tag locally; scripts/push_release.sh pushes both at once.
+          pixi run -e build --frozen uv run semantic-release version --prerelease --no-push
 
           # semantic-release updates the workspace versions after dependency
           # installation, so refresh the uv workspace metadata before pushing.
@@ -505,9 +506,7 @@ jobs:
         run: |
           set -e
 
-          git push origin main
-          git push --tags
-
+          scripts/push_release.sh
           pixi run -e build --frozen uv run semantic-release publish
 
       - name: Upload distribution artifacts
@@ -620,7 +619,8 @@ jobs:
         run: |
           set -e
 
-          pixi run -e build --frozen uv run semantic-release version
+          # Commit and tag locally; scripts/push_release.sh pushes both at once.
+          pixi run -e build --frozen uv run semantic-release version --no-push
 
           # Keep the lockfile's editable workspace versions in sync with the
           # versions written by semantic-release.
@@ -639,8 +639,7 @@ jobs:
         run: |
           set -e
 
-          git push origin main
-          git push --tags
+          scripts/push_release.sh
           pixi run -e build --frozen uv run semantic-release publish
 
       - name: Generate cumulative stable release notes
