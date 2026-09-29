@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.21.0-rc.2 (2026-09-29)
+
+### Bug Fixes
+
+- **ci**: Push release commits and tags atomically
+  ([#221](https://github.com/ascii-supply-networks/dagster-slurm/pull/221),
+  [`8d465e1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8d465e1378a46fa90fbc3dedefcea48065d0e29f))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`8353d9f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8353d9f26c7345c66868735df9acd5668a18e9b9))
+
+
 ## v1.22.0 (2026-09-29)
 
 ### Chores
