@@ -12,12 +12,11 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, TypeVar
+from typing import Any, Dict, Optional
 
 from dagster import (
     AssetExecutionContext,
@@ -106,31 +105,73 @@ def _session_step_tags_for_asset(
     return scoped_tags
 
 
-class _TerminableProcess(Protocol):
-    """Process operations required by log-stream cleanup."""
+class _SlurmLogFollower:
+    """Read new Slurm stdout/stderr lines as part of each status poll.
 
-    def poll(self) -> Optional[int]: ...
+    A ``tail -F`` per log file holds an SSH session open for the whole job,
+    and sshd's MaxSessions (10 by default) caps the sessions on the one shared
+    ControlMaster connection, so a few concurrent runs exhausted it. Appending
+    :meth:`script` to the status query reads the logs without holding a
+    session or adding a round trip.
+    """
 
-    def terminate(self) -> None: ...
+    def __init__(
+        self,
+        streams: list[tuple[str, str, Any, str]],
+        dashboard_log_emitter: RayDashboardLogEmitter,
+        streamed_lines: dict[str, int],
+    ):
+        """Args:
+        streams: ``(key, remote_path, output_stream, prefix)`` per log file.
+        dashboard_log_emitter: Receives every emitted line.
+        streamed_lines: Per-key count of emitted non-blank lines, updated in place.
 
-    def wait(self, timeout: Optional[float] = None) -> int: ...
+        """
+        self._streams = streams
+        self._dashboard_log_emitter = dashboard_log_emitter
+        self.streamed_lines = streamed_lines
+        self._next_line = {key: 1 for key, _, _, _ in streams}
+        self._marker = f"__DAGSTER_SLURM_LOG_{uuid.uuid4().hex}__"
 
-    def kill(self) -> None: ...
+    def script(self) -> str:
+        """Shell snippet printing each file's unread lines between markers."""
+        parts = [
+            f"printf '\\n%s\\n' {shlex.quote(self._marker + key)}; "
+            f"tail -n +{self._next_line[key]} {shlex.quote(path)} 2>/dev/null"
+            for key, path, _, _ in self._streams
+        ]
+        parts.append(f"printf '\\n%s\\n' {shlex.quote(self._marker + 'end')}")
+        return "; ".join(parts)
 
+    def consume(self, output: str) -> str:
+        """Emit the log lines framed in ``output``; return the output before them."""
+        keys = [key for key, _, _, _ in self._streams]
+        head, found, rest = output.partition(f"\n{self._marker}{keys[0]}\n")
+        if not found:
+            return output
+        for (key, _, stream, prefix), next_key in zip(
+            self._streams, [*keys[1:], "end"]
+        ):
+            content, found, rest = rest.partition(f"\n{self._marker}{next_key}\n")
+            if not found:
+                break  # truncated output: read this file again next poll
+            self._emit(key, content, stream, prefix)
+        return head
 
-class _JoinableThread(Protocol):
-    """Thread operation required by log-stream cleanup."""
-
-    def join(self, timeout: Optional[float] = None) -> None: ...
-
-
-_TerminableProcessT = TypeVar("_TerminableProcessT", bound=_TerminableProcess)
-
-
-#: Log polling cadence used only when ControlMaster is unavailable and each
-#: round costs a full SSH connection.
-_FALLBACK_STREAM_POLL_SECONDS = 1.0
-_FALLBACK_STREAM_POLL_MAX_SECONDS = 15.0
+    def _emit(self, key: str, content: str, stream: Any, prefix: str) -> None:
+        # tail also prints a last line that is still being written; leave it
+        # for the next poll so it is not emitted in two pieces.
+        lines = content[: content.rfind("\n") + 1].split("\n")[:-1]
+        if not lines:
+            return
+        self._next_line[key] += len(lines)
+        for line in lines:
+            if not line.strip():
+                continue
+            self._dashboard_log_emitter.process_line(line)
+            stream.write(f"{prefix}{line}\n")
+            self.streamed_lines[key] += 1
+        stream.flush()
 
 
 def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
@@ -1375,37 +1416,6 @@ class SlurmPipesClient(PipesClient):
         """Return True if the Slurm job is in an active state."""
         state = self._get_job_state(job_id, ssh_pool)
         return state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}
-
-    def _await_stream_quiescence(
-        self,
-        streamed_lines: dict,
-        streamed_lock: Any,
-        job_id: int,
-        *,
-        timeout: float,
-        interval: float = 0.05,
-    ) -> None:
-        """Wait until the log-streaming threads stop producing new lines.
-
-        Two consecutive quiet samples mean the tail has drained. Bounded by
-        `timeout` so a stuck stream cannot hold the step open.
-        """
-        deadline = time.time() + timeout
-        quiet_samples = 0
-        with streamed_lock:
-            previous = sum(streamed_lines.values())
-
-        while time.time() < deadline:
-            self._interruptible_sleep(interval, job_id)
-            with streamed_lock:
-                current = sum(streamed_lines.values())
-            if current == previous:
-                quiet_samples += 1
-                if quiet_samples >= 2:
-                    return
-            else:
-                quiet_samples = 0
-                previous = current
 
     @staticmethod
     def _bounded_poll_sleep(
@@ -3549,11 +3559,7 @@ rm -rf {pack_root_quoted}
             2, job_id
         )  # Wait for job to start and create log files
 
-        stop_streaming = threading.Event()
         streamed_lines = {"stdout": 0, "stderr": 0}
-        streamed_lock = threading.Lock()
-        stream_processes: dict[str, subprocess.Popen[str]] = {}
-        stream_processes_lock = threading.Lock()
         dashboard_log_emitter = getattr(
             message_reader, "_ray_dashboard_log_emitter", None
         )
@@ -3567,107 +3573,14 @@ rm -rf {pack_root_quoted}
                 "_ray_dashboard_log_emitter",
                 dashboard_log_emitter,
             )
-
-        def stream_file(remote_path: str, output_stream, prefix: str, stream_key: str):
-            try:
-                tail_cmd = self._build_tail_command(remote_path)
-                if tail_cmd is None:
-                    next_line = 1
-                    quoted_path = shlex.quote(remote_path)
-                    # Every poll is a full SSH connection in this mode, so an
-                    # idle log file must not be polled once per second.
-                    poll_interval = _FALLBACK_STREAM_POLL_SECONDS
-                    self.logger.debug(
-                        "Streaming %s via polling fallback (ControlMaster unavailable)",
-                        remote_path,
-                    )
-                    while not stop_streaming.is_set():
-                        try:
-                            output = ssh_pool.run(
-                                f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
-                            )
-                        except Exception as exc:
-                            if not stop_streaming.is_set():
-                                self.logger.debug(
-                                    "Polling fallback for %s failed: %s",
-                                    remote_path,
-                                    exc,
-                                )
-                            break
-
-                        lines = output.splitlines() if output else []
-                        if lines:
-                            for line in lines:
-                                if not line.strip():
-                                    continue
-                                dashboard_log_emitter.process_line(line)
-                                output_stream.write(f"{prefix}{line}\n")
-                            output_stream.flush()
-                            with streamed_lock:
-                                streamed_lines[stream_key] += sum(
-                                    1 for line in lines if line.strip()
-                                )
-                            next_line += len(lines)
-                            poll_interval = _FALLBACK_STREAM_POLL_SECONDS
-                        else:
-                            poll_interval = min(
-                                poll_interval * 2, _FALLBACK_STREAM_POLL_MAX_SECONDS
-                            )
-
-                        stop_streaming.wait(poll_interval)
-                    return
-
-                with stream_processes_lock:
-                    if stop_streaming.is_set():
-                        return
-                    proc = subprocess.Popen(
-                        tail_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                        bufsize=1,
-                    )
-                    stream_processes[stream_key] = proc
-
-                try:
-                    if not proc.stdout:
-                        self.logger.warning(f"No stdout for {stream_key}")
-                        return
-                    while not stop_streaming.is_set():
-                        line = proc.stdout.readline()
-                        if not line:
-                            if proc.poll() is not None:
-                                break
-                            time.sleep(0.1)
-                            continue
-                        if not line.strip():
-                            continue
-                        dashboard_log_emitter.process_line(line)
-                        output_stream.write(f"{prefix}{line}")
-                        output_stream.flush()
-                        with streamed_lock:
-                            streamed_lines[stream_key] += 1
-                finally:
-                    with stream_processes_lock:
-                        owns_process = stream_processes.pop(stream_key, None) is proc
-                    if owns_process:
-                        self._terminate_stream_processes({stream_key: proc})
-            except Exception as e:
-                self.logger.warning(f"Error streaming {remote_path}: {e}")
-
-        stdout_thread = threading.Thread(
-            target=stream_file,
-            args=(stdout_path, sys.stdout, "[SLURM] ", "stdout"),
-            daemon=True,
+        log_follower = _SlurmLogFollower(
+            [
+                ("stdout", stdout_path, sys.stdout, "[SLURM] "),
+                ("stderr", stderr_path, sys.stderr, "[SLURM ERR] "),
+            ],
+            dashboard_log_emitter,
+            streamed_lines,
         )
-        stdout_thread.start()
-
-        stderr_thread = threading.Thread(
-            target=stream_file,
-            args=(stderr_path, sys.stderr, "[SLURM ERR] ", "stderr"),
-            daemon=True,
-        )
-        stderr_thread.start()
 
         start_time = time.time()
         last_state = None
@@ -3733,8 +3646,10 @@ rm -rf {pack_root_quoted}
                             self._sigterm_received = False
                             _received_interrupt["received"] = False
 
-                    # Get current job state
-                    state = self._get_job_state(job_id, ssh_pool)
+                    # Get current job state, and any new log lines with it
+                    state = self._get_job_state(
+                        job_id, ssh_pool, log_follower=log_follower
+                    )
 
                     # Track state changes
                     if state != last_state:
@@ -3870,17 +3785,6 @@ rm -rf {pack_root_quoted}
                             f"Job {job_id} reached terminal state: {state}"
                         )
 
-                        # Let the log-streaming threads catch up. Waiting for
-                        # them to go quiet returns as soon as the tail has
-                        # drained, instead of spending a flat two seconds on
-                        # every job that finishes.
-                        self._await_stream_quiescence(
-                            streamed_lines,
-                            streamed_lock,
-                            job_id,
-                            timeout=2.0,
-                        )
-
                         if state in {"CANCELLED", "PREEMPTED"}:
                             self.logger.warning(f"Job {job_id} was {state}")
                             self._cancellation_requested = True
@@ -3980,12 +3884,6 @@ rm -rf {pack_root_quoted}
                     raise
 
         finally:
-            self._stop_streaming_threads(
-                stop_streaming=stop_streaming,
-                stream_processes=stream_processes,
-                stream_processes_lock=stream_processes_lock,
-                stream_threads=(stdout_thread, stderr_thread),
-            )
             try:
                 existing = getattr(message_reader, "_streamed_lines", {})
                 if not isinstance(existing, dict):
@@ -3996,139 +3894,22 @@ rm -rf {pack_root_quoted}
             except Exception as exc:  # pragma: no cover - best effort bookkeeping
                 self.logger.debug(f"Failed to record streamed bytes: {exc}")
 
-    def _stop_streaming_threads(
+    def _get_job_state(
         self,
-        *,
-        stop_streaming: threading.Event,
-        stream_processes: dict[str, _TerminableProcessT],
-        stream_processes_lock: Any,
-        stream_threads: tuple[_JoinableThread, ...],
-    ) -> None:
-        """Terminate SSH tail processes before joining their reader threads."""
-        stop_streaming.set()
-        with stream_processes_lock:
-            processes = dict(stream_processes)
-            stream_processes.clear()
-
-        self._terminate_stream_processes(processes)
-
-        for thread in stream_threads:
-            thread.join(timeout=5)
-
-    def _terminate_stream_processes(
-        self,
-        processes: Mapping[str, _TerminableProcess],
-    ) -> None:
-        """Stop and reap SSH tail processes without masking the job outcome."""
-        for stream_key, proc in processes.items():
-            try:
-                if proc.poll() is not None:
-                    continue
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-            except OSError as exc:
-                self.logger.debug(
-                    "Could not terminate SSH %s log stream: %s",
-                    stream_key,
-                    exc,
-                )
-
-        for stream_key, proc in processes.items():
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                except OSError as exc:
-                    self.logger.debug(
-                        "Could not kill SSH %s log stream: %s",
-                        stream_key,
-                        exc,
-                    )
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self.logger.warning(
-                        "SSH %s log stream did not exit after being killed",
-                        stream_key,
-                    )
-                except OSError as exc:
-                    self.logger.debug(
-                        "Could not reap killed SSH %s log stream: %s",
-                        stream_key,
-                        exc,
-                    )
-            except OSError as exc:
-                self.logger.debug(
-                    "Could not reap SSH %s log stream: %s",
-                    stream_key,
-                    exc,
-                )
-
-    def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:
-        """Build SSH tail command for streaming logs.
-
-        Args:
-            remote_path: Remote file path to tail
-
-        Returns:
-            Command list for subprocess.Popen
-
-        """
-        if not self._control_path:
-            requires_password = self.slurm.ssh.uses_password_auth
-            jump_host = self.slurm.ssh.jump_host
-            jump_requires_password = (
-                jump_host is not None and jump_host.uses_password_auth
-            )
-            if requires_password or jump_requires_password:
-                return None
-
-        control_path = self._control_path
-        cmd = [
-            "ssh",
-            # A `tail -F` connection idles between log lines; without keepalives
-            # a firewall can drop it and force an endless reconnect loop.
-            *self.slurm.ssh.get_common_ssh_opts(
-                server_alive_interval=30,
-                server_alive_count_max=6,
-            ),
-            "-p",
-            str(self.slurm.ssh.port),
-            # Share the pool's master when it is healthy, otherwise attach to
-            # (or start) the shared socket rather than opening a private one.
-            *self.slurm.ssh.get_multiplexing_opts(
-                create=control_path is None,
-                control_path=control_path,
-            ),
-        ]
-
-        # Include proxy jump options if configured
-        cmd.extend(self.slurm.ssh.get_proxy_command_opts())
-
-        # ControlMaster options are already set above; only auth is left.
-        cmd.extend(self.slurm.ssh.get_auth_opts())
-
-        cmd.append(f"{self.slurm.ssh.user}@{self.slurm.ssh.host}")
-
-        # Tail command - wait for file to appear, then follow
-        cmd.append(
-            f"tail -F --retry -n +1 {remote_path} 2>/dev/null || "
-            f"tail -f {remote_path} 2>/dev/null || "
-            f"sleep infinity"
-        )
-
-        return cmd
-
-    def _get_job_state(self, job_id: int, ssh_pool: SSHConnectionPool) -> str:
-        """Query job state from Slurm."""
+        job_id: int,
+        ssh_pool: SSHConnectionPool,
+        log_follower: Optional[_SlurmLogFollower] = None,
+    ) -> str:
+        """Query job state from Slurm, reading new log lines in the same round trip."""
         try:
             # Try squeue first (for running jobs)
-            output = ssh_pool.run(f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true")
+            squeue = f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true"
+            if log_follower is None:
+                output = ssh_pool.run(squeue)
+            else:
+                output = log_follower.consume(
+                    ssh_pool.run(f"{squeue}; {log_follower.script()}")
+                )
             state = normalize_slurm_state(output)
             if state:
                 return state

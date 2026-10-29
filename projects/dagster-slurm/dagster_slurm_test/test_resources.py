@@ -1700,8 +1700,6 @@ def test_status_polling_stops_backing_off_once_pipes_reports_closed(monkeypatch)
     monkeypatch.setattr(
         client, "_interruptible_sleep", lambda seconds, job_id: sleeps.append(seconds)
     )
-    # Stream-drain sampling also sleeps; it is not what this test measures.
-    monkeypatch.setattr(client, "_await_stream_quiescence", lambda *a, **k: None)
 
     # The payload reports 'closed' after the third status poll.
     class Reader:
@@ -1722,12 +1720,6 @@ def test_status_polling_stops_backing_off_once_pipes_reports_closed(monkeypatch)
         return real_state(*a, **k)
 
     monkeypatch.setattr(client, "_get_job_state", counting_state)
-    monkeypatch.setattr(
-        "dagster_slurm.pipes_clients.slurm_pipes_client.threading.Thread",
-        lambda *a, **k: SimpleNamespace(
-            start=lambda: None, join=lambda timeout=None: None, is_alive=lambda: False
-        ),
-    )
 
     client._wait_for_job_with_streaming(
         1,

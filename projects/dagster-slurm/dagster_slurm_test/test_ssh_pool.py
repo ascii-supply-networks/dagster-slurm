@@ -847,6 +847,128 @@ def test_spawn_without_a_live_master_is_not_retried_every_check(monkeypatch, tmp
     assert [level for level, _ in reported] == ["error"]
 
 
+SESSION_REFUSED = (
+    "mux_client_request_session: session request failed: Session open refused by peer\n"
+    "kex_exchange_identification: Connection closed by remote host\n"
+)
+
+
+def _refusing_stub(commands: list[list[str]], refusals: dict):
+    """Master is alive, but the first ``refusals[tool]`` sessions are refused.
+
+    This is sshd hitting MaxSessions on the shared connection.
+    """
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        if "-O" in cmd:
+            return DummyResult(returncode=0)
+        tool = cmd[0]
+        if refusals.get(tool, 0) > 0:
+            refusals[tool] -= 1
+            return DummyResult(returncode=255, stderr=SESSION_REFUSED)
+        return DummyResult(returncode=0, stdout="ok\n")
+
+    return fake_run
+
+
+@pytest.mark.parametrize("jump", [None, "ssh-config", "explicit"])
+def test_pooled_commands_cannot_open_their_own_connection(monkeypatch, tmp_path, jump):
+    """A refused session must not turn into a fresh TCP connection.
+
+    OpenSSH silently connects directly when the master refuses a session,
+    which is exactly the reconnect storm login nodes rate-limit.
+    """
+    jump_host = None
+    if jump == "ssh-config":
+        jump_host = SSHConnectionResource(host="jump.example.com", user="jumpuser")
+    elif jump == "explicit":
+        jump_key = tmp_path / "jump_key"
+        jump_key.write_text("dummy-key")
+        jump_host = SSHConnectionResource(
+            host="jump.example.com", user="jumpuser", key_path=str(jump_key)
+        )
+    resource = _key_auth_resource(tmp_path).model_copy(update={"jump_host": jump_host})
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _refusing_stub(commands, {}))
+    with SSHConnectionPool(resource) as pool:
+        pool.run("true")
+    monkeypatch.undo()  # resolve with the real OpenSSH below
+
+    pooled = [cmd for cmd in commands if cmd[0] == "ssh" and "-O" not in cmd]
+    assert pooled
+    for cmd in pooled:
+        resolved = _resolved_ssh_config(cmd)
+        assert resolved.get("proxycommand") == "false"
+        assert "proxyjump" not in resolved
+
+
+def test_refused_session_is_retried_over_the_shared_connection(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _refusing_stub(commands, {"ssh": 2}))
+    sleeps: list[float] = []
+    monkeypatch.setattr(ssh_pool_module.time, "sleep", sleeps.append)
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)) as pool:
+        assert pool.run("true") == "ok\n"
+        assert pool.multiplexing_active is True
+
+    attempts = [cmd for cmd in commands if cmd[0] == "ssh" and "-O" not in cmd]
+    assert len(attempts) == 3
+    assert sleeps == sorted(sleeps) and len(sleeps) == 2
+
+
+def test_upload_retries_a_refused_session(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _refusing_stub(commands, {"scp": 1}))
+    monkeypatch.setattr(ssh_pool_module.time, "sleep", lambda _seconds: None)
+    local_file = tmp_path / "job.sh"
+    local_file.write_text("echo hi\n")
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)) as pool:
+        pool.upload_file(str(local_file), "/remote/run/job.sh")
+
+    assert len([cmd for cmd in commands if cmd[0] == "scp"]) == 2
+
+
+def test_persistently_refused_sessions_name_the_session_limit(monkeypatch, tmp_path):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _refusing_stub(commands, {"ssh": 1000}))
+    monkeypatch.setattr(ssh_pool_module.time, "sleep", lambda _seconds: None)
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)) as pool:
+        with pytest.raises(RuntimeError, match="MaxSessions"):
+            pool.run("true")
+
+
+def test_command_on_a_dead_master_restarts_it_and_retries(monkeypatch, tmp_path):
+    """Between health checks a dead master fails the command - heal and retry."""
+    commands: list[list[str]] = []
+    state = {"alive": True}
+    stub = _master_lifecycle_stub(commands, state)
+    dead_once = {"pending": True}
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "ssh" and "-O" not in cmd and "-M" not in cmd:
+            if dead_once.pop("pending", False):
+                state["alive"] = False
+                commands.append(cmd)
+                return DummyResult(
+                    returncode=255,
+                    stderr="Control socket connect(/x): Connection refused\n",
+                )
+        return stub(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with SSHConnectionPool(_key_auth_resource(tmp_path)) as pool:
+        assert pool.run("true") == "ok\n"
+        assert pool.multiplexing_active is True
+
+    assert len([cmd for cmd in commands if "-M" in cmd]) == 1
+
+
 def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
     """Helper commands outside the pool must multiplex too."""
     resource = _key_auth_resource(tmp_path)

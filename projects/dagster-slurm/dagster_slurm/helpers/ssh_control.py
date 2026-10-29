@@ -143,4 +143,6 @@ def multiplexing_opts(control_path: Optional[str], *, create: bool) -> list[str]
     ]
     if create:
         opts.extend(["-o", f"ControlPersist={control_persist_value()}"])
+    else:
+        opts.extend(["-o", "ProxyCommand=false"])
     return opts
