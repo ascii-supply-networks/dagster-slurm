@@ -1274,3 +1274,11 @@ docs/static/slides-scipy2026/
 .devenv/
 examples/z_tmp/
 /zz_tmp/
+data/*
+*.csv
+*.txt
+*.parquet
+examples/data/*
+examples/gemini.yaml
+paper/*
+*.pdf

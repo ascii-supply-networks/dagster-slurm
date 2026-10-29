@@ -1,5 +1,6 @@
 """SSH connection pooling via ControlMaster."""
 
+import contextlib
 import os
 import shlex
 import subprocess
@@ -7,7 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Callable, Optional, Pattern, Union, cast
+from typing import Callable, Iterator, Optional, Pattern, Union, cast
 
 from dagster import get_dagster_logger
 from typing import TYPE_CHECKING
@@ -141,8 +142,46 @@ class SSHConnectionPool:
 
         return completed.returncode == 0
 
+    @contextlib.contextmanager
+    def _spawn_lock(self) -> Iterator[None]:
+        """Serialise master startup across every process sharing the socket.
+
+        Two steps that both find no master would otherwise both run ``ssh -M``.
+        The loser cannot bind the socket, and OpenSSH keeps it open as a plain
+        session that nothing ever closes.
+        """
+        if os.name != "posix":  # no fcntl, and Windows OpenSSH has no ControlMaster
+            yield
+            return
+        import fcntl
+
+        with open(f"{self.control_path}.lock", "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
+    def _remove_stale_socket(self) -> None:
+        """Delete a control socket that no master answers on.
+
+        OpenSSH clears such a socket itself only in ``ControlMaster=auto`` mode.
+        The pool uses ``-M`` and ``ControlMaster=no``, so a master that died
+        uncleanly would otherwise stop every later ``ssh -M`` from binding.
+        """
+        if self.control_path and os.path.lexists(self.control_path):
+            self.logger.info("Removing stale SSH control socket %s", self.control_path)
+            Path(self.control_path).unlink(missing_ok=True)
+
     def _spawn_master(self) -> None:
         """Start a background ControlMaster, raising on failure."""
+        with self._spawn_lock():
+            # Another process may have started one while we waited for the lock.
+            if self._master_is_alive():
+                self._owns_master = False
+                return
+            self._remove_stale_socket()
+            self._owns_master = self._run_master_command()
+
+    def _run_master_command(self) -> bool:
+        """Run ``ssh -M``; return False when another process's master took over."""
         cmd = [
             "ssh",
             # Keepalives matter: without them an idle NAT or firewall silently
@@ -167,18 +206,24 @@ class SSHConnectionPool:
 
         completed = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if completed.returncode != 0:
-            # Another process may have won the race for the same socket.
+            # A one-off helper outside the lock may have started a master.
             if self._master_is_alive():
-                self._owns_master = False
-                return
+                return False
             stderr = completed.stderr
             raise RuntimeError(
                 "Failed to start SSH master: "
                 f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}"
                 f"{self.config.auth_error_hint(stderr)}"
             )
-
-        self._owns_master = True
+        # OpenSSH exits 0 even when it could not bind the socket, and then
+        # stays connected as a plain session instead of a master. Retrying
+        # would leak one such session per health check.
+        if not self._master_is_alive():
+            raise RuntimeError(
+                f"ssh -M exited without a master listening on {self.control_path}: "
+                f"{completed.stderr.strip() or 'no error output'}"
+            )
+        return True
 
     @property
     def multiplexing_unsupported(self) -> bool:

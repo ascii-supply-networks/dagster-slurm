@@ -4,6 +4,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -621,7 +622,7 @@ def _master_lifecycle_stub(commands: list[list[str]], state: dict):
         if "-M" in cmd:
             if not state.get("spawn_ok", True):
                 return DummyResult(returncode=255, stderr="connection refused")
-            state["alive"] = True
+            state["alive"] = state.get("spawn_binds", True)
             return DummyResult(returncode=0)
         return DummyResult(returncode=0, stdout="ok\n")
 
@@ -743,6 +744,107 @@ def test_unrecoverable_master_loss_is_reported_loudly(monkeypatch, tmp_path):
     assert level == "error"
     assert "SSH MULTIPLEXING FAILED" in message
     assert "could cause the account to be blocked" in message
+
+
+def _openssh_mux_stub(commands: list[list[str]], state: dict):
+    """Fake ``subprocess.run`` that binds the control socket the way OpenSSH does.
+
+    ``ssh -M`` cannot bind a ControlPath that already exists. OpenSSH then logs
+    "already exists, disabling multiplexing", keeps the session open as a plain
+    connection and still exits 0 - one leaked remote session per attempt.
+    """
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        socket = Path(
+            next(o.split("=", 1)[1] for o in cmd if o.startswith("ControlPath="))
+        )
+        if "-O" in cmd:
+            return DummyResult(returncode=0 if state["listening"] else 255)
+        if "-M" in cmd:
+            if socket.exists():
+                state["leaked"] += 1
+                return DummyResult(returncode=0)
+            socket.touch()
+            state["listening"] = True
+            return DummyResult(returncode=0)
+        return DummyResult(returncode=0, stdout="ok\n")
+
+    return fake_run
+
+
+def test_stale_control_socket_is_replaced_by_a_working_master(monkeypatch, tmp_path):
+    """A socket left behind by a dead master must not block the next one."""
+    commands: list[list[str]] = []
+    state = {"listening": False, "leaked": 0}
+    monkeypatch.setattr(subprocess, "run", _openssh_mux_stub(commands, state))
+
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    Path(pool.control_path).touch()  # nothing listens behind it
+
+    with pool:
+        assert pool.multiplexing_active is True
+
+    assert state == {"listening": True, "leaked": 0}
+
+
+def test_concurrent_pools_start_a_single_master(monkeypatch, tmp_path):
+    """Parallel steps racing for the socket must not leak plain sessions."""
+    commands: list[list[str]] = []
+    state = {"listening": False, "leaked": 0}
+    stub = _openssh_mux_stub(commands, state)
+
+    # Hold both pools at their first health check so they both see no master.
+    barrier = threading.Barrier(2, timeout=5)
+    first_checks = [0]
+    counter_lock = threading.Lock()
+
+    def racing_run(cmd, *args, **kwargs):
+        if "-O" in cmd:
+            with counter_lock:
+                first_checks[0] += 1
+                wait = first_checks[0] <= 2
+            if wait:
+                barrier.wait()
+        return stub(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", racing_run)
+    resource = _key_auth_resource(tmp_path)
+    active: list[bool] = []
+
+    def open_pool():
+        with SSHConnectionPool(resource) as pool:
+            active.append(pool.multiplexing_active)
+
+    threads = [threading.Thread(target=open_pool) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert active == [True, True]
+    assert len([cmd for cmd in commands if "-M" in cmd]) == 1
+    assert state["leaked"] == 0
+
+
+def test_spawn_without_a_live_master_is_not_retried_every_check(monkeypatch, tmp_path):
+    """Each futile respawn leaves a session behind, so stop after the first."""
+    commands: list[list[str]] = []
+    state = {"alive": False, "spawn_binds": False}
+    monkeypatch.setattr(subprocess, "run", _master_lifecycle_stub(commands, state))
+
+    reported: list[tuple[str, str]] = []
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    pool.MASTER_CHECK_INTERVAL_SECONDS = 0.0
+    pool.reporter = lambda level, message: reported.append((level, message))
+
+    with pool:
+        for _ in range(3):
+            assert pool.run("true") == "ok\n"
+
+    assert len([cmd for cmd in commands if "-M" in cmd]) == 1
+    assert pool.multiplexing_active is False
+    assert [level for level, _ in reported] == ["error"]
 
 
 def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
