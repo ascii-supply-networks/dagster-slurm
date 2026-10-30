@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## v1.22.0-rc.1 (2026-10-30)
+
+### Bug Fixes
+
+- Build the Slurm image from Rocky's primary repository
+  ([#227](https://github.com/ascii-supply-networks/dagster-slurm/pull/227),
+  [`52f24b8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/52f24b8f3c5c0b299c7deea5d8e1ee3b931520eb))
+
+### Chores
+
+- Adopt ruff's default rule set
+  ([#226](https://github.com/ascii-supply-networks/dagster-slurm/pull/226),
+  [`dfb08b2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/dfb08b23a39000c3ba2b6d682fbf5a7f05049068))
+
+- Refresh dependencies and CI actions, drop Python 3.10
+  ([#223](https://github.com/ascii-supply-networks/dagster-slurm/pull/223),
+  [`1367e9d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1367e9df4695443efbf1cd9d8e8db5be1a664b28))
+
+- Update uv lockfile version [skip ci]
+  ([`f326e71`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f326e71f6d0edba7ef42dcc441bec1dae408bab6))
+
+### Features
+
+- Add hooks for application-driven worker scaling (#222)
+  ([#224](https://github.com/ascii-supply-networks/dagster-slurm/pull/224),
+  [`46154e8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/46154e82848410f7ecfe7d7b4585ed212dc65005))
+
+
 ## v1.21.0-rc.2 (2026-09-29)
 
 ### Bug Fixes
