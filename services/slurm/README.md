@@ -30,6 +30,16 @@ docker compose up
 ssh submitter@localhost -p 2223
 ```
 
+The default is Slurm 25.11. To run Slurm 26.05 instead, set the image tag and
+the Slurm release to build:
+
+```bash
+IMAGE_TAG=26-05-5-1 SLURM_TAG=slurm-26-05-5-1 docker compose up -d
+```
+
+Each image has its own SSH host keys. After switching versions or pulling a
+rebuilt image, run `ssh-keygen -R "[localhost]:2223"` before connecting again.
+
 ## 🖥️ Accessing the Cluster
 
 To interact with the Slurm controller, open a shell inside the `slurmctld` container:

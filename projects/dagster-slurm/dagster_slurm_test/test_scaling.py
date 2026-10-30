@@ -469,6 +469,24 @@ def test_parse_test_only_output_uses_the_login_node_clock():
     assert missing["error"] == "no answer from the scheduler"
 
 
+def test_parse_test_only_output_reads_the_slurm_26_05_format():
+    # Slurm 26.05 prints an extra token after the start time.
+    output = (
+        "@@clock 5000 2026-10-30T10:00:00\n"
+        "@@probe 0\n"
+        "sbatch: Job 5 to start at 2026-10-30T10:01:00 a using 2 processors "
+        "on nodes c[1-2] in partition normal"
+    )
+    (estimate,) = _parse_test_only_output(output, 1)
+    assert estimate == {
+        "observed_at": 5000.0,
+        "start_in_seconds": 60.0,
+        "start_time": "2026-10-30T10:01:00",
+        "nodes": "c[1-2]",
+        "partition": "normal",
+    }
+
+
 def test_estimate_worker_starts_probes_inherited_shapes_within_budget(tmp_path):
     class ProbePool(ScalingPool):
         probes: ClassVar[list[str]] = []
