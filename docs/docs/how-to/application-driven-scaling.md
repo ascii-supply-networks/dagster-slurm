@@ -36,7 +36,7 @@ for worker in snapshot.workers():
 - `time_left_seconds`: the scheduler's remaining walltime for a running job. It accounts for time limit changes, unlike the configured `time_limit_seconds`.
 - `requested_nodes`, `requested_gpus_per_node` and `tres`: what was asked for, and the trackable resources the scheduler reports, which are the grant once the job runs.
 - `nodes`, `ray_nodes`, `ready`: the allocation's Slurm nodes, the Ray node ID of each node that joined the current head, and whether all of them did. A `RUNNING` job is not yet a ready Ray worker.
-- `draining`, `intent`, `drain_deadline`: drain status, and the bookkeeping of `reconcile_workers`.
+- `draining`, `intent`, `drain_deadline`, `submitted_at`: drain status, and the bookkeeping of `reconcile_workers`. `submitted_at` is the login node's clock when `reconcile_workers` submitted the allocation, `None` for other allocations.
 
 Values that could not be observed are `None`, never zero or `False`. When the scheduler does not answer, every `state` is `None` and `snapshot.certain` is `False`. `snapshot.observed_at` is the login node's clock at the query, so processes on different hosts compare the same time.
 
@@ -85,8 +85,19 @@ A `WorkerIntent` names a group of worker allocations and how many should exist. 
 - **Revalidation.** The call queries the scheduler again before acting. It submits nothing when the scheduler does not answer, when `observed` is older than `max_observation_age` (300 seconds) or when the head changed since `observed` was taken. `result.held_back` says why. Releases and cleanup of allocations whose state is known continue.
 - **Durable drain deadlines.** To scale in, the call releases pending allocations first, then the running ones with the least time left. Each released allocation gets a deadline (`drain_timeout`, or the worker's walltime drain window, plus a grace period), which is persisted before its drain starts. Later calls retry a failed drain without moving the deadline and cancel the job once it passes, also after a supervisor restart.
 - **Expiry of queued allocations.** With `pending_timeout`, an allocation that is still pending after that many seconds is cancelled. The call does not replace it at once, so your policy can pick another shape for the next call.
+- **Named releases.** `release=[job_id, ...]` releases those allocations of the intent in this call, whatever the scale-in order, for example a worker that failed your own health check. They get the same persisted deadline. `count` then applies to the other allocations: keep it to replace them, or lower it. Job IDs that are not live allocations of the intent, or that are already released, are ignored, so you can repeat a release until the snapshot shows its `drain_deadline`.
+- **A submission budget.** `max_submissions` bounds the allocations one call submits. `count` is often relative to a snapshot, such as `len(active) + 1`. When an allocation ends after the snapshot, the call would replace it with `config`, or with the inherited shape if `config` is `None`. Pass `max_submissions=0` when your policy adds nothing, and the number it adds otherwise. `result.held_back` says when the budget stopped a submission.
 
-Allocations added with `add_worker_allocation` belong to no intent and are never counted or released by `reconcile_workers`. When the session elects a worker allocation of an intent as its new head, that allocation keeps counting toward the intent until it drains, and scale-in never releases it.
+Allocations added with `add_worker_allocation` belong to no intent and are never counted or released by `reconcile_workers`. When the session elects a worker allocation of an intent as its new head, that allocation keeps counting toward the intent until it drains, and scale-in never releases it. A worker that an intent released never becomes the head.
+
+## Change an allocation's role
+
+```python
+session.assign_worker_intent(added.slurm_job_id, "gpu-helpers")  # counted and released from now on
+session.assign_worker_intent(helper.slurm_job_id, None)  # kept: scale-in never releases it
+```
+
+`assign_worker_intent` moves a live worker allocation into an intent, or out of every intent. Use it when your application changes what an allocation is for: an allocation added with `add_worker_allocation` can join an intent, and an allocation your application now depends on can leave one. The move holds the session lock. An allocation that an intent is releasing keeps its intent until it ends. An allocation that joins an intent has no `submitted_at`, so `pending_timeout` never cancels it.
 
 ## One reconciliation step
 
@@ -96,7 +107,8 @@ demand = workload.remaining_parallel_units()  # application: demand
 candidates = workload.candidate_shapes(demand, snapshot)  # application: candidates
 estimates = session.estimate_worker_starts(candidates)  # library: probe
 intent = workload.choose(demand, snapshot, estimates)  # application: decision
-session.reconcile_workers(intent, observed=snapshot)  # library: revalidate and act
+added = max(0, intent.count - len(active(snapshot, intent.key)))
+session.reconcile_workers(intent, observed=snapshot, max_submissions=added)  # library: revalidate and act
 ```
 
 The two workloads below use the same hooks and decide differently.
