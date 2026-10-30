@@ -151,9 +151,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Production clusters upgrade slowly: test the 25.11 line next to the
-        # newest release. Keep in sync with slurm-image-builder.yml.
-        slurm: ["25-11-8-1", "26-05-5-1"]
+        # One version keeps CI fast. Add "25-11-8-1" back to also test the 25.x
+        # line most production clusters still run. The image builder keeps
+        # building both (see slurm-image-builder.yml).
+        slurm: ["26-05-5-1"]
+        # slurm: ["25-11-8-1", "26-05-5-1"]
     # runs-on: paid-ci-runner-more-disk
     permissions:
       contents: read
