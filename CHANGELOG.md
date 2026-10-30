@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v1.22.0-rc.2 (2026-10-30)
+
+### Chores
+
+- Test against slurm 25.11 and 26.05
+  ([#228](https://github.com/ascii-supply-networks/dagster-slurm/pull/228),
+  [`a663e4f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/a663e4fe8a5d1e3156848e2d5b7476d59dad4cc6))
+
+- Update uv lockfile version [skip ci]
+  ([`bce6d59`](https://github.com/ascii-supply-networks/dagster-slurm/commit/bce6d59bdd1337c0c74c13d3046623bdbdcaa0a9))
+
+### Continuous Integration
+
+- Reuse Slurm images built from the same sources and prune old ones
+  ([#228](https://github.com/ascii-supply-networks/dagster-slurm/pull/228),
+  [`a663e4f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/a663e4fe8a5d1e3156848e2d5b7476d59dad4cc6))
+
+
 ## v1.22.0-rc.1 (2026-10-30)
 
 ### Bug Fixes
