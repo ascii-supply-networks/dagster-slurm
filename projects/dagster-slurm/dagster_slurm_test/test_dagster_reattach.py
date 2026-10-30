@@ -21,7 +21,6 @@ from dagster import (
     asset,
     materialize,
 )
-
 from dagster_slurm import (
     BashLauncher,
     ComputeResource,
@@ -31,11 +30,10 @@ from dagster_slurm import (
 )
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.pipes_clients.slurm_pipes_client import (
-    SlurmPipesClient,
     _TAG_JOB_ID,
     _TAG_RUN_DIR,
+    SlurmPipesClient,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

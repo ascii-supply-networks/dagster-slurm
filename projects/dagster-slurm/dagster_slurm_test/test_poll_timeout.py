@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from dagster import AssetKey
 from dagster._core.errors import DagsterPipesExecutionError
-
 from dagster_slurm import ComputeResource
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.helpers import SlurmJobMetrics
@@ -229,22 +228,24 @@ def test_validate_final_slurm_outcome_rejects_failed_batch_state(
         "12345|TIMEOUT|0:0\n12345.batch|OUT_OF_ME+|0:125\n12345.extern|COMPLETED|0:0\n"
     )
 
-    with patch.object(
-        slurm_pipes_client.metrics_collector,
-        "collect_job_metrics",
-        return_value=SlurmJobMetrics(
-            job_id=12345,
-            elapsed_seconds=340.0,
-            cpu_time_seconds=0.0,
-            max_rss_mb=24554.0,
-            node_hours=0.0,
-            cpu_efficiency=0.0,
-            state="OUT_OF_MEMORY",
-            exit_code=0,
+    with (
+        patch.object(
+            slurm_pipes_client.metrics_collector,
+            "collect_job_metrics",
+            return_value=SlurmJobMetrics(
+                job_id=12345,
+                elapsed_seconds=340.0,
+                cpu_time_seconds=0.0,
+                max_rss_mb=24554.0,
+                node_hours=0.0,
+                cpu_efficiency=0.0,
+                state="OUT_OF_MEMORY",
+                exit_code=0,
+            ),
         ),
+        pytest.raises(RuntimeError, match=r"12345 did not complete successfully"),
     ):
-        with pytest.raises(RuntimeError, match=r"12345 did not complete successfully"):
-            slurm_pipes_client._validate_final_slurm_outcome(12345, mock_ssh_pool)
+        slurm_pipes_client._validate_final_slurm_outcome(12345, mock_ssh_pool)
 
 
 def test_validate_final_slurm_outcome_accepts_clean_completed_job(

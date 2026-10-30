@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[3]
@@ -77,7 +76,7 @@ def test_rotate_refreshes_step_when_explicitly_requested(monkeypatch, capsys):
     module = _load_refresh_step_auth_module()
     calls: dict[str, object] = {}
     app_passwords: list[object | None] = []
-    refreshed_at = datetime(2026, 4, 17, 6, 39, 18, tzinfo=timezone.utc)
+    refreshed_at = datetime(2026, 4, 17, 6, 39, 18, tzinfo=UTC)
 
     class FakeProvider:
         def __init__(self, **kwargs):
@@ -137,7 +136,7 @@ def test_rotate_reports_when_step_certificate_refresh_is_not_needed(
     module = _load_refresh_step_auth_module()
     calls: dict[str, object] = {}
     app_passwords: list[object | None] = []
-    valid_until = datetime(2026, 4, 17, 6, 39, 18, tzinfo=timezone.utc)
+    valid_until = datetime(2026, 4, 17, 6, 39, 18, tzinfo=UTC)
 
     class FakeProvider:
         def __init__(self, **kwargs):

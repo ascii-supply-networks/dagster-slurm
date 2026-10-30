@@ -2,16 +2,18 @@
 
 import json
 import os
+import shlex
 import subprocess
 import threading
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
-
-import shlex
+from typing import TYPE_CHECKING, Any, Optional
 
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
+
+from .ssh_pool import SSH_ERRORS
 
 if TYPE_CHECKING:  # pragma: no cover
     from .ssh_pool import SSHConnectionPool
@@ -26,8 +28,8 @@ class _ClosedMessageTracker:
 
     def __init__(self, drain_timeout: float = 20.0):
         self._drain_timeout = drain_timeout
-        self._pending: Optional[Dict[str, Any]] = None
-        self._deadline: Optional[float] = None
+        self._pending: dict[str, Any] | None = None
+        self._deadline: float | None = None
 
     def observe(self, message: Any) -> bool:
         if isinstance(message, dict) and message.get("method") == "closed":
@@ -67,7 +69,7 @@ class LocalMessageReader(PipesMessageReader):
         self.creation_timeout = creation_timeout
         self.closed_message_drain_timeout = closed_message_drain_timeout
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     # This method is moved out of read_messages and becomes a proper class method
     def _tail_file(self, handler):
@@ -90,7 +92,7 @@ class LocalMessageReader(PipesMessageReader):
             try:
                 with open(self.messages_path, "r") as f:
                     break
-            except IOError:
+            except OSError:
                 if time.time() > deadline:
                     logger.warning(f"Messages file not readable: {self.messages_path}")
                     return
@@ -107,7 +109,7 @@ class LocalMessageReader(PipesMessageReader):
                         size = os.path.getsize(self.messages_path)
                         if pos > size:
                             pos = 0  # File was truncated
-                    except Exception:
+                    except OSError:
                         pass
 
                     if pos > 0:
@@ -137,12 +139,16 @@ class LocalMessageReader(PipesMessageReader):
                             # Ignore non-JSON lines
                             pass
                         except Exception as e:
-                            logger.warning(f"Error handling message: {e}")
+                            # Keep reading: one bad message must not end the stream.
+                            logger.warning(
+                                f"Error handling message: {e}", exc_info=True
+                            )
 
                     pos = f.tell()
 
             except Exception as e:
-                logger.warning(f"Error reading messages: {e}")
+                # The reader thread must survive anything and keep polling.
+                logger.warning(f"Error reading messages: {e}", exc_info=True)
 
             if tracker.maybe_flush(handler, force=self._stop.is_set()):
                 self._stop.set()
@@ -153,7 +159,7 @@ class LocalMessageReader(PipesMessageReader):
         tracker.maybe_flush(handler, force=True)
 
     @contextmanager
-    def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
+    def read_messages(self, handler) -> Generator[dict[str, Any], None, None]:
         """Context manager that tails messages file."""
         params = {
             PipesDefaultMessageWriter.FILE_PATH_KEY: self.messages_path,
@@ -193,7 +199,7 @@ class SSHMessageReader(PipesMessageReader):
         self,
         remote_path: str,
         ssh_config,
-        control_path: Optional[str] = None,
+        control_path: str | None = None,
         reconnect_interval: float = 2.0,
         max_reconnect_attempts: int = 10,
         ssh_pool: Optional["SSHConnectionPool"] = None,
@@ -220,22 +226,22 @@ class SSHMessageReader(PipesMessageReader):
         self.max_reconnect_interval = max_reconnect_interval
         self.healthy_session_seconds = healthy_session_seconds
         self.logger = get_dagster_logger()
-        self._proc: Optional[subprocess.Popen[str]] = None
-        self._pexpect_child: Optional[Any] = None
+        self._proc: subprocess.Popen[str] | None = None
+        self._pexpect_child: Any | None = None
         self._stop_flag = threading.Event()
-        self._reader_thread: Optional[threading.Thread] = None
+        self._reader_thread: threading.Thread | None = None
         self.total_messages = 0
         self._ssh_pool = ssh_pool
         self._fallback_next_line = 1
         self._ssh_next_line = 1
-        self._forwarded_lines: Dict[str, int] = {"stdout": 0, "stderr": 0}
-        self._stdio_messages: Dict[str, int] = {"stdout": 0, "stderr": 0}
-        self._stdio_bytes: Dict[str, int] = {"stdout": 0, "stderr": 0}
-        self._closed_message: Optional[Dict[str, Any]] = None
-        self._closed_exception: Optional[Dict[str, Any]] = None
+        self._forwarded_lines: dict[str, int] = {"stdout": 0, "stderr": 0}
+        self._stdio_messages: dict[str, int] = {"stdout": 0, "stderr": 0}
+        self._stdio_bytes: dict[str, int] = {"stdout": 0, "stderr": 0}
+        self._closed_message: dict[str, Any] | None = None
+        self._closed_exception: dict[str, Any] | None = None
 
     @property
-    def control_path(self) -> Optional[str]:
+    def control_path(self) -> str | None:
         """Current ControlMaster socket, tracking the pool when one is attached.
 
         The pool drops its socket when the master dies, and a reader still
@@ -248,7 +254,7 @@ class SSHMessageReader(PipesMessageReader):
         return self._control_path
 
     @contextmanager
-    def read_messages(self, handler) -> Iterator[dict]:
+    def read_messages(self, handler) -> Generator[dict, None, None]:
         """Context manager that tails remote messages file with auto-reconnect.
 
         Yields:
@@ -289,17 +295,17 @@ class SSHMessageReader(PipesMessageReader):
                 try:
                     self._proc.terminate()
                     self._proc.wait(timeout=5)
-                except Exception as e:
+                except (OSError, subprocess.SubprocessError) as e:
                     self.logger.debug(f"Error terminating tail process: {e}")
                     try:
                         self._proc.kill()
-                    except:  # noqa: E722
+                    except OSError:
                         pass
             if self._pexpect_child is not None:
                 try:
                     self._pexpect_child.close(force=True)
                 except Exception as e:  # pragma: no cover - best effort cleanup
-                    self.logger.debug(f"Error closing tail session: {e}")
+                    self.logger.debug(f"Error closing tail session: {e}", exc_info=True)
                 finally:
                     self._pexpect_child = None
 
@@ -340,11 +346,11 @@ class SSHMessageReader(PipesMessageReader):
         return self._closed_message is not None
 
     @property
-    def closed_message(self) -> Optional[Dict[str, Any]]:
+    def closed_message(self) -> dict[str, Any] | None:
         return self._closed_message
 
     @property
-    def closed_exception(self) -> Optional[Dict[str, Any]]:
+    def closed_exception(self) -> dict[str, Any] | None:
         return self._closed_exception
 
     def _record_protocol_message(self, message: Any) -> None:
@@ -574,11 +580,11 @@ class SSHMessageReader(PipesMessageReader):
                     self._stop_flag.set()
                     break
 
-            except Exception as e:
+            except Exception:
                 if self._stop_flag.is_set():
                     break
 
-                self.logger.error(f"Error in tail process: {e}", exc_info=True)
+                self.logger.exception("Error in tail process")
                 reconnect_count += 1
 
                 if reconnect_count >= self.max_reconnect_attempts:
@@ -632,7 +638,7 @@ class SSHMessageReader(PipesMessageReader):
                 output = self._ssh_pool.run(
                     f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
                 )
-            except Exception as exc:
+            except SSH_ERRORS as exc:
                 if not self._stop_flag.is_set():
                     self.logger.debug("Polling messages file failed: %s", exc)
                 break
@@ -696,7 +702,7 @@ class SSHMessageReader(PipesMessageReader):
 
         return True, reconnect_count, total_message_count, False
 
-    def _build_ssh_tail_command(self) -> Optional[list[str]]:
+    def _build_ssh_tail_command(self) -> list[str] | None:
         """Build SSH command to tail the remote messages file.
 
         Returns:
@@ -774,9 +780,9 @@ class SSHMessageReader(PipesMessageReader):
     def _requires_password_auth(self) -> bool:
         if self.ssh_config.uses_password_auth:
             return True
-        if self.ssh_config.jump_host and self.ssh_config.jump_host.uses_password_auth:
-            return True
-        return False
+        return bool(
+            self.ssh_config.jump_host and self.ssh_config.jump_host.uses_password_auth
+        )
 
     def _collect_passwords(self) -> list[str]:
         passwords: list[str] = []

@@ -18,13 +18,13 @@ module uses only the standard library and a lazily imported ``ray``.
 from __future__ import annotations
 
 import glob
-from importlib import import_module
 import os
 import socket
 import subprocess
 import sys
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
+from importlib import import_module
 
 DRAIN_REASON = "DRAIN_NODE_REASON_PREEMPTION"
 POLL_SECONDS = 2.0
@@ -32,7 +32,7 @@ MAX_CONNECT_DELAY_SECONDS = 30.0
 REGISTRATION_TIMEOUT_SECONDS = 300.0
 
 
-def read_head_job(path: str) -> Optional[str]:
+def read_head_job(path: str) -> str | None:
     """Return the job ID in the session's head pointer, if it names one."""
     try:
         with open(path, encoding="utf-8") as handle:
@@ -42,7 +42,7 @@ def read_head_job(path: str) -> Optional[str]:
     return value if value.isdigit() else None
 
 
-def read_drain_seconds(path: str) -> Optional[int]:
+def read_drain_seconds(path: str) -> int | None:
     """Return the requested drain window, or None while no drain is requested.
 
     The allocation pre-creates the file empty and writes the window in place,
@@ -123,7 +123,7 @@ def resolve_node_id(
     *,
     stop: Callable[[], bool] = lambda: False,
     timeout: float = REGISTRATION_TIMEOUT_SECONDS,
-) -> Optional[str]:
+) -> str | None:
     """Look up this node's Ray ID in the GCS node table.
 
     A short-lived driver connects only once the local raylet has created its
@@ -173,8 +173,10 @@ def request_node_drain(address: str, node_id: str, seconds: int) -> None:
         f"--address={address}",
         f"--node-id={node_id}",
         f"--reason={DRAIN_REASON}",
-        "--reason-message=Slurm worker allocation "
-        f"{os.environ.get('SLURM_JOB_ID', '')} is draining",
+        (
+            "--reason-message=Slurm worker allocation "
+            f"{os.environ.get('SLURM_JOB_ID', '')} is draining"
+        ),
         f"--deadline-remaining-seconds={seconds}",
     ]
     result = subprocess.run(
@@ -197,7 +199,7 @@ def monitor(
     node_ip: str = "",
     head_pointer: str = "",
     head_job: str = "",
-    resolve: Callable[..., Optional[str]] = resolve_node_id,
+    resolve: Callable[..., str | None] = resolve_node_id,
     drain: Callable[[str, str, int], None] = request_node_drain,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:

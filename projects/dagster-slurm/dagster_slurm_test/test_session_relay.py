@@ -17,35 +17,35 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import dagster as dg
+import dagster_slurm.resources.session as session_module
 import pytest
-
 from dagster_slurm import (
-    ComputeResource,
     BashLauncher,
+    ComputeResource,
     RayLauncher,
     SlurmAllocationEnded,
     SlurmRunAllocationConfig,
     SlurmSessionResource,
-    SlurmStepExecutionResult,
     SlurmStepDrained,
+    SlurmStepExecutionResult,
 )
+from dagster_slurm.config.runtime import RuntimeVariant
 from dagster_slurm.helpers.signals import build_pre_timeout_supervisor_script
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.launchers.base import ExecutionPlan
-from dagster_slurm.config.runtime import RuntimeVariant
-from dagster_slurm.resources.session import SlurmAllocation
-import dagster_slurm.resources.session as session_module
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
+from dagster_slurm.resources.session import SlurmAllocation
 from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
-from dagster_slurm_test.test_resources import (
-    LocalSlurmFakeSSHPool,
-    _mock_slurm_resource,
-    _render_allocation_script,
-)
+
 from dagster_slurm_test.test_env_caching import (
     FakePool,
     configure_client_for_local_run,
     make_context,
+)
+from dagster_slurm_test.test_resources import (
+    LocalSlurmFakeSSHPool,
+    _mock_slurm_resource,
+    _render_allocation_script,
 )
 
 
@@ -452,7 +452,7 @@ def test_promotion_refreshes_under_lock_and_preserves_successor_step_tags(
         object.__setattr__(
             session, "_context", SimpleNamespace(run=run, instance=instance)
         )
-        monkeypatch.setattr(session, "_session_lock", concurrent_promotion)
+        object.__setattr__(session, "_session_lock", concurrent_promotion)
         assert session.promote_successor().slurm_job_id == 701
         stored = instance.get_run_by_id("relay")
         assert stored is not None

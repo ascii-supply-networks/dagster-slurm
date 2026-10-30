@@ -24,7 +24,6 @@ To adapt for your project:
 2. Update BUILD_COMMANDS to define how to build each package
 3. All paths are relative to the workspace root (where pyproject.toml lives)
 """
-
 import argparse
 import os
 import platform
@@ -37,7 +36,6 @@ from pathlib import Path
 # ============================================================================
 # CONFIGURATION - Customize for your project structure
 # ============================================================================
-
 
 # Patterns for built artifacts to inject into the packed environment
 # Paths are relative to the workspace root (where pyproject.toml lives)
@@ -171,19 +169,11 @@ def _targets_requiring_build(base_dir: Path) -> list[BuildTarget]:
     return targets
 
 
-def _remove_artifacts(base_dir: Path, pattern: str) -> None:
-    for artifact in base_dir.glob(pattern):
-        if artifact.is_file():
-            print(f"Removing old artifact {artifact.relative_to(base_dir)}")
-            artifact.unlink()
-
-
 def _run_build(base_dir: Path, target: BuildTarget) -> None:
     build_dir = target.build_dir
     build_cmd = target.build_cmd
     build_path = base_dir / build_dir
-    _remove_artifacts(base_dir, target.pattern)
-    print(f"Building in {build_dir}:")
+    print(f"📦 Building in {build_dir}:")
     print(f"   $ {' '.join(build_cmd)}")
 
     build_process = subprocess.Popen(
@@ -214,9 +204,7 @@ def _run_build(base_dir: Path, target: BuildTarget) -> None:
 
 
 def main() -> int:  # noqa: C901
-    parser = argparse.ArgumentParser(
-        description="Pack a workload-specific pixi environment."
-    )
+    parser = argparse.ArgumentParser(description="Pack a workload-specific pixi environment.")
     parser.add_argument(
         "--env",
         default="packaged-cluster",
@@ -302,7 +290,7 @@ def main() -> int:  # noqa: C901
         print(f"   Environment: {args.env}")
         print(f"   Platform: {platform_value}")
         print(f"   Workspace: {base_dir}")
-        print(f"   Injecting {len(inject_args) // 2} artifacts")
+        print(f"   Injecting {len(inject_args)//2} artifacts")
 
     print("\n📦 Packing environment...")
     print(f"   $ {' '.join(cmd)}")
@@ -314,7 +302,7 @@ def main() -> int:  # noqa: C901
     # Stream output while capturing (tee-like behavior)
     # Use unbuffered output to see progress immediately
     env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
+    env['PYTHONUNBUFFERED'] = '1'
 
     process = subprocess.Popen(
         cmd,
@@ -327,13 +315,11 @@ def main() -> int:  # noqa: C901
 
     output_lines = []
     if process.stdout is not None:
-        for chunk in iter(
-            lambda: process.stdout.read(1) if process.stdout else b"", b""
-        ):
+        for chunk in iter(lambda: process.stdout.read(1) if process.stdout else b'', b''):
             if not chunk:
                 break
-            char = chunk.decode("utf-8", errors="replace")
-            print(char, end="")
+            char = chunk.decode('utf-8', errors='replace')
+            print(char, end='')
             sys.stdout.flush()
             output_lines.append(char)
 

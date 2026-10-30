@@ -6,7 +6,14 @@ LABEL org.opencontainers.image.source="https://github.com/giovtorres/slurm-docke
       org.label-schema.docker.cmd="docker-compose up -d" \
       maintainer="Georg Heiler"
 
+# Resolve every package from Rocky's primary CDN instead of the mirror list.
+# Mirrors sync at different times, and the dnf calls below can reach different
+# mirrors: an upgraded python3 from a current mirror then conflicts with an older
+# python3-devel from a lagging one.
 RUN set -ex \
+    && sed -i -e 's/^mirrorlist=/#mirrorlist=/' \
+              -e 's|^#baseurl=http://dl.rockylinux.org/|baseurl=https://dl.rockylinux.org/|' \
+              /etc/yum.repos.d/rocky*.repo \
     && yum makecache \
     && yum -y update \
     && yum -y install dnf-plugins-core \
@@ -85,7 +92,7 @@ EXPOSE 22
 
 RUN pip3 install Cython pytest
 
-ARG GOSU_VERSION=1.17
+ARG GOSU_VERSION=1.20
 ARG TARGETARCH
 
 RUN set -ex \
@@ -98,7 +105,7 @@ RUN set -ex \
     && chmod +x /usr/local/bin/gosu \
     && gosu nobody true
 
-ARG SLURM_TAG="slurm-25-11-2-1"
+ARG SLURM_TAG="slurm-25-11-8-1"
 
 RUN set -ex \
     && git clone -b ${SLURM_TAG} --single-branch --depth=1 https://github.com/SchedMD/slurm.git \
@@ -136,8 +143,8 @@ RUN set -ex \
     && chown -R submitter:submitter /data_and_logs \
     && /sbin/create-munge-key
 
-ARG PIXI_VERSION=0.73.0
-ARG PIXI_PACK_VERSION=0.7.10
+ARG PIXI_VERSION=0.83.0
+ARG PIXI_PACK_VERSION=0.7.11
 
 RUN set -ex \
     && case "${TARGETARCH}" in \

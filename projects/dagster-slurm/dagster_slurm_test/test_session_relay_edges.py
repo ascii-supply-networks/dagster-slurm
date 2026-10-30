@@ -13,22 +13,22 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import dagster as dg
+import dagster_slurm.resources.session as session_module
 import pytest
-
 from dagster_slurm import (
     BashLauncher,
+    SlurmAllocationEnded,
     SlurmRunAllocationConfig,
     SlurmSessionResource,
     SlurmStepDrained,
     SlurmStepExecutionResult,
-    SlurmAllocationEnded,
 )
 from dagster_slurm.helpers.message_readers import SSHMessageReader
 from dagster_slurm.helpers.signals import build_pre_timeout_supervisor_script
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
-from dagster_slurm.resources.session import SlurmAllocation
-import dagster_slurm.resources.session as session_module
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
+from dagster_slurm.resources.session import SlurmAllocation
+
 from dagster_slurm_test.test_env_caching import FakePool, configure_client_for_local_run
 from dagster_slurm_test.test_resources import _mock_slurm_resource
 from dagster_slurm_test.test_session_relay import RelayPool, make_session
@@ -131,7 +131,7 @@ def test_drained_pipes_preserves_final_results_and_logs(
         assert isinstance(results[0], dg.MaterializeResult)
         assert results[0].asset_key == dg.AssetKey("finished")
         assert results[0].metadata is not None
-        assert results[0].metadata["rows"] == dg.IntMetadataValue(217)
+        assert results[0].metadata["rows"] == dg.MetadataValue.int(217)
         return results[0]
 
     assert dg.materialize([finished]).success
@@ -205,7 +205,7 @@ def test_subclass_hooks_survive_submission_reattachment_and_promotion(
     assert restarted.allocation.config._require_ssh_pool() is pool
     assert restarted.allocation.config._context is context
     # Publishing tags isn't relevant for this resource context without an instance.
-    monkeypatch.setattr(restarted, "_publish_allocation_tags", lambda *a: None)
+    object.__setattr__(restarted, "_publish_allocation_tags", lambda *a: None)
     pool.states[701] = "RUNNING"
     promoted = restarted.promote_successor()
     assert isinstance(promoted, CustomAllocation)
@@ -392,7 +392,9 @@ def test_signal_before_workload_launch_skips_work(tmp_path):
         str(workload), "TERM@120", str(marker), registration_script="kill -TERM $$"
     )
     assert script is not None
-    result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+    result = subprocess.run(
+        ["bash", "-c", script], capture_output=True, timeout=5, check=False
+    )
     assert result.returncode == 0
     assert marker.read_text().strip() == "TERM"
     assert not started.exists()

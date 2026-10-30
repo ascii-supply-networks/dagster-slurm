@@ -9,13 +9,12 @@ from typing import Any, cast
 import pytest
 from dagster_slurm import (
     BashLauncher,
-    SSHConnectionResource,
     SlurmQueueConfig,
     SlurmResource,
+    SSHConnectionResource,
 )
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
-
 
 pytestmark = pytest.mark.needs_slurm_docker
 

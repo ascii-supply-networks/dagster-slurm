@@ -1,28 +1,22 @@
 """SSH connection pooling via ControlMaster."""
 
-import contextlib
 import os
 import shlex
 import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Pattern, Union, cast
+from re import Pattern
+from typing import TYPE_CHECKING, cast
 
 from dagster import get_dagster_logger
-from typing import TYPE_CHECKING
 
 from .ssh_control import control_persist_value, control_socket_path
 
 if TYPE_CHECKING:
     from ..resources.ssh import SSHConnectionResource
-
-#: OpenSSH's stderr when the master refuses a new session, typically because
-#: sshd's MaxSessions caps the sessions one connection can carry.
-_SESSION_REFUSED = "mux_client_request_session: session request failed"
-#: OpenSSH's stderr when no master answers on the control socket.
-_SOCKET_UNREACHABLE = "Control socket connect("
 
 #: ControlMaster was expected to work and did not. Actionable, and serious.
 MULTIPLEXING_FAILED_MESSAGE = (
@@ -40,6 +34,15 @@ MULTIPLEXING_UNSUPPORTED_MESSAGE = (
     "share a connection that may still need to answer a password prompt, so every "
     "command opens its own connection. HPC sites rate-limit that, so prefer "
     "key-based authentication where the site allows it."
+)
+
+#: What a failed remote command raises: ``RuntimeError`` for a non-zero exit or
+#: failed authentication, ``subprocess.SubprocessError`` for a timeout and
+#: ``OSError`` when the local ``ssh`` process cannot run.
+SSH_ERRORS: tuple[type[Exception], ...] = (
+    RuntimeError,
+    OSError,
+    subprocess.SubprocessError,
 )
 
 
@@ -65,18 +68,14 @@ class SSHConnectionPool:
     #: Minimum seconds between two ``ssh -O check`` probes of the master.
     MASTER_CHECK_INTERVAL_SECONDS = 15.0
 
-    #: Waits before retrying a session the master refused. Sessions free up as
-    #: other commands on the shared connection finish.
-    SESSION_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 15.0)
-
     def __init__(self, ssh_config: "SSHConnectionResource"):
         self.config = ssh_config
         self.logger = get_dagster_logger()
-        self.control_path: Optional[str] = self._prepare_control_path()
+        self.control_path: str | None = self._prepare_control_path()
         self._master_started = False
         self._owns_master = False
         self._fallback_mode = False
-        self._fallback_reason: Optional[str] = None
+        self._fallback_reason: str | None = None
         self._lock = threading.RLock()
         self._depth = 0
         self._last_master_check = 0.0
@@ -84,7 +83,7 @@ class SSHConnectionPool:
         #: Optional (level, message) sink. When unset the pool logs the state
         #: itself, so every caller - sensors, session and hetjob setup included
         #: - reports it without having to remember to.
-        self.reporter: Optional[Callable[[str, str], None]] = None
+        self.reporter: Callable[[str, str], None] | None = None
 
     def _collect_passwords(self) -> list[str]:
         passwords: list[str] = []
@@ -94,7 +93,7 @@ class SSHConnectionPool:
             passwords.append(self.config.password)
         return passwords
 
-    def _prepare_control_path(self) -> Optional[str]:
+    def _prepare_control_path(self) -> str | None:
         """Return the shared ControlMaster socket path, or None when unusable."""
         if not self.config.supports_multiplexing:
             return None
@@ -146,52 +145,15 @@ class SSHConnectionPool:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
-        except Exception:  # pragma: no cover - best effort probe
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover
             return False
 
         return completed.returncode == 0
 
-    @contextlib.contextmanager
-    def _spawn_lock(self) -> Iterator[None]:
-        """Serialise master startup across every process sharing the socket.
-
-        Two steps that both find no master would otherwise both run ``ssh -M``.
-        The loser cannot bind the socket, and OpenSSH keeps it open as a plain
-        session that nothing ever closes.
-        """
-        if os.name != "posix":  # no fcntl, and Windows OpenSSH has no ControlMaster
-            yield
-            return
-        import fcntl
-
-        with open(f"{self.control_path}.lock", "w") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            yield
-
-    def _remove_stale_socket(self) -> None:
-        """Delete a control socket that no master answers on.
-
-        OpenSSH clears such a socket itself only in ``ControlMaster=auto`` mode.
-        The pool uses ``-M`` and ``ControlMaster=no``, so a master that died
-        uncleanly would otherwise stop every later ``ssh -M`` from binding.
-        """
-        if self.control_path and os.path.lexists(self.control_path):
-            self.logger.info("Removing stale SSH control socket %s", self.control_path)
-            Path(self.control_path).unlink(missing_ok=True)
-
     def _spawn_master(self) -> None:
         """Start a background ControlMaster, raising on failure."""
-        with self._spawn_lock():
-            # Another process may have started one while we waited for the lock.
-            if self._master_is_alive():
-                self._owns_master = False
-                return
-            self._remove_stale_socket()
-            self._owns_master = self._run_master_command()
-
-    def _run_master_command(self) -> bool:
-        """Run ``ssh -M``; return False when another process's master took over."""
         cmd = [
             "ssh",
             # Keepalives matter: without them an idle NAT or firewall silently
@@ -214,26 +176,22 @@ class SSHConnectionPool:
         cmd.extend(self.config.get_key_auth_opts())
         cmd.append(f"{self.config.user}@{self.config.host}")
 
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        completed = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, check=False
+        )
         if completed.returncode != 0:
-            # A one-off helper outside the lock may have started a master.
+            # Another process may have won the race for the same socket.
             if self._master_is_alive():
-                return False
+                self._owns_master = False
+                return
             stderr = completed.stderr
             raise RuntimeError(
                 "Failed to start SSH master: "
                 f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}"
                 f"{self.config.auth_error_hint(stderr)}"
             )
-        # OpenSSH exits 0 even when it could not bind the socket, and then
-        # stays connected as a plain session instead of a master. Retrying
-        # would leak one such session per health check.
-        if not self._master_is_alive():
-            raise RuntimeError(
-                f"ssh -M exited without a master listening on {self.control_path}: "
-                f"{completed.stderr.strip() or 'no error output'}"
-            )
-        return True
+
+        self._owns_master = True
 
     @property
     def multiplexing_unsupported(self) -> bool:
@@ -245,7 +203,7 @@ class SSHConnectionPool:
         """
         return self._fallback_unsupported
 
-    def describe_multiplexing(self) -> Optional[tuple[str, str]]:
+    def describe_multiplexing(self) -> tuple[str, str] | None:
         """Return (log level, message) describing a degraded state, if any."""
         if not self._fallback_mode:
             return None
@@ -272,8 +230,9 @@ class SSHConnectionPool:
             try:
                 self.reporter(level, message)
                 return
-            except Exception as exc:  # pragma: no cover - reporting must not fail
-                self.logger.debug(f"Multiplexing reporter failed: {exc}")
+            except Exception as exc:  # pragma: no cover
+                # The reporter is caller code; reporting must not fail the pool.
+                self.logger.debug(f"Multiplexing reporter failed: {exc}", exc_info=True)
         if level == "error":
             self.logger.error(message)
         else:
@@ -316,7 +275,7 @@ class SSHConnectionPool:
 
         try:
             self._spawn_master()
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self._enter_fallback(str(exc))
             return
 
@@ -351,7 +310,7 @@ class SSHConnectionPool:
         )
         try:
             self._spawn_master()
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self._enter_fallback(
                 f"ControlMaster died mid-run and could not be restarted: {exc}"
             )
@@ -408,13 +367,13 @@ class SSHConnectionPool:
             prompt_timeout = float(max(30, min(effective_timeout, 180)))
             stdout_chunks: list[str] = []
 
-            ExpectPattern = Union[
-                Pattern[str],
-                Pattern[bytes],
-                bytes,
-                str,
-                type[pexpect.EOF | pexpect.TIMEOUT],
-            ]
+            ExpectPattern = (
+                Pattern[str]
+                | Pattern[bytes]
+                | bytes
+                | str
+                | type[pexpect.EOF | pexpect.TIMEOUT]
+            )
             prompts = cast(
                 list[ExpectPattern],
                 [
@@ -490,9 +449,10 @@ class SSHConnectionPool:
                     ],
                     capture_output=True,
                     timeout=5,
+                    check=False,
                 )
                 self.logger.debug("SSH ControlMaster closed")
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError) as e:
                 self.logger.warning(f"Error closing SSH master: {e}")
             finally:
                 self._master_started = False
@@ -513,7 +473,7 @@ class SSHConnectionPool:
             if self._should_close_master():
                 self.close_master()
 
-    def run(self, cmd: str, timeout: Optional[int] = None) -> str:
+    def run(self, cmd: str, timeout: int | None = None) -> str:
         """Run command using pooled connection.
 
         Args:
@@ -531,6 +491,8 @@ class SSHConnectionPool:
             if not self._master_started and not self._fallback_mode:
                 raise RuntimeError("SSH pool not started - use context manager")
 
+            self._ensure_master_alive()
+
             # Wrap in clean shell
             remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
             if self.config.post_login_command:
@@ -540,120 +502,91 @@ class SSHConnectionPool:
                 else:
                     remote_cmd = f"{template} && {remote_cmd}"
 
-            returncode, stdout, stderr = self._run_pooled(
-                lambda: self._build_ssh_command(remote_cmd), timeout
+            needs_tty = self.config.requires_tty
+
+            if self._master_started and not self._fallback_mode:
+                ssh_cmd = [
+                    "ssh",
+                    *self.config.get_common_ssh_opts(),
+                    "-p",
+                    str(self.config.port),
+                    *self._multiplexing_opts(),
+                ]
+                ssh_cmd.extend(self.config.get_key_auth_opts())
+                if needs_tty:
+                    ssh_cmd.append("-tt")
+                ssh_cmd.extend(self.config.get_proxy_command_opts())
+                ssh_cmd.extend(
+                    [
+                        f"{self.config.user}@{self.config.host}",
+                        remote_cmd,
+                    ]
+                )
+            else:
+                ssh_cmd = [
+                    "ssh",
+                    *self.config.get_common_ssh_opts(),
+                    "-p",
+                    str(self.config.port),
+                ]
+                ssh_cmd.extend(self.config.get_auth_opts())
+                if needs_tty:
+                    ssh_cmd.append("-tt")
+                ssh_cmd.extend(self.config.get_proxy_command_opts())
+                ssh_cmd.extend(
+                    [
+                        f"{self.config.user}@{self.config.host}",
+                        remote_cmd,
+                    ]
+                )
+
+            self.logger.debug(
+                "Executing SSH command: %s",
+                " ".join(shlex.quote(part) for part in ssh_cmd),
             )
+
+            if self._master_started and not self._fallback_mode:
+                result = subprocess.run(
+                    ssh_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+                returncode = result.returncode
+                stdout = result.stdout
+                stderr = result.stderr
+            else:
+                if self.config.uses_password_auth or (
+                    self.config.jump_host and self.config.jump_host.uses_password_auth
+                ):
+                    effective_timeout = timeout if timeout is not None else 300
+                    result = self._run_with_password(
+                        ssh_cmd, self._collect_passwords(), timeout=effective_timeout
+                    )
+                    returncode = result.returncode
+                    stdout = result.stdout
+                    stderr = result.stderr
+                else:
+                    result = subprocess.run(
+                        ssh_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                    )
+                    returncode = result.returncode
+                    stdout = result.stdout
+                    stderr = result.stderr
+
             if returncode != 0:
                 raise RuntimeError(
                     f"SSH command failed (exit {returncode}): {cmd}\n"
                     f"stdout: {stdout}\n"
-                    f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}"
-                    f"{self.config.auth_error_hint(stderr)}{self._session_limit_hint(stderr)}"
+                    f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
                 )
 
             return stdout
-
-    def _run_pooled(
-        self, build_cmd: Callable[[], list[str]], timeout: Optional[int]
-    ) -> tuple[int, str, str]:
-        """Run a command, retrying failures that never reached the host.
-
-        The command is rebuilt per attempt: restarting a dead master can drop
-        the pool into fallback mode, which needs different options.
-        """
-        attempt = 0
-        while True:
-            self._ensure_master_alive()
-            cmd = build_cmd()
-            self.logger.debug(
-                "Executing %s command: %s",
-                cmd[0].upper(),
-                " ".join(shlex.quote(part) for part in cmd),
-            )
-            returncode, stdout, stderr = self._execute(cmd, timeout)
-            if returncode == 0 or not self._retry_after(stderr, attempt):
-                return returncode, stdout, stderr
-            attempt += 1
-
-    def _build_ssh_command(self, remote_cmd: str) -> list[str]:
-        if self.multiplexing_active:
-            ssh_cmd = [
-                "ssh",
-                *self.config.get_common_ssh_opts(),
-                "-p",
-                str(self.config.port),
-                *self._multiplexing_opts(),
-                *self.config.get_key_auth_opts(),
-            ]
-        else:
-            ssh_cmd = [
-                "ssh",
-                *self.config.get_common_ssh_opts(),
-                "-p",
-                str(self.config.port),
-                *self.config.get_auth_opts(),
-            ]
-        if self.config.requires_tty:
-            ssh_cmd.append("-tt")
-        ssh_cmd.extend(self.config.get_proxy_command_opts())
-        ssh_cmd.extend([f"{self.config.user}@{self.config.host}", remote_cmd])
-        return ssh_cmd
-
-    def _execute(self, cmd: list[str], timeout: Optional[int]) -> tuple[int, str, str]:
-        """Run an ssh/scp command, answering password prompts when needed."""
-        if not self.multiplexing_active and (
-            self.config.uses_password_auth
-            or (self.config.jump_host and self.config.jump_host.uses_password_auth)
-        ):
-            result = self._run_with_password(
-                cmd,
-                self._collect_passwords(),
-                timeout=timeout if timeout is not None else 300,
-            )
-        else:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout
-            )
-        return result.returncode, result.stdout, result.stderr
-
-    def _retry_after(self, stderr: str, attempt: int) -> bool:
-        """Whether a failed pooled command should be retried, after waiting.
-
-        Pooled commands carry ``ProxyCommand=false``, so a refused or dead
-        multiplexed session fails locally instead of opening a new connection.
-        Both failures happen before the command reaches the host, so a retry
-        cannot run it twice.
-        """
-        if not self.multiplexing_active:
-            return False
-        if _SESSION_REFUSED in stderr:
-            if attempt >= len(self.SESSION_RETRY_DELAYS_SECONDS):
-                return False
-            delay = self.SESSION_RETRY_DELAYS_SECONDS[attempt]
-            self.logger.warning(
-                "SSH master for %s refused a new session (sshd MaxSessions); "
-                "retrying in %.0fs.",
-                self.config.host,
-                delay,
-            )
-            time.sleep(delay)
-            return True
-        if _SOCKET_UNREACHABLE in stderr and attempt == 0:
-            self._ensure_master_alive(force=True)
-            return True
-        return False
-
-    @staticmethod
-    def _session_limit_hint(stderr: str) -> str:
-        if _SESSION_REFUSED not in stderr:
-            return ""
-        return (
-            "\nHint: the login node kept refusing new sessions on the shared SSH "
-            "connection. sshd's MaxSessions (10 by default) caps the sessions one "
-            "connection can carry, and every concurrent Slurm run holds some of "
-            "them. Run fewer of them at once, e.g. with Dagster's "
-            "max_concurrent_runs or a tag concurrency limit."
-        )
 
     def write_file(self, content: str, remote_path: str):
         """Write content to remote file via heredoc."""
@@ -683,34 +616,71 @@ class SSHConnectionPool:
         remote_dir = str(Path(remote_path).parent)
         self.run(f"mkdir -p {shlex.quote(remote_dir)}")
 
+        # Build SCP command
         with self._lock:
-            returncode, stdout, stderr = self._run_pooled(
-                lambda: self._build_scp_command(local_path, remote_path), None
+            self._ensure_master_alive()
+
+            if self._master_started and not self._fallback_mode:
+                scp_cmd = [
+                    "scp",
+                    *self.config.get_common_ssh_opts(),
+                    "-C",  # Enable compression (critical for large files!)
+                    "-P",
+                    str(self.config.port),
+                    *self._multiplexing_opts(),
+                ]
+                scp_cmd.extend(self.config.get_key_auth_opts())
+            else:
+                scp_cmd = [
+                    "scp",
+                    *self.config.get_common_ssh_opts(),
+                    "-C",  # Enable compression (critical for large files!)
+                    "-P",
+                    str(self.config.port),
+                ]
+                scp_cmd.extend(self.config.get_auth_opts())
+
+            scp_cmd.extend(self.config.get_proxy_command_opts())
+            scp_cmd.extend(
+                [
+                    local_path,
+                    f"{self.config.user}@{self.config.host}:{remote_path}",
+                ]
             )
+
+            self.logger.debug(
+                "Executing SCP command: %s",
+                " ".join(shlex.quote(part) for part in scp_cmd),
+            )
+
+            if self._master_started and not self._fallback_mode:
+                proc = subprocess.run(
+                    scp_cmd, capture_output=True, text=True, check=False
+                )
+                returncode = proc.returncode
+                stdout = proc.stdout
+                stderr = proc.stderr
+            else:
+                if self.config.uses_password_auth or (
+                    self.config.jump_host and self.config.jump_host.uses_password_auth
+                ):
+                    result = self._run_with_password(
+                        scp_cmd, self._collect_passwords(), timeout=300
+                    )
+                    returncode = result.returncode
+                    stdout = result.stdout
+                    stderr = result.stderr
+                else:
+                    proc = subprocess.run(
+                        scp_cmd, capture_output=True, text=True, check=False
+                    )
+                    returncode = proc.returncode
+                    stdout = proc.stdout
+                    stderr = proc.stderr
 
         if returncode != 0:
             raise RuntimeError(
                 f"SCP upload failed: {local_path} -> {remote_path}\n"
                 f"stdout: {stdout}\n"
-                f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}"
-                f"{self.config.auth_error_hint(stderr)}{self._session_limit_hint(stderr)}"
+                f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
             )
-
-    def _build_scp_command(self, local_path: str, remote_path: str) -> list[str]:
-        scp_cmd = [
-            "scp",
-            *self.config.get_common_ssh_opts(),
-            "-C",  # Enable compression (critical for large files!)
-            "-P",
-            str(self.config.port),
-        ]
-        if self.multiplexing_active:
-            scp_cmd.extend(self._multiplexing_opts())
-            scp_cmd.extend(self.config.get_key_auth_opts())
-        else:
-            scp_cmd.extend(self.config.get_auth_opts())
-        scp_cmd.extend(self.config.get_proxy_command_opts())
-        scp_cmd.extend(
-            [local_path, f"{self.config.user}@{self.config.host}:{remote_path}"]
-        )
-        return scp_cmd

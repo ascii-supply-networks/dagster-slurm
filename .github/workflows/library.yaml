@@ -49,7 +49,6 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
-  SLURM_VERSION: 25-11-2-1
 
 jobs:
   changes:
@@ -59,10 +58,9 @@ jobs:
       contents: read
     outputs:
       run-expensive: ${{ steps.detect.outputs.run-expensive }}
-      build-slurm-image: ${{ steps.detect.outputs.build-slurm-image }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -72,19 +70,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "build-slurm-image=false" >> "$GITHUB_OUTPUT"
-
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            if [[ "${{ github.event_name }}" == "push" ]]; then
-              git diff --name-only \
-                "${{ github.event.before }}" \
-                "${{ github.sha }}" > changed-files.txt
-              cat changed-files.txt
-
-              if grep -Eq '^(services/slurm/|docker-compose\.yml$)' changed-files.txt; then
-                echo "build-slurm-image=true" >> "$GITHUB_OUTPUT"
-              fi
-            fi
             echo "run-expensive=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -99,10 +85,6 @@ jobs:
             echo "run-expensive=true" >> "$GITHUB_OUTPUT"
           else
             echo "run-expensive=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if grep -Eq '^(services/slurm/|docker-compose\.yml$)' changed-files.txt; then
-            echo "build-slurm-image=true" >> "$GITHUB_OUTPUT"
           fi
 
   validate-pr:
@@ -141,14 +123,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     env:
       DEVENV_PYTHON_VERSION: ${{ matrix.python-version }}
       PIXI_ENVIRONMENT_NAME: build
       PIXI_PROJECT_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup CI tools
         uses: ./.github/actions/setup-devenv
@@ -163,19 +145,25 @@ jobs:
         run: uv run --frozen --no-sync --managed-python --python "$DEVENV_PYTHON_VERSION" pytest -m 'not (needs_slurm_docker or slow)' projects
 
   validation:
-    name: Validate library
+    name: Validate library (Slurm ${{ matrix.slurm }})
     runs-on: ubuntu-latest
     needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        # Production clusters upgrade slowly: test the 25.11 line next to the
+        # newest release. Keep in sync with slurm-image-builder.yml.
+        slurm: ["25-11-8-1", "26-05-5-1"]
     # runs-on: paid-ci-runner-more-disk
     permissions:
       contents: read
       pull-requests: read
       packages: read
     env:
-      DEVENV_PYTHON_VERSION: "3.10"
+      DEVENV_PYTHON_VERSION: "3.11"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup CI tools
         uses: ./.github/actions/setup-devenv
@@ -189,7 +177,7 @@ jobs:
 
       - name: Log into registry ${{ env.REGISTRY }}
         if: needs.changes.outputs.run-expensive == 'true'
-        uses: docker/login-action@v4.4.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -198,16 +186,21 @@ jobs:
       - name: Start SLURM Cluster
         if: needs.changes.outputs.run-expensive == 'true'
         env:
-          IMAGE_TAG: ${{ env.SLURM_VERSION }}
-          BUILD_SLURM_IMAGE: ${{ needs.changes.outputs.build-slurm-image }}
+          SLURM_TAG: slurm-${{ matrix.slurm }}
         run: |
+          # Same content-addressed tag as slurm-image-builder.yml: pull the image
+          # when it was already built for these sources, otherwise build it here.
+          IMAGE_TAG="${{ matrix.slurm }}-$(git rev-parse --short=12 HEAD:services/slurm)-$(dpkg --print-architecture)"
+          export IMAGE_TAG
           compose_files=(-f docker-compose.yml)
           compose_args=()
 
-          if [[ "$BUILD_SLURM_IMAGE" == "true" ]]; then
-            compose_args+=(--build)
-          else
+          if docker manifest inspect "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "Pulling the prebuilt image ${IMAGE_TAG}"
             compose_files+=(-f docker-compose.ci.yml)
+          else
+            echo "No image ${IMAGE_TAG} yet; building it"
+            compose_args+=(--build)
           fi
 
           docker compose \
@@ -380,7 +373,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -433,13 +426,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@v3.3.0
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.generate_token.outputs.token }}
@@ -511,7 +504,7 @@ jobs:
 
       - name: Upload distribution artifacts
         if: steps.current_main.outputs.is_current == 'true'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: prerelease-python-package-distributions
           path: dist/*
@@ -519,7 +512,7 @@ jobs:
 
       - name: Publish pre-release to PyPI (Trusted Publishing)
         if: steps.current_main.outputs.is_current == 'true'
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: dist
           repository-url: https://test.pypi.org/legacy/
@@ -543,13 +536,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@v3.3.0
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.generate_token.outputs.token }}
@@ -681,7 +674,7 @@ jobs:
               --notes-file -
 
       - name: Upload distribution artifacts
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-python-package-distributions
           path: dist/*
@@ -689,7 +682,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: github.event.inputs.release_type != 'prerelease'
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: dist
           skip-existing: true
