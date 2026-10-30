@@ -131,7 +131,7 @@ def test_drained_pipes_preserves_final_results_and_logs(
         assert isinstance(results[0], dg.MaterializeResult)
         assert results[0].asset_key == dg.AssetKey("finished")
         assert results[0].metadata is not None
-        assert results[0].metadata["rows"] == dg.IntMetadataValue(217)
+        assert results[0].metadata["rows"] == dg.MetadataValue.int(217)
         return results[0]
 
     assert dg.materialize([finished]).success
@@ -205,7 +205,7 @@ def test_subclass_hooks_survive_submission_reattachment_and_promotion(
     assert restarted.allocation.config._require_ssh_pool() is pool
     assert restarted.allocation.config._context is context
     # Publishing tags isn't relevant for this resource context without an instance.
-    monkeypatch.setattr(restarted, "_publish_allocation_tags", lambda *a: None)
+    object.__setattr__(restarted, "_publish_allocation_tags", lambda *a: None)
     pool.states[701] = "RUNNING"
     promoted = restarted.promote_successor()
     assert isinstance(promoted, CustomAllocation)

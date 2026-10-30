@@ -4,7 +4,7 @@
 }:
 stdenvNoCC.mkDerivation rec {
   pname = "pixi";
-  version = "0.73.0";
+  version = "0.83.0";
 
   platform =
     {
@@ -20,10 +20,10 @@ stdenvNoCC.mkDerivation rec {
     url = "https://github.com/prefix-dev/pixi/releases/download/v${version}/pixi-${platform}";
     hash =
       {
-        aarch64-darwin = "sha256-Y/M1Bg0L2ivGfKSHr75GD8IP/Sjo6LSHiEWiBquXLIY=";
-        x86_64-darwin = "sha256-KAB29x8Y50kgZHE6d55UfqDHM3bI8U3DoLSagPN40dI=";
-        aarch64-linux = "sha256-U54ixHKR//XpML/DZUtail7oCefsGp91aD2GYL3NQZE=";
-        x86_64-linux = "sha256-cSejk9oR/3x2sfvEWHMeJKuBBcPdtBVFnNhf2Ep15xU=";
+        aarch64-darwin = "sha256-U0bMNGW2NMGpAfvlGy7L9qZEQgMW6UGsDuYDLF5IwZE=";
+        x86_64-darwin = "sha256-s3jbc6wrKjXeUv5O6IharqWBLQsjKquRVK9NAGM58SI=";
+        aarch64-linux = "sha256-X7y7P+/ylNpNKF1y7+t261mP2PyUodkoPUTGLaudZAs=";
+        x86_64-linux = "sha256-UFcUUelvSoLPZ1zYO6r2b/+bcY8KrxU5ALn69MKb1AE=";
       }
       .${stdenvNoCC.hostPlatform.system}
         or (throw "Unsupported Pixi platform: ${stdenvNoCC.hostPlatform.system}");

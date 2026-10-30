@@ -452,7 +452,7 @@ def test_promotion_refreshes_under_lock_and_preserves_successor_step_tags(
         object.__setattr__(
             session, "_context", SimpleNamespace(run=run, instance=instance)
         )
-        monkeypatch.setattr(session, "_session_lock", concurrent_promotion)
+        object.__setattr__(session, "_session_lock", concurrent_promotion)
         assert session.promote_successor().slurm_job_id == 701
         stored = instance.get_run_by_id("relay")
         assert stored is not None

@@ -5,7 +5,7 @@
 }:
 stdenvNoCC.mkDerivation rec {
   pname = "bun";
-  version = "1.3.14";
+  version = "1.4.4";
 
   platform =
     {
@@ -21,10 +21,10 @@ stdenvNoCC.mkDerivation rec {
     url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/${platform}.zip";
     hash =
       {
-        aarch64-darwin = "sha256-2LliIYKK1vl6x6wKt+lYcjQa92MAHogD6CZ2UsJlJiA=";
-        x86_64-darwin = "sha256-QYPfM3RiPlurMVxUfPoJdFM81FfYa3O2OfeoeXTNZjM=";
-        aarch64-linux = "sha256-on/7Y6gxA3WDbg1vZorhf6jY0YuIw3yCHGUzGXOhmjs=";
-        x86_64-linux = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
+        aarch64-darwin = "sha256-wkDX8My5DCY6hJ/NsJt+5iYw2SE0jtaq/ahrnVd7xRA=";
+        x86_64-darwin = "sha256-UKNJH3Orwv6BZzFxqFdi07wswWgMzsrdmD3pmt93l34=";
+        aarch64-linux = "sha256-uqa7NvUdblhWHgK76oJQOKnfRU9nPW13bou/hvjHhQ4=";
+        x86_64-linux = "sha256-v4zL+ysLgBWeD5ptFcVTF63YB3U028YTCj7bUvzLOVw=";
       }
       .${stdenvNoCC.hostPlatform.system}
         or (throw "Unsupported Bun platform: ${stdenvNoCC.hostPlatform.system}");

@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Dict, Generator, Optional
 
 import shlex
 
@@ -153,7 +153,7 @@ class LocalMessageReader(PipesMessageReader):
         tracker.maybe_flush(handler, force=True)
 
     @contextmanager
-    def read_messages(self, handler) -> Iterator[Dict[str, Any]]:
+    def read_messages(self, handler) -> Generator[Dict[str, Any], None, None]:
         """Context manager that tails messages file."""
         params = {
             PipesDefaultMessageWriter.FILE_PATH_KEY: self.messages_path,
@@ -248,7 +248,7 @@ class SSHMessageReader(PipesMessageReader):
         return self._control_path
 
     @contextmanager
-    def read_messages(self, handler) -> Iterator[dict]:
+    def read_messages(self, handler) -> Generator[dict, None, None]:
         """Context manager that tails remote messages file with auto-reconnect.
 
         Yields:

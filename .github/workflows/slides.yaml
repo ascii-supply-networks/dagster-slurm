@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup CI tools
         uses: ./.github/actions/setup-devenv
@@ -45,21 +45,21 @@ jobs:
       - run: pixi run -e docs --frozen slides-export-pdf-scipy2026
 
       - name: Upload hackathon PDF
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: slides-hackathon
           path: slides/slides-export.pdf
           retention-days: 5
 
       - name: Upload multimodal PDF
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: slides-multimodal
           path: slides/slides_multimodal-export.pdf
           retention-days: 5
 
       - name: Upload SciPy 2026 PDF
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: slides-scipy2026
           path: slides/slides_scipy2026-export.pdf

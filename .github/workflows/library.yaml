@@ -62,7 +62,7 @@ jobs:
       build-slurm-image: ${{ steps.detect.outputs.build-slurm-image }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -141,14 +141,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     env:
       DEVENV_PYTHON_VERSION: ${{ matrix.python-version }}
       PIXI_ENVIRONMENT_NAME: build
       PIXI_PROJECT_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup CI tools
         uses: ./.github/actions/setup-devenv
@@ -172,10 +172,10 @@ jobs:
       pull-requests: read
       packages: read
     env:
-      DEVENV_PYTHON_VERSION: "3.10"
+      DEVENV_PYTHON_VERSION: "3.11"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup CI tools
         uses: ./.github/actions/setup-devenv
@@ -189,7 +189,7 @@ jobs:
 
       - name: Log into registry ${{ env.REGISTRY }}
         if: needs.changes.outputs.run-expensive == 'true'
-        uses: docker/login-action@v4.4.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -380,7 +380,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
@@ -433,13 +433,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@v3.3.0
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.generate_token.outputs.token }}
@@ -511,7 +511,7 @@ jobs:
 
       - name: Upload distribution artifacts
         if: steps.current_main.outputs.is_current == 'true'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: prerelease-python-package-distributions
           path: dist/*
@@ -519,7 +519,7 @@ jobs:
 
       - name: Publish pre-release to PyPI (Trusted Publishing)
         if: steps.current_main.outputs.is_current == 'true'
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: dist
           repository-url: https://test.pypi.org/legacy/
@@ -543,13 +543,13 @@ jobs:
     steps:
       - name: Generate GitHub App Token
         id: generate_token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@v3.3.0
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.generate_token.outputs.token }}
@@ -681,7 +681,7 @@ jobs:
               --notes-file -
 
       - name: Upload distribution artifacts
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-python-package-distributions
           path: dist/*
@@ -689,7 +689,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: github.event.inputs.release_type != 'prerelease'
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: dist
           skip-existing: true

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import threading
 import time
 import uuid
@@ -34,7 +35,6 @@ from dagster._core.errors import DagsterPipesExecutionError
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 from dagster._utils.interrupts import _received_interrupt
 
-from dagster_slurm._compat import tomllib
 
 from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader

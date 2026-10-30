@@ -85,7 +85,7 @@ EXPOSE 22
 
 RUN pip3 install Cython pytest
 
-ARG GOSU_VERSION=1.17
+ARG GOSU_VERSION=1.20
 ARG TARGETARCH
 
 RUN set -ex \
@@ -136,8 +136,8 @@ RUN set -ex \
     && chown -R submitter:submitter /data_and_logs \
     && /sbin/create-munge-key
 
-ARG PIXI_VERSION=0.73.0
-ARG PIXI_PACK_VERSION=0.7.10
+ARG PIXI_VERSION=0.83.0
+ARG PIXI_PACK_VERSION=0.7.11
 
 RUN set -ex \
     && case "${TARGETARCH}" in \
