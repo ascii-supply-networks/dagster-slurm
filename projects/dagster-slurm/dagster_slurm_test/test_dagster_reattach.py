@@ -206,11 +206,6 @@ def test_sigterm_during_monitoring_continues_polling():
             "_prepare_environment",
             return_value=("/activate.sh", "/usr/bin/python"),
         ),
-        patch.object(
-            SlurmPipesClient,
-            "_build_tail_command",
-            return_value=None,
-        ),
         patch(
             "dagster_slurm.pipes_clients.slurm_pipes_client.open_pipes_session"
         ) as mock_pipes,
@@ -527,11 +522,6 @@ def test_tags_stored_after_sbatch():
             ),
             patch.object(
                 SlurmPipesClient,
-                "_build_tail_command",
-                return_value=None,
-            ),
-            patch.object(
-                SlurmPipesClient,
                 "_find_reattachable_job",
                 return_value=None,
             ),
@@ -617,11 +607,6 @@ def test_reattach_after_failed_run():
             ),
             patch.object(
                 SlurmPipesClient,
-                "_build_tail_command",
-                return_value=None,
-            ),
-            patch.object(
-                SlurmPipesClient,
                 "_find_reattachable_job",
                 return_value=None,
             ),
@@ -667,11 +652,6 @@ def test_reattach_after_failed_run():
             patch(
                 "dagster_slurm.pipes_clients.slurm_pipes_client.SSHConnectionPool",
                 return_value=mock_pool_2,
-            ),
-            patch.object(
-                SlurmPipesClient,
-                "_build_tail_command",
-                return_value=None,
             ),
             patch.object(
                 SlurmPipesClient,
@@ -745,11 +725,6 @@ def test_reattach_skipped_when_job_completed():
             ),
             patch.object(
                 SlurmPipesClient,
-                "_build_tail_command",
-                return_value=None,
-            ),
-            patch.object(
-                SlurmPipesClient,
                 "_find_reattachable_job",
                 return_value={"job_id": "42", "run_dir": "/tmp/old"},
             ),
@@ -818,11 +793,6 @@ def test_exception_handler_preserves_tags_on_sigterm():
                 SlurmPipesClient,
                 "_prepare_environment",
                 return_value=("/activate.sh", "/usr/bin/python"),
-            ),
-            patch.object(
-                SlurmPipesClient,
-                "_build_tail_command",
-                return_value=None,
             ),
             patch.object(
                 SlurmPipesClient,
