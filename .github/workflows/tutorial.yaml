@@ -51,7 +51,7 @@ jobs:
     #       --health-retries 5
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup CI tools
         uses: ./.github/actions/setup-devenv
@@ -83,7 +83,7 @@ jobs:
 
       - name: Store Packed Environment as Artifact
         if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: packed-slurm-cluster-environment-${{ github.sha }}
           path: ./examples/environment.tar
