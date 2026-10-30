@@ -58,7 +58,6 @@ jobs:
       contents: read
     outputs:
       run-expensive: ${{ steps.detect.outputs.run-expensive }}
-      build-slurm-image: ${{ steps.detect.outputs.build-slurm-image }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
@@ -71,19 +70,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "build-slurm-image=false" >> "$GITHUB_OUTPUT"
-
           if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            if [[ "${{ github.event_name }}" == "push" ]]; then
-              git diff --name-only \
-                "${{ github.event.before }}" \
-                "${{ github.sha }}" > changed-files.txt
-              cat changed-files.txt
-
-              if grep -Eq '^(services/slurm/|docker-compose\.yml$)' changed-files.txt; then
-                echo "build-slurm-image=true" >> "$GITHUB_OUTPUT"
-              fi
-            fi
             echo "run-expensive=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -98,10 +85,6 @@ jobs:
             echo "run-expensive=true" >> "$GITHUB_OUTPUT"
           else
             echo "run-expensive=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if grep -Eq '^(services/slurm/|docker-compose\.yml$)' changed-files.txt; then
-            echo "build-slurm-image=true" >> "$GITHUB_OUTPUT"
           fi
 
   validate-pr:
@@ -203,17 +186,21 @@ jobs:
       - name: Start SLURM Cluster
         if: needs.changes.outputs.run-expensive == 'true'
         env:
-          IMAGE_TAG: ${{ matrix.slurm }}
           SLURM_TAG: slurm-${{ matrix.slurm }}
-          BUILD_SLURM_IMAGE: ${{ needs.changes.outputs.build-slurm-image }}
         run: |
+          # Same content-addressed tag as slurm-image-builder.yml: pull the image
+          # when it was already built for these sources, otherwise build it here.
+          IMAGE_TAG="${{ matrix.slurm }}-$(git rev-parse --short=12 HEAD:services/slurm)-$(dpkg --print-architecture)"
+          export IMAGE_TAG
           compose_files=(-f docker-compose.yml)
           compose_args=()
 
-          if [[ "$BUILD_SLURM_IMAGE" == "true" ]]; then
-            compose_args+=(--build)
-          else
+          if docker manifest inspect "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "Pulling the prebuilt image ${IMAGE_TAG}"
             compose_files+=(-f docker-compose.ci.yml)
+          else
+            echo "No image ${IMAGE_TAG} yet; building it"
+            compose_args+=(--build)
           fi
 
           docker compose \
