@@ -10,6 +10,7 @@ import shlex
 import re
 import threading
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace as dataclass_replace
 from enum import Enum
@@ -37,6 +38,18 @@ from ..launchers.ray import (
     RayPortConfig,
     _render_ray_port_assignments,
     _render_ray_process_cleanup,
+)
+from ..scaling import (
+    ENDED,
+    AllocationRole,
+    AllocationSnapshot,
+    ReconcileResult,
+    SbatchTestOnlyEstimator,
+    SessionSnapshot,
+    StartEstimate,
+    StartEstimator,
+    WorkerIntent,
+    parse_tres,
 )
 from ..resources.slurm import (
     SlurmResource,
@@ -82,7 +95,16 @@ _HEAD_ELECTION_RETRY_SECONDS = 5
 # A worker allocation that failed this often to host the head no longer leads.
 _LEADER_ATTEMPTS = 2
 # Metadata that follows the session from one head allocation to the next.
-_SESSION_STATE_KEYS = ("workers", "worker_template", "head_config")
+_SESSION_STATE_KEYS = (
+    "workers",
+    "worker_template",
+    "head_config",
+    "worker_submissions",
+)
+# `squeue --Format` fields, '|'-terminated; tres-alloc is the grant once running.
+_SQUEUE_FIELDS = "JobID:|,State:|,Reason:|,TimeLeft:|,tres-alloc:|,Comment:|"
+# Comment that ties a worker submission to its token until its job ID is recorded.
+_SUBMISSION_COMMENT_PREFIX = "dagster_slurm_submission:"
 
 
 def _validate_relay_options(
@@ -673,6 +695,7 @@ class SlurmSessionResource(ConfigurableResource):
     _heartbeat_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _heartbeat_thread: threading.Thread | None = PrivateAttr(default=None)
     _head_watch_thread: threading.Thread | None = PrivateAttr(default=None)
+    _start_estimator: SbatchTestOnlyEstimator | None = PrivateAttr(default=None)
 
     @property
     def logger(self) -> Any:
@@ -1032,106 +1055,20 @@ class SlurmSessionResource(ConfigurableResource):
         working_dir: str,
         wait_for_start: bool = True,
         body: list[str] | None = None,
+        sbatch_args: tuple[str, ...] = (),
     ) -> "SlurmAllocation":
         """Submit a fresh Slurm allocation. Caller must hold the remote lock.
 
         ``body`` replaces the default keep-alive tail of the batch script.
+        ``sbatch_args`` go on the command line and override the script's options.
         """
-
-        # Build allocation script
-        partition = self.partition or self.slurm.queue.partition
         script_lines = [
             "#!/bin/bash",
-            f"#SBATCH --job-name={allocation_id}",
-            f"#SBATCH --time={self.time_limit}",
-            "#SBATCH --output=allocation_%j.log",
+            *(
+                f"#SBATCH {directive}"
+                for directive in self._sbatch_directives(allocation_id)
+            ),
         ]
-        signal_before_timeout = self._effective_signal_before_timeout()
-        if signal_before_timeout:
-            script_lines.append(f"#SBATCH --signal=B:{signal_before_timeout}")
-        if self.time_min:
-            script_lines.append(f"#SBATCH --time-min={self.time_min}")
-        script_lines.extend(
-            f"#SBATCH {directive}" for directive in self.extra_sbatch_directives
-        )
-
-        if partition:
-            script_lines.append(f"#SBATCH --partition={partition}")
-
-        def _normalize_optional(value):
-            if value is None:
-                return None
-            if isinstance(value, str):
-                cleaned = value.strip()
-                return cleaned or None
-            return str(value)
-
-        nodelist = _normalize_optional(self.nodelist)
-        if nodelist:
-            script_lines.append(f"#SBATCH --nodelist={nodelist}")
-
-        exclude = _normalize_optional(self.exclude)
-        if exclude:
-            script_lines.append(f"#SBATCH --exclude={exclude}")
-
-        qos = _normalize_optional(self.qos) or _normalize_optional(
-            getattr(self.slurm.queue, "qos", None)
-        )
-        if qos:
-            script_lines.append(f"#SBATCH --qos={qos}")
-
-        account = _normalize_optional(self.account) or _normalize_optional(
-            getattr(self.slurm.queue, "account", None)
-        )
-        if account:
-            script_lines.append(f"#SBATCH --account={account}")
-
-        reservation = _normalize_optional(self.reservation) or _normalize_optional(
-            getattr(self.slurm.queue, "reservation", None)
-        )
-        if reservation:
-            script_lines.append(f"#SBATCH --reservation={reservation}")
-
-        constraint = _normalize_optional(self.constraint)
-        if constraint:
-            script_lines.append(f"#SBATCH --constraint={constraint}")
-
-        cpus_per_task = self.cpus_per_task or getattr(self.slurm.queue, "cpus", None)
-        if cpus_per_task:
-            script_lines.append(f"#SBATCH --cpus-per-task={cpus_per_task}")
-
-        mem = _normalize_optional(self.mem)
-        mem_per_cpu = _normalize_optional(self.mem_per_cpu)
-        # An explicit memory setting of either form beats the queue default.
-        if not mem and not mem_per_cpu:
-            mem = _normalize_optional(getattr(self.slurm.queue, "mem", None))
-            mem_per_cpu = _normalize_optional(
-                getattr(self.slurm.queue, "mem_per_cpu", None)
-            )
-        if mem:
-            script_lines.append(f"#SBATCH --mem={mem}")
-        elif mem_per_cpu:
-            script_lines.append(f"#SBATCH --mem-per-cpu={mem_per_cpu}")
-
-        gpus_per_node = (
-            self.gpus_per_node
-            if self.gpus_per_node is not None
-            else self.slurm.queue.gpus_per_node
-        )
-
-        final_num_nodes: Optional[int] = None
-        if self.num_nodes and self.num_nodes > 0:
-            final_num_nodes = self.num_nodes
-
-        if gpus_per_node and final_num_nodes == 1 and gpus_per_node == 1:
-            final_num_nodes = None
-
-        if final_num_nodes:
-            script_lines.append(f"#SBATCH --nodes={final_num_nodes}")
-
-        if gpus_per_node:
-            script_lines.append(f"#SBATCH --gres=gpu:{gpus_per_node}")
-
         quoted_working_dir = shlex.quote(working_dir)
         script_lines.extend(
             [
@@ -1162,7 +1099,13 @@ class SlurmSessionResource(ConfigurableResource):
         self._ssh_pool.write_file("\n".join(script_lines), script_path)  # type: ignore
         self._ssh_pool.run(f"chmod +x {shlex.quote(script_path)}")  # type: ignore
 
-        submit_cmd = f"sbatch -D {shlex.quote(working_dir)} {shlex.quote(script_path)}"
+        submit_cmd = " ".join(
+            [
+                "sbatch",
+                *(shlex.quote(arg) for arg in sbatch_args),
+                f"-D {shlex.quote(working_dir)} {shlex.quote(script_path)}",
+            ]
+        )
         output = self._ssh_pool.run(submit_cmd)  # type: ignore
 
         match = re.search(r"Submitted batch job (\d+)", output)
@@ -1190,6 +1133,100 @@ class SlurmSessionResource(ConfigurableResource):
                 allocation.cancel(self._require_ssh_pool())
                 raise
         return allocation
+
+    def _sbatch_directives(self, allocation_id: str) -> list[str]:
+        """The ``sbatch`` options of this allocation, one option per entry."""
+        partition = self.partition or self.slurm.queue.partition
+        directives = [
+            f"--job-name={allocation_id}",
+            f"--time={self.time_limit}",
+            "--output=allocation_%j.log",
+        ]
+        signal_before_timeout = self._effective_signal_before_timeout()
+        if signal_before_timeout:
+            directives.append(f"--signal=B:{signal_before_timeout}")
+        if self.time_min:
+            directives.append(f"--time-min={self.time_min}")
+        directives.extend(self.extra_sbatch_directives)
+
+        if partition:
+            directives.append(f"--partition={partition}")
+
+        def _normalize_optional(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                cleaned = value.strip()
+                return cleaned or None
+            return str(value)
+
+        nodelist = _normalize_optional(self.nodelist)
+        if nodelist:
+            directives.append(f"--nodelist={nodelist}")
+
+        exclude = _normalize_optional(self.exclude)
+        if exclude:
+            directives.append(f"--exclude={exclude}")
+
+        qos = _normalize_optional(self.qos) or _normalize_optional(
+            getattr(self.slurm.queue, "qos", None)
+        )
+        if qos:
+            directives.append(f"--qos={qos}")
+
+        account = _normalize_optional(self.account) or _normalize_optional(
+            getattr(self.slurm.queue, "account", None)
+        )
+        if account:
+            directives.append(f"--account={account}")
+
+        reservation = _normalize_optional(self.reservation) or _normalize_optional(
+            getattr(self.slurm.queue, "reservation", None)
+        )
+        if reservation:
+            directives.append(f"--reservation={reservation}")
+
+        constraint = _normalize_optional(self.constraint)
+        if constraint:
+            directives.append(f"--constraint={constraint}")
+
+        cpus_per_task = self.cpus_per_task or getattr(self.slurm.queue, "cpus", None)
+        if cpus_per_task:
+            directives.append(f"--cpus-per-task={cpus_per_task}")
+
+        mem = _normalize_optional(self.mem)
+        mem_per_cpu = _normalize_optional(self.mem_per_cpu)
+        # An explicit memory setting of either form beats the queue default.
+        if not mem and not mem_per_cpu:
+            mem = _normalize_optional(getattr(self.slurm.queue, "mem", None))
+            mem_per_cpu = _normalize_optional(
+                getattr(self.slurm.queue, "mem_per_cpu", None)
+            )
+        if mem:
+            directives.append(f"--mem={mem}")
+        elif mem_per_cpu:
+            directives.append(f"--mem-per-cpu={mem_per_cpu}")
+
+        gpus_per_node = (
+            self.gpus_per_node
+            if self.gpus_per_node is not None
+            else self.slurm.queue.gpus_per_node
+        )
+
+        final_num_nodes: Optional[int] = None
+        if self.num_nodes and self.num_nodes > 0:
+            final_num_nodes = self.num_nodes
+
+        if gpus_per_node and final_num_nodes == 1 and gpus_per_node == 1:
+            final_num_nodes = None
+
+        if final_num_nodes:
+            directives.append(f"--nodes={final_num_nodes}")
+
+        if gpus_per_node:
+            directives.append(f"--gres=gpu:{gpus_per_node}")
+
+        return directives
 
     def _render_allocation_drain_trap(self) -> str:
         signal_name = (self._effective_signal_before_timeout() or "TERM@1").split("@")[
@@ -1421,6 +1458,7 @@ echo "Ray workers left the cluster"
         )
         if record.get("ray_args") is not None:
             allocation.worker_ray_args = [str(arg) for arg in record["ray_args"]]
+        allocation.intent = record.get("intent")
         return allocation
 
     def _clone_allocation_config(
@@ -1466,6 +1504,9 @@ echo "Ray workers left the cluster"
         # A worker allocation keeps its Ray arguments after it becomes the head.
         if getattr(allocation, "worker_ray_args", None) is not None:
             record["ray_args"] = allocation.worker_ray_args
+        # So is the intent it was submitted for, so it keeps counting toward it.
+        if getattr(allocation, "intent", None) is not None:
+            record["intent"] = allocation.intent
         return record
 
     @staticmethod
@@ -1762,62 +1803,10 @@ echo "Ray workers left the cluster"
                     raise RuntimeError("Session allocation metadata is missing")
                 # Join whichever head leads now; workers follow later changes.
                 head = self._adopt_head(metadata)
-                shape = dict(
-                    metadata.get("worker_template")
-                    or metadata.get("config")
-                    or self._allocation_record(head)["config"]
+                worker_config, ray_args = self._plan_worker(metadata, head, config)
+                worker = self._submit_worker(
+                    head, worker_config, ray_args, config.rejoin_timeout
                 )
-                # Head placement, head-only mode and one-off directives stay put.
-                shape.update(
-                    nodelist=None,
-                    extra_sbatch_directives=[],
-                    ray_head_only=False,
-                    worker_allocation=None,
-                )
-                overrides = config.model_dump(
-                    exclude_unset=True,
-                    exclude={
-                        "cleanup_policy",
-                        "ray_resources",
-                        "ray_start_args",
-                        "rejoin_timeout",
-                    },
-                )
-                # Memory is one setting: an explicit form replaces the inherited one.
-                if "mem_per_cpu" in overrides and "mem" not in overrides:
-                    shape["mem"] = None
-                if "mem" in overrides and "mem_per_cpu" not in overrides:
-                    shape["mem_per_cpu"] = None
-                shape.update(overrides)
-                worker_config = self._clone_allocation_config(shape)
-                gpus_per_node = (
-                    worker_config.gpus_per_node
-                    if worker_config.gpus_per_node is not None
-                    else worker_config.slurm.queue.gpus_per_node
-                )
-                resources = {
-                    name: int(quantity) if quantity.is_integer() else quantity
-                    for name, quantity in {
-                        _WORKER_MARKER_RESOURCE: 1.0,
-                        **config.ray_resources,
-                    }.items()
-                }
-                ray_args = [
-                    f"--num-gpus={gpus_per_node or 0}",
-                    f"--resources={json.dumps(resources, sort_keys=True)}",
-                    *config.ray_start_args,
-                ]
-                # Sessions from earlier versions have no head pointer yet.
-                self._publish_ray_head(head)
-                worker = worker_config._submit_allocation(
-                    allocation_id=posixpath.basename(head.session_dir),
-                    working_dir=head.session_dir,
-                    wait_for_start=False,
-                    body=worker_config._render_worker_allocation_body(
-                        head, ray_args, config.rejoin_timeout
-                    ),
-                )
-                worker.worker_ray_args = ray_args
                 record = {
                     **self._allocation_record(worker),
                     "rejoin_timeout": config.rejoin_timeout,
@@ -1833,6 +1822,107 @@ echo "Ray workers left the cluster"
                 if self._initialized:
                     self._start_head_watch()
                 return worker
+
+    def _plan_worker(
+        self,
+        metadata: dict[str, Any],
+        head: "SlurmAllocation",
+        config: SlurmWorkerAllocationConfig,
+    ) -> tuple["SlurmSessionResource", list[str]]:
+        """The Slurm config and ``ray start`` arguments of a new worker allocation."""
+        shape = dict(
+            metadata.get("worker_template")
+            or metadata.get("config")
+            or self._allocation_record(head)["config"]
+        )
+        # Head placement, head-only mode and one-off directives stay put.
+        shape.update(
+            nodelist=None,
+            extra_sbatch_directives=[],
+            ray_head_only=False,
+            worker_allocation=None,
+        )
+        overrides = config.model_dump(
+            exclude_unset=True,
+            exclude={
+                "cleanup_policy",
+                "ray_resources",
+                "ray_start_args",
+                "rejoin_timeout",
+            },
+        )
+        # Memory is one setting: an explicit form replaces the inherited one.
+        if "mem_per_cpu" in overrides and "mem" not in overrides:
+            shape["mem"] = None
+        if "mem" in overrides and "mem_per_cpu" not in overrides:
+            shape["mem_per_cpu"] = None
+        shape.update(overrides)
+        worker_config = self._clone_allocation_config(shape)
+        gpus_per_node = (
+            worker_config.gpus_per_node
+            if worker_config.gpus_per_node is not None
+            else worker_config.slurm.queue.gpus_per_node
+        )
+        resources = {
+            name: int(quantity) if quantity.is_integer() else quantity
+            for name, quantity in {
+                _WORKER_MARKER_RESOURCE: 1.0,
+                **config.ray_resources,
+            }.items()
+        }
+        ray_args = [
+            f"--num-gpus={gpus_per_node or 0}",
+            f"--resources={json.dumps(resources, sort_keys=True)}",
+            *config.ray_start_args,
+        ]
+        return worker_config, ray_args
+
+    def _submit_worker(
+        self,
+        head: "SlurmAllocation",
+        worker_config: "SlurmSessionResource",
+        ray_args: list[str],
+        rejoin_timeout: int,
+        *,
+        sbatch_args: tuple[str, ...] = (),
+    ) -> "SlurmAllocation":
+        # Sessions from earlier versions have no head pointer yet.
+        self._publish_ray_head(head)
+        worker = worker_config._submit_allocation(
+            allocation_id=posixpath.basename(head.session_dir),
+            working_dir=head.session_dir,
+            wait_for_start=False,
+            body=worker_config._render_worker_allocation_body(
+                head, ray_args, rejoin_timeout
+            ),
+            sbatch_args=sbatch_args,
+        )
+        worker.worker_ray_args = ray_args
+        return worker
+
+    def worker_sbatch_options(
+        self, configs: Sequence[SlurmWorkerAllocationConfig]
+    ) -> list[list[str]]:
+        """The ``sbatch`` options ``add_worker_allocation`` would submit per config.
+
+        Unset fields inherit as they would on submission. Useful to probe a
+        candidate with the scheduler before submitting it.
+        """
+        with self._lifecycle_lock:
+            if self._allocation is None or self._torn_down:
+                raise RuntimeError("Session is not initialized")
+            session_dir = self._allocation.session_dir
+            metadata = self._read_session_metadata(session_dir)
+            if metadata is None:
+                raise RuntimeError("Session allocation metadata is missing")
+            head = self._adopt_head(metadata)
+            allocation_id = posixpath.basename(head.session_dir)
+            return [
+                self._plan_worker(metadata, head, config)[0]._sbatch_directives(
+                    allocation_id
+                )
+                for config in configs
+            ]
 
     def replace_head(
         self,
@@ -2286,16 +2376,7 @@ echo "Ray workers left the cluster"
         state = self._get_job_state(job_id)
         if state not in TERMINAL_STATES:
             if state == "RUNNING":
-                timeout_path = f"{allocation.working_dir}/drain_timeout"
-                ssh_pool.run(
-                    f"mkdir -p {shlex.quote(allocation.working_dir)} && "
-                    f"printf '%s\\n' {seconds} > {shlex.quote(timeout_path)}"
-                )
-                try:
-                    allocation.request_drain()
-                except Exception:
-                    if self._get_job_state(job_id) not in TERMINAL_STATES:
-                        raise
+                self._request_worker_drain(allocation, seconds)
             else:
                 allocation.cancel(ssh_pool)
             deadline = time.monotonic() + seconds + _WORKER_RELEASE_GRACE_SECONDS
@@ -2326,6 +2407,21 @@ echo "Ray workers left the cluster"
                     ]
                     self._write_session_metadata(allocation.session_dir, metadata)
         return state
+
+    def _request_worker_drain(
+        self, allocation: "SlurmAllocation", seconds: int
+    ) -> None:
+        """Start draining a running worker allocation's Ray nodes."""
+        timeout_path = f"{allocation.working_dir}/drain_timeout"
+        self._require_ssh_pool().run(
+            f"mkdir -p {shlex.quote(allocation.working_dir)} && "
+            f"printf '%s\\n' {seconds} > {shlex.quote(timeout_path)}"
+        )
+        try:
+            allocation.request_drain()
+        except Exception:
+            if self._get_job_state(allocation.slurm_job_id) not in TERMINAL_STATES:
+                raise
 
     @property
     def worker_allocations(self) -> list["SlurmAllocation"]:
@@ -2382,6 +2478,456 @@ echo "Ray workers left the cluster"
                     f"{self._worker_logs(allocation)}"
                 )
             time.sleep(poll_interval)
+
+    def inspect(self) -> SessionSnapshot:
+        """Observe the session's allocations without waiting for any of them.
+
+        Reports requested and granted resources, scheduler state and pending
+        reason, actual time left, Ray membership under the current head and
+        drain status. Values that could not be observed are ``None``.
+        """
+        with self._lifecycle_lock:
+            if self._allocation is None or self._torn_down:
+                raise RuntimeError("Session is not initialized")
+            session_dir = self._allocation.session_dir
+            metadata = self._read_session_metadata(session_dir)
+            if metadata is None:
+                raise RuntimeError("Session allocation metadata is missing")
+            head = self._adopt_head(metadata)
+            entries: list[tuple[AllocationRole, SlurmAllocation, dict[str, Any]]] = [
+                ("head", head, metadata)
+            ]
+            if metadata.get("successor"):
+                record = metadata["successor"]
+                entries.append(
+                    (
+                        "successor",
+                        self._allocation_from_record(record, session_dir),
+                        record,
+                    )
+                )
+            for record in metadata.get("workers", []):
+                entries.append(
+                    (
+                        "worker",
+                        self._allocation_from_record(record, session_dir),
+                        record,
+                    )
+                )
+        allocations = [allocation for _, allocation, _ in entries]
+        try:
+            observed_at, rows, files, accounted = self._observe_session_jobs(
+                session_dir, allocations
+            )
+        except Exception as exc:
+            self.logger.warning(f"Could not observe the session's allocations: {exc}")
+            observed_at, rows, files, accounted = time.time(), None, {}, {}
+        snapshots = []
+        for role, allocation, record in entries:
+            job_id = allocation.slurm_job_id
+            row = rows.get(job_id) if rows is not None else None
+            state: str | None = None
+            if row is not None:
+                state = normalize_slurm_state(row["state"]) or None
+            elif rows is not None:
+                state = accounted.get(job_id) or ENDED
+            time_left = None
+            if row is not None and state == "RUNNING":
+                time_left = _optional_seconds(row["time_left"])
+            config = allocation.config
+            found = files.get(job_id)
+            ray_nodes = None
+            if role == "worker" and found is not None:
+                ray_nodes = {
+                    node: node_id
+                    for node, (node_id, joined) in found["ray"].items()
+                    if joined in (None, head.slurm_job_id)
+                }
+            snapshots.append(
+                AllocationSnapshot(
+                    slurm_job_id=job_id,
+                    role=role,
+                    state=state,
+                    reason=row["reason"] if row is not None else None,
+                    time_left_seconds=time_left,
+                    time_limit_seconds=_optional_int_seconds(config.time_limit),
+                    requested_nodes=config.num_nodes,
+                    requested_gpus_per_node=(
+                        config.gpus_per_node
+                        if config.gpus_per_node is not None
+                        else config.slurm.queue.gpus_per_node
+                    ),
+                    tres=row["tres"] if row is not None else None,
+                    nodes=tuple(found["nodes"] if found else allocation.nodes),
+                    ray_nodes=ray_nodes,
+                    draining=found["draining"] if found is not None else None,
+                    intent=record.get("intent")
+                    if role == "worker"
+                    else allocation.intent,
+                    drain_deadline=record.get("drain_deadline"),
+                )
+            )
+        return SessionSnapshot(
+            observed_at=observed_at,
+            head_job_id=head.slurm_job_id,
+            allocations=tuple(snapshots),
+            scheduler_available=rows is not None,
+        )
+
+    def estimate_worker_starts(
+        self,
+        candidates: Sequence[SlurmWorkerAllocationConfig],
+        *,
+        estimator: StartEstimator | None = None,
+    ) -> list[StartEstimate]:
+        """Estimate when each candidate worker allocation could start.
+
+        The default ``SbatchTestOnlyEstimator`` asks ``sbatch --test-only``
+        about every candidate in one SSH round trip and caches the answers
+        briefly. Estimates are advisory and reserve nothing.
+        """
+        if estimator is None:
+            with self._lifecycle_lock:
+                if self._start_estimator is None:
+                    object.__setattr__(
+                        self, "_start_estimator", SbatchTestOnlyEstimator()
+                    )
+                estimator = self._start_estimator
+            assert estimator is not None
+        return estimator.estimate(self, list(candidates))
+
+    def reconcile_workers(
+        self,
+        intent: WorkerIntent,
+        *,
+        observed: SessionSnapshot | None = None,
+        max_observation_age: float = 300.0,
+    ) -> ReconcileResult:
+        """Submit or release worker allocations until ``intent.count`` remain.
+
+        Runs once per call under the session lock, so step processes that
+        express the same intent concurrently never submit it twice. Pending
+        allocations count toward the intent. Each submission is recorded with
+        a token before it reaches the scheduler, so an interrupted call is
+        recovered by the next one. Allocations released to scale in get a
+        drain deadline that is persisted before the drain starts; later calls
+        retry the release without extending the deadline and cancel the job
+        once it passes.
+
+        The scheduler is queried again before acting. When it does not answer,
+        or ``observed`` is older than ``max_observation_age`` seconds or was
+        taken under another head, nothing is submitted, but known releases and
+        cleanup continue.
+        """
+        submitted: list[int] = []
+        released: list[int] = []
+        cancelled: list[int] = []
+        with self._lifecycle_lock:
+            if self._allocation is None or self._torn_down:
+                raise RuntimeError("Session is not initialized")
+            session_dir = self._allocation.session_dir
+            with self._session_lock(session_dir):
+                metadata = self._read_session_metadata(session_dir)
+                if metadata is None:
+                    raise RuntimeError("Session allocation metadata is missing")
+                stored = json.dumps(metadata, sort_keys=True)
+                head = self._adopt_head(metadata)
+                try:
+                    now, rows, _, _ = self._observe_session_jobs(session_dir)
+                except Exception as exc:
+                    self.logger.warning(f"Could not read the scheduler state: {exc}")
+                    now, rows = time.time(), None
+                held_back = None
+                if rows is None:
+                    held_back = "the scheduler state is unknown"
+                elif observed is not None and observed.head_job_id != head.slurm_job_id:
+                    held_back = "the head changed since the observation"
+                elif (
+                    observed is not None
+                    and now - observed.observed_at > max_observation_age
+                ):
+                    held_back = "the observation is stale"
+
+                def state_of(record: dict[str, Any]) -> str | None:
+                    if rows is None:
+                        return None
+                    row = rows.get(int(record["slurm_job_id"]))
+                    return normalize_slurm_state(row["state"]) if row else ENDED
+
+                recovered = self._recover_worker_submissions(
+                    metadata, rows, session_dir
+                )
+                states = {
+                    int(record["slurm_job_id"]): state_of(record)
+                    for record in metadata.get("workers", [])
+                }
+                gone = {
+                    job_id
+                    for job_id, state in states.items()
+                    if state is not None
+                    and (state in TERMINAL_STATES or state == ENDED)
+                }
+                metadata["workers"] = [
+                    record
+                    for record in metadata.get("workers", [])
+                    if int(record["slurm_job_id"]) not in gone
+                ]
+                mine = [
+                    record
+                    for record in metadata["workers"]
+                    if record.get("intent") == intent.key
+                ]
+                active = [r for r in mine if r.get("drain_deadline") is None]
+                expired = [
+                    record
+                    for record in active
+                    if intent.pending_timeout is not None
+                    and states[int(record["slurm_job_id"])] == "PENDING"
+                    and now - float(record.get("submitted_at", now))
+                    > intent.pending_timeout
+                ]
+                if expired:
+                    held_back = held_back or "pending allocations expired"
+                head_counts = int(
+                    head.intent == intent.key and not self._allocation_draining(head)
+                )
+                active = [r for r in active if r not in expired]
+                excess = len(active) + head_counts - intent.count
+                victims = list(expired)
+                if excess > 0 and rows is not None:
+                    # Shed queued allocations first, then those with least time left.
+                    def keep_order(record: dict[str, Any]) -> tuple[int, float]:
+                        job_id = int(record["slurm_job_id"])
+                        if states[job_id] != "RUNNING":
+                            return (0, -float(record.get("submitted_at", 0)))
+                        left = _optional_seconds(rows[job_id]["time_left"])
+                        return (1, math.inf if left is None else left)
+
+                    victims += sorted(active, key=keep_order)[:excess]
+                    active = [r for r in active if r not in victims]
+                for record in victims:
+                    allocation = self._allocation_from_record(record, session_dir)
+                    seconds = (
+                        intent.drain_timeout
+                        if intent.drain_timeout is not None
+                        else allocation.config._worker_drain_seconds()
+                    )
+                    record["drain_seconds"] = seconds
+                    record["drain_deadline"] = (
+                        now + seconds + _WORKER_RELEASE_GRACE_SECONDS
+                    )
+                    released.append(allocation.slurm_job_id)
+                # Persist deadlines before any drain or cancel starts.
+                stored = self._store_if_changed(session_dir, metadata, stored)
+                for record in mine:
+                    if record.get("drain_deadline") is None:
+                        continue
+                    state = states[int(record["slurm_job_id"])]
+                    # A passed deadline is known even when the scheduler is not.
+                    if state is None and now < float(record["drain_deadline"]):
+                        continue
+                    try:
+                        if self._continue_worker_release(
+                            record, state, now, session_dir
+                        ):
+                            cancelled.append(int(record["slurm_job_id"]))
+                    except Exception as exc:
+                        self.logger.warning(
+                            f"Releasing worker allocation {record['slurm_job_id']} "
+                            f"will be retried: {exc}"
+                        )
+                self._store_if_changed(session_dir, metadata, stored)
+
+                missing = intent.count - len(active) - head_counts
+                if missing > 0 and held_back is None:
+                    config = intent.config or SlurmWorkerAllocationConfig()
+                    for _ in range(missing):
+                        worker = self._submit_intent_worker(
+                            metadata, head, config, intent.key, now
+                        )
+                        submitted.append(worker.slurm_job_id)
+                    if self._initialized:
+                        self._start_head_watch()
+                live = [int(r["slurm_job_id"]) for r in active] + submitted
+                if head_counts:
+                    live.insert(0, head.slurm_job_id)
+        return ReconcileResult(
+            observed_at=now,
+            live=tuple(live),
+            submitted=tuple(submitted),
+            released=tuple(released),
+            cancelled=tuple(cancelled),
+            recovered=tuple(recovered),
+            held_back=held_back if missing > 0 else None,
+        )
+
+    def _store_if_changed(
+        self, session_dir: str, metadata: dict[str, Any], stored: str
+    ) -> str:
+        current = json.dumps(metadata, sort_keys=True)
+        if current != stored:
+            self._write_session_metadata(session_dir, metadata)
+        return current
+
+    def _submit_intent_worker(
+        self,
+        metadata: dict[str, Any],
+        head: "SlurmAllocation",
+        config: SlurmWorkerAllocationConfig,
+        intent: str,
+        now: float,
+    ) -> "SlurmAllocation":
+        """Submit one worker allocation for ``intent``. Caller holds the session lock."""
+        session_dir = head.session_dir
+        worker_config, ray_args = self._plan_worker(metadata, head, config)
+        token = uuid.uuid4().hex
+        submission = {
+            "token": token,
+            "intent": intent,
+            "submitted_at": now,
+            "config": worker_config.model_dump(mode="json", exclude={"slurm"}),
+            "ray_args": ray_args,
+            "rejoin_timeout": config.rejoin_timeout,
+        }
+        # Record the token first: if the job ID never comes back, the next
+        # call finds the job by its comment.
+        metadata["worker_submissions"] = [
+            *metadata.get("worker_submissions", []),
+            submission,
+        ]
+        self._write_session_metadata(session_dir, metadata)
+        worker = self._submit_worker(
+            head,
+            worker_config,
+            ray_args,
+            config.rejoin_timeout,
+            sbatch_args=(f"--comment={_SUBMISSION_COMMENT_PREFIX}{token}",),
+        )
+        worker.intent = intent
+        metadata["worker_submissions"] = [
+            pending
+            for pending in metadata["worker_submissions"]
+            if pending["token"] != token
+        ]
+        metadata["workers"] = [
+            *metadata.get("workers", []),
+            {
+                **self._allocation_record(worker),
+                "rejoin_timeout": config.rejoin_timeout,
+                "submitted_at": now,
+            },
+        ]
+        self._write_session_metadata(session_dir, metadata)
+        return worker
+
+    def _recover_worker_submissions(
+        self,
+        metadata: dict[str, Any],
+        rows: dict[int, dict[str, Any]] | None,
+        session_dir: str,
+    ) -> list[int]:
+        """Record jobs of submissions whose caller never learned the job ID."""
+        submissions = metadata.get("worker_submissions") or []
+        if not submissions or rows is None:
+            return []
+        by_comment = {row["comment"]: job_id for job_id, row in rows.items()}
+        known = {int(record["slurm_job_id"]) for record in metadata.get("workers", [])}
+        recovered = []
+        for submission in submissions:
+            job_id = by_comment.get(
+                f"{_SUBMISSION_COMMENT_PREFIX}{submission['token']}"
+            )
+            # Without a queued job, the submission never arrived or has ended.
+            if job_id is None or job_id in known:
+                continue
+            metadata.setdefault("workers", []).append(
+                {
+                    "slurm_job_id": job_id,
+                    "nodes": [],
+                    "working_dir": f"{session_dir}/jobs/{job_id}",
+                    "config": submission["config"],
+                    "ray_args": submission["ray_args"],
+                    "intent": submission["intent"],
+                    "rejoin_timeout": submission["rejoin_timeout"],
+                    "submitted_at": submission["submitted_at"],
+                }
+            )
+            recovered.append(job_id)
+        metadata["worker_submissions"] = []
+        return recovered
+
+    def _continue_worker_release(
+        self,
+        record: dict[str, Any],
+        state: str | None,
+        now: float,
+        session_dir: str,
+    ) -> bool:
+        """Drain a released running worker, or cancel it. Returns whether it cancelled.
+
+        The persisted deadline never moves: past it, the job is cancelled.
+        """
+        allocation = self._allocation_from_record(record, session_dir)
+        if state == "RUNNING" and now < float(record["drain_deadline"]):
+            if not record.get("drain_requested"):
+                self._request_worker_drain(allocation, int(record["drain_seconds"]))
+                record["drain_requested"] = True
+            return False
+        if record.get("cancel_requested"):
+            return False
+        allocation.cancel(self._require_ssh_pool())
+        record["cancel_requested"] = True
+        return True
+
+    def _observe_session_jobs(
+        self,
+        session_dir: str,
+        allocations: Sequence["SlurmAllocation"] = (),
+    ) -> tuple[
+        float,
+        dict[int, dict[str, Any]] | None,
+        dict[int, dict[str, Any]],
+        dict[int, str],
+    ]:
+        """Login-node clock, queued jobs, allocation files and final states.
+
+        One SSH round trip. Every allocation of a session shares its job name,
+        so a single scheduler query lists them all. The job table is ``None``
+        when the scheduler did not answer.
+        """
+        name = shlex.quote(posixpath.basename(session_dir))
+        fields = shlex.quote(_SQUEUE_FIELDS)
+        lines = [
+            "printf '@@clock %s\\n' \"$(date +%s)\"",
+            f'if out="$(squeue -h --name={name} -O {fields} 2>/dev/null)"; then',
+            "  printf '@@squeue\\n%s\\n' \"$out\"",
+            f"elif out=\"$(squeue -h --name={name} -o '%i|%T|%r|%L||%k|' 2>/dev/null)\"; then",
+            "  printf '@@squeue\\n%s\\n' \"$out\"",
+            "else",
+            "  printf '@@squeue-failed\\n'",
+            "fi",
+        ]
+        if allocations:
+            ids = ",".join(str(a.slurm_job_id) for a in allocations)
+            lines.append("printf '@@sacct\\n'")
+            lines.append(
+                f"sacct -X -n -P -j {ids} -o JobIDRaw,State 2>/dev/null || true"
+            )
+        for allocation in allocations:
+            lines.extend(
+                [
+                    f"printf '@@files %s\\n' {allocation.slurm_job_id}",
+                    f"d={shlex.quote(allocation.working_dir)}",
+                    "[ -f \"$d/drain_signal\" ] && printf '@drain\\n'",
+                    '[ -f "$d/nodes.txt" ] && sed \'s/^/@node /\' "$d/nodes.txt"',
+                    'for f in "$d"/ray_nodes/*.id; do [ -f "$f" ] && '
+                    'printf \'@ray %s %s\\n\' "$(basename "$f" .id)" "$(cat "$f")"; '
+                    "done",
+                ]
+            )
+        lines.append("true")
+        output = self._require_ssh_pool().run("\n".join(lines))
+        return _parse_session_observation(output)
 
     def _live_worker_records(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
         return [
@@ -2506,6 +3052,87 @@ echo "Ray workers left the cluster"
             return ""
 
 
+def _optional_seconds(value: str | None) -> float | None:
+    """Seconds of a Slurm duration, or None for values such as ``UNLIMITED``."""
+    try:
+        return float(_slurm_time_limit_seconds(value or ""))
+    except ValueError:
+        return None
+
+
+def _optional_int_seconds(value: str | None) -> int | None:
+    seconds = _optional_seconds(value)
+    return None if seconds is None else int(seconds)
+
+
+def _parse_session_observation(
+    output: str,
+) -> tuple[
+    float,
+    dict[int, dict[str, Any]] | None,
+    dict[int, dict[str, Any]],
+    dict[int, str],
+]:
+    """Parse the output of the script ``_observe_session_jobs`` runs."""
+    clock = time.time()
+    rows: dict[int, dict[str, Any]] | None = None
+    files: dict[int, dict[str, Any]] = {}
+    accounted: dict[int, str] = {}
+    section = None
+    current: dict[str, Any] = {}
+    # Password-based SSH can add blank lines and carriage returns.
+    for line in (raw.strip() for raw in output.replace("\r", "").splitlines()):
+        if not line:
+            continue
+        if line.startswith("@@clock "):
+            try:
+                clock = float(line.split()[1])
+            except (IndexError, ValueError):
+                pass
+            section = None
+        elif line == "@@squeue":
+            rows, section = {}, "squeue"
+        elif line == "@@squeue-failed":
+            rows, section = None, None
+        elif line == "@@sacct":
+            section = "sacct"
+        elif line.startswith("@@files "):
+            current = {"draining": False, "nodes": [], "ray": {}}
+            files[int(line.split()[1])] = current
+            section = "files"
+        elif section == "squeue" and rows is not None:
+            parts = [part.strip() for part in line.split("|")]
+            if len(parts) < 6 or not parts[0].isdigit():
+                continue
+            job_id, state, reason, time_left, tres, comment = parts[:6]
+            rows[int(job_id)] = {
+                "state": state,
+                "reason": None if reason in ("", "None", "(null)") else reason,
+                "time_left": time_left,
+                "tres": parse_tres(tres) if tres else None,
+                "comment": None if comment in ("", "(null)") else comment,
+            }
+        elif section == "sacct":
+            parts = line.split("|")
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].strip():
+                accounted[int(parts[0])] = normalize_slurm_state(parts[1].split()[0])
+        elif section == "files":
+            if line == "@drain":
+                current["draining"] = True
+            elif line.startswith("@node "):
+                current["nodes"].append(line[len("@node ") :].strip())
+            elif line.startswith("@ray "):
+                parts = line.split()
+                if len(parts) in (3, 4):
+                    joined = (
+                        int(parts[3])
+                        if len(parts) == 4 and parts[3].isdigit()
+                        else None
+                    )
+                    current["ray"][parts[1]] = (parts[2], joined)
+    return clock, rows, files, accounted
+
+
 class SlurmAllocation:
     """Represents a running Slurm allocation."""
 
@@ -2532,6 +3159,8 @@ class SlurmAllocation:
         self._ray_fingerprint: Optional[tuple[Any, ...]] = None
         # `ray start` arguments of a worker allocation's nodes, else None.
         self.worker_ray_args: Optional[List[str]] = None
+        # Intent key of an allocation submitted by `reconcile_workers`.
+        self.intent: Optional[str] = None
 
     @property
     def end_time(self) -> str | None:
