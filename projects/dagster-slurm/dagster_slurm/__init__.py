@@ -25,6 +25,15 @@ from dagster_slurm.launchers.base import ComputeLauncher
 from .pipes_clients.local_pipes_client import LocalPipesClient
 from .pipes_clients.slurm_pipes_client import SlurmPipesClient
 from .ray import run_with_ray_reserve_topup, wait_for_stable_ray_resources
+from .scaling import (
+    AllocationSnapshot,
+    ReconcileResult,
+    SbatchTestOnlyEstimator,
+    SessionSnapshot,
+    StartEstimate,
+    StartEstimator,
+    WorkerIntent,
+)
 from .resources.compute import ComputeResource
 from .resources.session import (
     SlurmAllocation,
@@ -72,6 +81,14 @@ __all__ = [
     # Ray workload helpers
     "run_with_ray_reserve_topup",
     "wait_for_stable_ray_resources",
+    # Application-driven scaling hooks
+    "AllocationSnapshot",
+    "ReconcileResult",
+    "SbatchTestOnlyEstimator",
+    "SessionSnapshot",
+    "StartEstimate",
+    "StartEstimator",
+    "WorkerIntent",
     # Sensors / reconciliation helpers
     "build_slurm_orphan_reconcile_sensor",
     "reconcile_orphaned_slurm_runs",
