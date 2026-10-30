@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v1.23.0-rc.1 (2026-10-30)
+
+### Bug Fixes
+
+- Read Slurm job logs with the status poll
+  ([#229](https://github.com/ascii-supply-networks/dagster-slurm/pull/229),
+  [`3d4e416`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3d4e416e43f9f2a08c9f9ea8072754bea567c578))
+
+- Start at most one SSH ControlMaster per control socket
+  ([#230](https://github.com/ascii-supply-networks/dagster-slurm/pull/230),
+  [`ffea17d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ffea17dec1e47bbbafc11427de3777fa69ee15e4))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`b6ec108`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b6ec108fd95f19d05917964f8893bd0a437ce5df))
+
+- Validate the library against one Slurm version in CI
+  ([#232](https://github.com/ascii-supply-networks/dagster-slurm/pull/232),
+  [`f2fa936`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2fa936521b6f9e411bc9feac5a01e630249a28c))
+
+- **examples**: Remove previously built packages before rebuilding
+  ([#231](https://github.com/ascii-supply-networks/dagster-slurm/pull/231),
+  [`b498858`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b49885897bb29f2f4e978c31bbcdd5ca4137208b))
+
+
 ## v1.23.0 (2026-10-30)
 
 ### Chores
