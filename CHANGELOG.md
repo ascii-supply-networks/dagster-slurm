@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.23.0-rc.2 (2026-10-30)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`8b1ba11`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8b1ba1192e9ac3c9bc9ebbf36d3aa9b3781c5fae))
+
+### Features
+
+- Named releases, intent moves and a submission budget for scaling hooks
+  ([#233](https://github.com/ascii-supply-networks/dagster-slurm/pull/233),
+  [`02a9ce1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/02a9ce1d7e89002ddefe8bf6a4b090d4c3cd974d))
+
+
 ## v1.23.0-rc.1 (2026-10-30)
 
 ### Bug Fixes
