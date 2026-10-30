@@ -9,22 +9,29 @@ Run Dagster assets on Slurm clusters with support for:
 - Multiple launchers (Bash, Ray, Spark—WIP)
 """
 
-# Config classes
-from .config.runtime import SlurmRunConfig
-
-# Core resources
-from .helpers.metrics import SlurmMetric, SlurmMetricsCallback, SlurmMetricsContext
-from .launchers.ray import RayLauncher, RayPortConfig
-
-# Launchers
-from .launchers.script import BashLauncher
-from .launchers.spark import SparkLauncher
 from dagster_slurm.launchers.base import ComputeLauncher
 
-# Clients (for advanced usage)
+from .config.runtime import SlurmRunConfig
+from .helpers.metrics import SlurmMetric, SlurmMetricsCallback, SlurmMetricsContext
+from .launchers.ray import RayLauncher, RayPortConfig
+from .launchers.script import BashLauncher
+from .launchers.spark import SparkLauncher
 from .pipes_clients.local_pipes_client import LocalPipesClient
 from .pipes_clients.slurm_pipes_client import SlurmPipesClient
 from .ray import run_with_ray_reserve_topup, wait_for_stable_ray_resources
+from .resources.compute import ComputeResource
+from .resources.session import (
+    SlurmAllocation,
+    SlurmAllocationEnded,
+    SlurmAllocationScope,
+    SlurmRunAllocationConfig,
+    SlurmSessionResource,
+    SlurmStepDrained,
+    SlurmStepExecutionResult,
+    SlurmWorkerAllocationConfig,
+)
+from .resources.slurm import SlurmQueueConfig, SlurmResource
+from .resources.ssh import SSHConnectionResource
 from .scaling import (
     AllocationSnapshot,
     ReconcileResult,
@@ -34,62 +41,41 @@ from .scaling import (
     StartEstimator,
     WorkerIntent,
 )
-from .resources.compute import ComputeResource
-from .resources.session import (
-    SlurmAllocation,
-    SlurmAllocationScope,
-    SlurmStepExecutionResult,
-    SlurmStepDrained,
-    SlurmAllocationEnded,
-    SlurmRunAllocationConfig,
-    SlurmWorkerAllocationConfig,
-    SlurmSessionResource,
-)
-from .resources.slurm import SlurmQueueConfig, SlurmResource
-from .resources.ssh import SSHConnectionResource
 from .sensors import build_slurm_orphan_reconcile_sensor, reconcile_orphaned_slurm_runs
 
 __all__ = [
-    # Main facade (most users only need this)
-    "ComputeResource",
-    # Run-time config (for launchpad configuration)
-    "SlurmRunConfig",
-    # Configuration resources
-    "SlurmResource",
-    "SlurmQueueConfig",
-    "SSHConnectionResource",
-    "SlurmSessionResource",
-    "SlurmAllocation",
-    "SlurmAllocationScope",
-    "SlurmStepExecutionResult",
-    "SlurmStepDrained",
-    "SlurmAllocationEnded",
-    "SlurmRunAllocationConfig",
-    "SlurmWorkerAllocationConfig",
-    # Launchers
+    "AllocationSnapshot",
     "BashLauncher",
+    "ComputeLauncher",
+    "ComputeResource",
+    "LocalPipesClient",
     "RayLauncher",
     "RayPortConfig",
-    "ComputeLauncher",
-    "SparkLauncher",  # experimental Spark support
-    # Advanced: Direct client access
-    "LocalPipesClient",
-    "SlurmPipesClient",
+    "ReconcileResult",
+    "SSHConnectionResource",
+    "SbatchTestOnlyEstimator",
+    "SessionSnapshot",
+    "SlurmAllocation",
+    "SlurmAllocationEnded",
+    "SlurmAllocationScope",
     "SlurmMetric",
     "SlurmMetricsCallback",
     "SlurmMetricsContext",
-    # Ray workload helpers
-    "run_with_ray_reserve_topup",
-    "wait_for_stable_ray_resources",
-    # Application-driven scaling hooks
-    "AllocationSnapshot",
-    "ReconcileResult",
-    "SbatchTestOnlyEstimator",
-    "SessionSnapshot",
+    "SlurmPipesClient",
+    "SlurmQueueConfig",
+    "SlurmResource",
+    "SlurmRunAllocationConfig",
+    "SlurmRunConfig",
+    "SlurmSessionResource",
+    "SlurmStepDrained",
+    "SlurmStepExecutionResult",
+    "SlurmWorkerAllocationConfig",
+    "SparkLauncher",  # experimental Spark support
     "StartEstimate",
     "StartEstimator",
     "WorkerIntent",
-    # Sensors / reconciliation helpers
     "build_slurm_orphan_reconcile_sensor",
     "reconcile_orphaned_slurm_runs",
+    "run_with_ray_reserve_topup",
+    "wait_for_stable_ray_resources",
 ]

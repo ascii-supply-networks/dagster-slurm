@@ -60,7 +60,7 @@ def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
 
     ssh_cmd = [*ssh_resource.get_ssh_base_command(), remote_cmd]
 
-    result = subprocess.run(ssh_cmd, capture_output=True, text=True)
+    result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
     return result.stdout, result.stderr, result.returncode
 
 

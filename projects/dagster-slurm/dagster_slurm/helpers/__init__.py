@@ -12,16 +12,16 @@ from .ssh_helpers import TERMINAL_STATES, normalize_slurm_state, ssh_check, ssh_
 from .ssh_pool import SSHConnectionPool
 
 __all__ = [
-    "ssh_run",
-    "ssh_check",
     "TERMINAL_STATES",
-    "normalize_slurm_state",
-    "SSHConnectionPool",
     "LocalMessageReader",
+    "SSHConnectionPool",
     "SSHMessageReader",
-    "pack_environment_with_pixi",
-    "SlurmMetricsCollector",
-    "SlurmMetricsCallback",
-    "SlurmMetricsContext",
     "SlurmJobMetrics",
+    "SlurmMetricsCallback",
+    "SlurmMetricsCollector",
+    "SlurmMetricsContext",
+    "normalize_slurm_state",
+    "pack_environment_with_pixi",
+    "ssh_check",
+    "ssh_run",
 ]

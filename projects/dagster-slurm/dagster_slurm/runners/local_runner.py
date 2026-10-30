@@ -7,7 +7,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import List, Optional, TextIO
+from typing import TextIO
 
 from dagster import get_dagster_logger
 
@@ -25,10 +25,10 @@ class LocalRunner(Runner):
 
     def execute_script(
         self,
-        script_lines: List[str],
+        script_lines: list[str],
         working_dir: str,
         wait: bool = True,
-        line_callback: Optional[Callable[[str], object]] = None,
+        line_callback: Callable[[str], object] | None = None,
     ) -> int:
         """Execute shell script locally.
 
@@ -134,4 +134,3 @@ class LocalRunner(Runner):
 
     def wait_for_completion(self, job_id: int) -> None:
         """No-op for local runner (execute_script already blocks)."""
-        pass

@@ -8,11 +8,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock
 
 import pytest
-
 from dagster_slurm import (
     AllocationSnapshot,
     SbatchTestOnlyEstimator,
@@ -26,6 +25,7 @@ from dagster_slurm.helpers.ssh_helpers import TERMINAL_STATES
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.session import _parse_session_observation
 from dagster_slurm.scaling import ENDED, _parse_test_only_output, parse_tres
+
 from dagster_slurm_test.test_resources import _mock_slurm_resource
 from dagster_slurm_test.test_session_relay import RelayPool, make_session
 
@@ -110,21 +110,19 @@ def _attach(tmp_path: Path, pool: ScalingPool) -> SlurmSessionResource:
 
 
 def test_parse_session_observation_reads_jobs_files_and_unknowns():
-    output = "\r\n".join(
-        [
-            "@@clock 1000",
-            "@@squeue",
-            "7|RUNNING|None|1:00:00|cpu=8,mem=64G,node=2,gres/gpu=6|(null)|",
-            "8|PENDING|Resources|2:00:00|cpu=4,node=1|dagster_slurm_submission:abc|",
-            "@@sacct",
-            "9|CANCELLED by 0",
-            "@@files 7",
-            "@drain",
-            "@node n1",
-            "@node n2",
-            "@ray n1 aaaa 3",
-            "@ray n2 bbbb",
-        ]
+    output = (
+        "@@clock 1000\r\n"
+        "@@squeue\r\n"
+        "7|RUNNING|None|1:00:00|cpu=8,mem=64G,node=2,gres/gpu=6|(null)|\r\n"
+        "8|PENDING|Resources|2:00:00|cpu=4,node=1|dagster_slurm_submission:abc|\r\n"
+        "@@sacct\r\n"
+        "9|CANCELLED by 0\r\n"
+        "@@files 7\r\n"
+        "@drain\r\n"
+        "@node n1\r\n"
+        "@node n2\r\n"
+        "@ray n1 aaaa 3\r\n"
+        "@ray n2 bbbb"
     )
     clock, rows, files, accounted = _parse_session_observation(output)
     assert clock == 1000
@@ -450,16 +448,14 @@ def test_invalid_intents_are_rejected(bad, message):
 
 
 def test_parse_test_only_output_uses_the_login_node_clock():
-    output = "\n".join(
-        [
-            "@@clock 5000 2026-10-30T10:00:00",
-            "@@probe 0",
-            "sbatch: Job 3 to start at 2026-10-30T10:05:00 using 8 processors "
-            "on nodes c[1-2] in partition gpu",
-            "@@probe 1",
-            "sbatch: error: invalid partition specified: nope",
-            "allocation failure: Invalid partition name specified",
-        ]
+    output = (
+        "@@clock 5000 2026-10-30T10:00:00\n"
+        "@@probe 0\n"
+        "sbatch: Job 3 to start at 2026-10-30T10:05:00 using 8 processors "
+        "on nodes c[1-2] in partition gpu\n"
+        "@@probe 1\n"
+        "sbatch: error: invalid partition specified: nope\n"
+        "allocation failure: Invalid partition name specified"
     )
     starts_soon, invalid, missing = _parse_test_only_output(output, 3)
     assert starts_soon == {
@@ -475,7 +471,7 @@ def test_parse_test_only_output_uses_the_login_node_clock():
 
 def test_estimate_worker_starts_probes_inherited_shapes_within_budget(tmp_path):
     class ProbePool(ScalingPool):
-        probes: list[str] = []
+        probes: ClassVar[list[str]] = []
 
         def run(self, cmd: str, timeout: int | None = None) -> str:
             if "@@probe" in cmd:

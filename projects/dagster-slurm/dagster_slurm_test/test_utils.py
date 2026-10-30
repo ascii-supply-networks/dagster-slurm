@@ -2,7 +2,6 @@ import os
 import signal
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional
 
 
 def _terminate_process_group(process: subprocess.Popen[str]) -> None:
@@ -31,7 +30,7 @@ def run_dg_command(
     example_project_dir: Path,
     deployment: str,
     assets: str,
-    env_overrides: Optional[Dict[str, str]] = None,
+    env_overrides: dict[str, str] | None = None,
     timeout: int = 300,
 ) -> subprocess.CompletedProcess:
     """Run a `dg launch` command with specified deployment mode.

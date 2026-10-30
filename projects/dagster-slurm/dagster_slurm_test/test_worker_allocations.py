@@ -19,8 +19,8 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import dagster as dg
+import dagster_slurm.resources.session as session_module
 import pytest
-
 from dagster_slurm import (
     ComputeResource,
     RayLauncher,
@@ -33,14 +33,14 @@ from dagster_slurm import (
     SlurmStepExecutionResult,
     SlurmWorkerAllocationConfig,
 )
+from dagster_slurm.config.runtime import RuntimeVariant
 from dagster_slurm.helpers import ray_worker_monitor
 from dagster_slurm.helpers.ssh_helpers import TERMINAL_STATES
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.launchers.base import ExecutionPlan
-from dagster_slurm.config.runtime import RuntimeVariant
-import dagster_slurm.resources.session as session_module
 from dagster_slurm.resources.session import SlurmAllocation
 from dagster_slurm.sensors import reconcile_orphaned_slurm_runs
+
 from dagster_slurm_test.test_resources import _mock_slurm_resource
 from dagster_slurm_test.test_session_relay import RelayPool, make_session
 
@@ -128,8 +128,10 @@ def test_worker_inherits_head_shape_and_joins_its_ray_head(tmp_path):
         f"session_dir={head.session_dir}",
         "fallback_head=700",
         "rejoin_timeout=600",
-        'ray_args=(--num-gpus=2 \'--resources={"accelerator:a40": 1, '
-        '"dagster_slurm_worker": 1, "vram_48gb": 1}\' --num-cpus=8)',
+        (
+            'ray_args=(--num-gpus=2 \'--resources={"accelerator:a40": 1, '
+            '"dagster_slurm_worker": 1, "vram_48gb": 1}\' --num-cpus=8)'
+        ),
     ):
         assert line in script
     for inherited_only_by_head in ("--nodelist", "--mem=", "--comment=head"):
@@ -537,6 +539,7 @@ def test_worker_batch_releases_after_rejoin_timeout_without_a_head(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "No live Ray head for 2s; releasing the allocation" in result.stdout
@@ -1365,7 +1368,7 @@ def test_a_head_step_marks_its_own_exit_only(tmp_path, recorded_step, marked):
         activation_script="/env/activate.sh",
         ray_dir=str(ray_dir),
     )
-    match = re.search(r"\tcleanup_ray\(\) \{\n.*?\n\t\}\n", script, re.S)
+    match = re.search(r"\tcleanup_ray\(\) \{\n.*?\n\t\}\n", script, re.DOTALL)
     assert match is not None
     (ray_dir / "ray_ready").touch()
     (ray_dir / "head_step").write_text(f"{recorded_step}\n")
@@ -1574,7 +1577,7 @@ def test_resolve_node_id_waits_for_the_raylet_socket(tmp_path, monkeypatch):
     fake_ray = SimpleNamespace(
         init=lambda **kwargs: connections.append(kwargs),
         shutdown=lambda: None,
-        nodes=lambda: [],
+        nodes=list,
     )
     monkeypatch.setitem(sys.modules, "ray", fake_ray)
     monkeypatch.setattr(ray_worker_monitor, "POLL_SECONDS", 0.01)
@@ -1593,7 +1596,7 @@ def test_a_drain_request_cuts_the_registration_backoff_short(tmp_path, monkeypat
     fake_ray = SimpleNamespace(
         init=lambda **kwargs: connected.append(True),
         shutdown=lambda: None,
-        nodes=lambda: [],
+        nodes=list,
     )
     monkeypatch.setitem(sys.modules, "ray", fake_ray)
     # The first backoff after a failed lookup would last five seconds.
@@ -1834,14 +1837,14 @@ def test_slurm_worker_allocations_join_drain_and_release(
         pool.run(f"mkdir -p {shlex.quote(run_dir)}")
         pool.write_file(_DRIVER, driver)
         # One small worker at a time, on the node the head does not use.
-        worker_shape = dict(
-            num_nodes=1,
-            cpus_per_task=1,
-            mem="2G",
-            exclude=head.nodes[0],
-            ray_resources={"elastic_worker": 1},
-            ray_start_args=["--num-cpus=1", "--object-store-memory=200000000"],
-        )
+        worker_shape = {
+            "num_nodes": 1,
+            "cpus_per_task": 1,
+            "mem": "2G",
+            "exclude": head.nodes[0],
+            "ray_resources": {"elastic_worker": 1},
+            "ray_start_args": ["--num-cpus=1", "--object-store-memory=200000000"],
+        }
 
         # On-demand removal lets running work finish before the job ends.
         worker = session.add_worker_allocation(
@@ -1929,17 +1932,17 @@ def test_slurm_leaders_are_elected_as_allocations_leave(
     path and must still find their own IDs.
     """
     monkeypatch.setattr(session_module, "_HEAD_WATCH_SECONDS", 5)
-    settings = dict(
-        slurm=slurm_resource_for_testing,
-        num_nodes=1,
-        partition="normal",
-        time_limit="00:20:00",
-        cpus_per_task=1,
-        mem="3G",
-        gpus_per_node=0,
-        ray_head_only=True,
-        enable_health_checks=False,
-        worker_allocation=SlurmWorkerAllocationConfig(
+    settings = {
+        "slurm": slurm_resource_for_testing,
+        "num_nodes": 1,
+        "partition": "normal",
+        "time_limit": "00:20:00",
+        "cpus_per_task": 1,
+        "mem": "3G",
+        "gpus_per_node": 0,
+        "ray_head_only": True,
+        "enable_health_checks": False,
+        "worker_allocation": SlurmWorkerAllocationConfig(
             num_nodes=2,
             cpus_per_task=1,
             mem="3G",
@@ -1949,7 +1952,7 @@ def test_slurm_leaders_are_elected_as_allocations_leave(
             ray_start_args=["--object-store-memory=200000000"],
             rejoin_timeout=600,
         ),
-    )
+    }
     session = SlurmSessionResource(**settings)
     sibling = SlurmSessionResource(**settings)
     context = SimpleNamespace(

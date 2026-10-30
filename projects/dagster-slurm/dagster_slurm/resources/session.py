@@ -1,21 +1,22 @@
 """Slurm session management for operator fusion and run-scoped allocation."""
 
 import hashlib
-from importlib import resources as importlib_resources
 import json
 import math
 import os
 import posixpath
-import shlex
 import re
+import shlex
 import threading
 import time
-from collections.abc import Sequence
-from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, replace as dataclass_replace
-from enum import Enum
-from typing import Any, Callable, Dict, List, Literal, Optional, Set
 import uuid
+from collections.abc import Callable, Sequence
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
+from enum import Enum
+from importlib import resources as importlib_resources
+from typing import Any, Literal, Optional
 
 from dagster import (
     AssetExecutionContext,
@@ -28,16 +29,23 @@ from dagster import (
 from loguru import logger
 from pydantic import Field, PrivateAttr, model_validator
 
-from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
-from ..helpers.ssh_pool import SSHConnectionPool
-from ..helpers.signals import build_pre_timeout_supervisor_script
-from ..launchers.base import ExecutionPlan
 from ..helpers.ray_dashboard import RAY_DASHBOARD_URL_MARKER
+from ..helpers.signals import build_pre_timeout_supervisor_script
+from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
+from ..helpers.ssh_pool import SSH_ERRORS, SSHConnectionPool
+from ..launchers.base import ExecutionPlan
 from ..launchers.ray import (
     RayLauncher,
     RayPortConfig,
     _render_ray_port_assignments,
     _render_ray_process_cleanup,
+)
+from ..resources.slurm import (
+    SlurmResource,
+    _parse_signal_before_timeout,
+    _slurm_time_limit_seconds,
+    normalize_signal_before_timeout,
+    validate_signal_before_timeout,
 )
 from ..scaling import (
     ENDED,
@@ -50,13 +58,6 @@ from ..scaling import (
     StartEstimator,
     WorkerIntent,
     parse_tres,
-)
-from ..resources.slurm import (
-    SlurmResource,
-    normalize_signal_before_timeout,
-    validate_signal_before_timeout,
-    _parse_signal_before_timeout,
-    _slurm_time_limit_seconds,
 )
 
 _REMOTE_LOCK_WAIT_TIMEOUT_SECONDS = 180
@@ -337,7 +338,7 @@ fi
 """
     try:
         details = ssh_pool.run(cmd).strip()
-    except Exception as exc:
+    except SSH_ERRORS as exc:
         return f"lock_dir={lock_dir}\ndetails_unavailable={exc}"
     return details or f"lock_dir={lock_dir}\ndetails_unavailable=<empty>"
 
@@ -352,7 +353,7 @@ def _tail_remote_file_for_error(
         output = ssh_pool.run(
             f"tail -c {byte_limit} {shlex.quote(path)} 2>/dev/null || true"
         )
-    except Exception as exc:
+    except SSH_ERRORS as exc:
         return f"<failed to read {path}: {exc}>"
     return output.rstrip() or "<empty>"
 
@@ -367,53 +368,51 @@ class SlurmAllocationScope(str, Enum):
 class SlurmRunAllocationConfig(Config):
     """Configuration for a run-owned Slurm allocation."""
 
-    num_nodes: Optional[int] = Field(
+    num_nodes: int | None = Field(
         default=None,
         ge=1,
         description="Number of nodes for the run-owned allocation.",
     )
-    gpus_per_node: Optional[int] = Field(
+    gpus_per_node: int | None = Field(
         default=None,
         ge=0,
         description="GPUs requested per node for the run-owned allocation.",
     )
-    cpus_per_task: Optional[int] = Field(
+    cpus_per_task: int | None = Field(
         default=None,
         ge=1,
         description="CPUs per task requested for the allocation.",
     )
-    mem: Optional[str] = Field(
+    mem: str | None = Field(
         default=None,
         description="Memory allocation, for example '32G'.",
     )
-    mem_per_cpu: Optional[str] = Field(
+    mem_per_cpu: str | None = Field(
         default=None,
         description="Memory per CPU, for clusters that prefer --mem-per-cpu.",
     )
-    time_limit: Optional[str] = Field(
+    time_limit: str | None = Field(
         default=None,
         description="Maximum allocation time, for example '04:00:00'.",
     )
-    time_min: Optional[str] = Field(
-        default=None, description="Minimum backfill walltime."
-    )
-    extra_sbatch_directives: List[str] = Field(default_factory=list)
-    signal_before_timeout: Optional[str] = Field(
+    time_min: str | None = Field(default=None, description="Minimum backfill walltime.")
+    extra_sbatch_directives: list[str] = Field(default_factory=list)
+    signal_before_timeout: str | None = Field(
         default=None,
         description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
     )
-    partition: Optional[str] = Field(
+    partition: str | None = Field(
         default=None,
         description="Slurm partition override for the allocation.",
     )
-    nodelist: Optional[str] = Field(
+    nodelist: str | None = Field(
         default=None,
         description=(
             "Slurm node list expression used to pin the run-owned allocation, "
             "for example 'gpu-01' or 'gpu-[01-04]'."
         ),
     )
-    exclude: Optional[str] = Field(
+    exclude: str | None = Field(
         default=None,
         description=(
             "Slurm node list expression the run-owned allocation must avoid, "
@@ -421,13 +420,13 @@ class SlurmRunAllocationConfig(Config):
             "pinning placement via nodelist."
         ),
     )
-    qos: Optional[str] = Field(default=None, description="QoS override.")
-    account: Optional[str] = Field(default=None, description="Account override.")
-    reservation: Optional[str] = Field(
+    qos: str | None = Field(default=None, description="QoS override.")
+    account: str | None = Field(default=None, description="Account override.")
+    reservation: str | None = Field(
         default=None,
         description="Reservation override.",
     )
-    constraint: Optional[str] = Field(
+    constraint: str | None = Field(
         default=None,
         description="Slurm constraint expression.",
     )
@@ -465,14 +464,14 @@ class SlurmWorkerAllocationConfig(SlurmRunAllocationConfig):
     ``extra_sbatch_directives``, which apply to one submission only.
     """
 
-    ray_resources: Dict[str, float] = Field(
+    ray_resources: dict[str, float] = Field(
         default_factory=dict,
         description=(
             "Ray custom resources per node, for example {'accelerator:a40': 1}, "
             "so actors can target this allocation's hardware."
         ),
     )
-    ray_start_args: List[str] = Field(
+    ray_start_args: list[str] = Field(
         default_factory=list,
         description="Extra `ray start` options for these nodes, e.g. '--num-cpus=8'.",
     )
@@ -578,20 +577,18 @@ class SlurmSessionResource(ConfigurableResource):
     slurm: "SlurmResource" = Field(description="Slurm cluster configuration")
     num_nodes: int = Field(default=2, description="Nodes in allocation")
     time_limit: str = Field(default="04:00:00", description="Max allocation time")
-    time_min: Optional[str] = Field(
-        default=None, description="Minimum backfill walltime"
-    )
-    extra_sbatch_directives: List[str] = Field(default_factory=list)
-    signal_before_timeout: Optional[str] = Field(
+    time_min: str | None = Field(default=None, description="Minimum backfill walltime")
+    extra_sbatch_directives: list[str] = Field(default_factory=list)
+    signal_before_timeout: str | None = Field(
         default=None,
         description="Signal sent to the allocation shell before walltime, e.g. TERM@120.",
     )
-    partition: Optional[str] = Field(default=None, description="Override partition")
-    nodelist: Optional[str] = Field(
+    partition: str | None = Field(default=None, description="Override partition")
+    nodelist: str | None = Field(
         default=None,
         description="Node list expression used to pin the session allocation",
     )
-    exclude: Optional[str] = Field(
+    exclude: str | None = Field(
         default=None,
         description="Node list expression the session allocation must avoid",
     )
@@ -602,7 +599,7 @@ class SlurmSessionResource(ConfigurableResource):
     enable_session: bool = Field(
         default=True, description="Enable session mode for operator fusion"
     )
-    gpus_per_node: Optional[int] = Field(
+    gpus_per_node: int | None = Field(
         default=None,
         ge=0,
         description=(
@@ -610,25 +607,25 @@ class SlurmSessionResource(ConfigurableResource):
             "Slurm queue default; set 0 explicitly to disable GPUs."
         ),
     )
-    cpus_per_task: Optional[int] = Field(
+    cpus_per_task: int | None = Field(
         default=None, description="CPUs per task requested for the allocation"
     )
-    mem: Optional[str] = Field(
+    mem: str | None = Field(
         default=None, description="Memory requested for the allocation"
     )
-    mem_per_cpu: Optional[str] = Field(
+    mem_per_cpu: str | None = Field(
         default=None, description="Memory per CPU requested for the allocation"
     )
-    qos: Optional[str] = Field(
+    qos: str | None = Field(
         default=None, description="QoS override for the session allocation"
     )
-    account: Optional[str] = Field(
+    account: str | None = Field(
         default=None, description="Account override for the session allocation"
     )
-    reservation: Optional[str] = Field(
+    reservation: str | None = Field(
         default=None, description="Reservation override for the session allocation"
     )
-    constraint: Optional[str] = Field(
+    constraint: str | None = Field(
         default=None, description="Constraint override for the session allocation"
     )
     ray_head_only: bool = Field(
@@ -639,7 +636,7 @@ class SlurmSessionResource(ConfigurableResource):
             "request no resources can still run on it."
         ),
     )
-    worker_allocation: Optional[SlurmWorkerAllocationConfig] = Field(
+    worker_allocation: SlurmWorkerAllocationConfig | None = Field(
         default=None,
         description=(
             "Worker allocation submitted with the session whenever it has no "
@@ -680,8 +677,8 @@ class SlurmSessionResource(ConfigurableResource):
 
     # Private attributes for state management
     _allocation: Optional["SlurmAllocation"] = PrivateAttr(default=None)
-    _ssh_pool: Optional[SSHConnectionPool] = PrivateAttr(default=None)
-    _execution_semaphore: Optional[threading.Semaphore] = PrivateAttr(default=None)
+    _ssh_pool: SSHConnectionPool | None = PrivateAttr(default=None)
+    _execution_semaphore: threading.Semaphore | None = PrivateAttr(default=None)
     _initialized: bool = PrivateAttr(default=False)
     # Set by teardown, so background work that waited for it submits nothing.
     _torn_down: bool = PrivateAttr(default=False)
@@ -691,7 +688,7 @@ class SlurmSessionResource(ConfigurableResource):
     _owns_allocation: bool = PrivateAttr(default=False)
     _shared_lifecycle: bool = PrivateAttr(default=False)
     _preserve_allocation_on_teardown: bool = PrivateAttr(default=False)
-    _allocation_lease_id: Optional[str] = PrivateAttr(default=None)
+    _allocation_lease_id: str | None = PrivateAttr(default=None)
     _heartbeat_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _heartbeat_thread: threading.Thread | None = PrivateAttr(default=None)
     _head_watch_thread: threading.Thread | None = PrivateAttr(default=None)
@@ -758,7 +755,8 @@ class SlurmSessionResource(ConfigurableResource):
                 )
             except Exception as exc:
                 self.logger.debug(
-                    f"Could not refresh session supervisor heartbeat: {exc}"
+                    f"Could not refresh session supervisor heartbeat: {exc}",
+                    exc_info=True,
                 )
 
         def keep_alive() -> None:
@@ -772,7 +770,8 @@ class SlurmSessionResource(ConfigurableResource):
                         self._watch_if_elastic()
                     except Exception as exc:
                         self.logger.debug(
-                            f"Could not check for worker allocations: {exc}"
+                            f"Could not check for worker allocations: {exc}",
+                            exc_info=True,
                         )
 
         heartbeat()
@@ -822,7 +821,8 @@ class SlurmSessionResource(ConfigurableResource):
                 except Exception as exc:
                     if not self._torn_down:
                         self.logger.warning(
-                            f"Could not check the session's Ray head: {exc}"
+                            f"Could not check the session's Ray head: {exc}",
+                            exc_info=True,
                         )
 
         thread = threading.Thread(target=watch, name="slurm-head-watch", daemon=True)
@@ -872,7 +872,9 @@ class SlurmSessionResource(ConfigurableResource):
                             f"scancel for {self._allocation.slurm_job_id}"
                         )
                 except Exception as e:
-                    self.logger.warning(f"Error canceling allocation: {e}")
+                    self.logger.warning(
+                        f"Error canceling allocation: {e}", exc_info=True
+                    )
 
             # Close SSH pool
             if self._ssh_pool:
@@ -880,7 +882,7 @@ class SlurmSessionResource(ConfigurableResource):
                     self._ssh_pool.__exit__(None, None, None)
                     self.logger.info("SSH connection pool closed")
                 except Exception as e:
-                    self.logger.warning(f"Error closing SSH pool: {e}")
+                    self.logger.warning(f"Error closing SSH pool: {e}", exc_info=True)
 
             self._initialized = False
 
@@ -1213,7 +1215,7 @@ class SlurmSessionResource(ConfigurableResource):
             else self.slurm.queue.gpus_per_node
         )
 
-        final_num_nodes: Optional[int] = None
+        final_num_nodes: int | None = None
         if self.num_nodes and self.num_nodes > 0:
             final_num_nodes = self.num_nodes
 
@@ -1435,7 +1437,7 @@ echo "Ray workers left the cluster"
         try:
             metadata = json.loads(output)
             if not isinstance(metadata, dict):
-                raise ValueError("allocation metadata must be an object")
+                raise TypeError("allocation metadata must be an object")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self.logger.warning(
                 f"Ignoring invalid allocation metadata at {metadata_path}: {exc}"
@@ -1679,42 +1681,38 @@ echo "Ray workers left the cluster"
                 **ray_options,
             )
 
-        with self._lifecycle_lock:
-            with self._session_lock(current.session_dir):
-                metadata = self._read_session_metadata(current.session_dir)
-                if metadata and int(metadata["slurm_job_id"]) == successor.slurm_job_id:
-                    # Another supervisor completed the same promotion.
-                    published = self._allocation_from_record(
-                        metadata, current.session_dir
-                    )
-                    object.__setattr__(self, "_allocation", published)
-                    self._finish_promotion(published, metadata)
-                    return published
-                if (
-                    not metadata
-                    or int(metadata["slurm_job_id"]) != current.slurm_job_id
-                    or not metadata.get("successor")
-                    or int(metadata["successor"]["slurm_job_id"])
-                    != successor.slurm_job_id
-                ):
-                    raise RuntimeError("Session allocations changed; retry promotion")
-                if self._get_job_state(successor.slurm_job_id) != "RUNNING":
-                    raise RuntimeError("Successor allocation is not RUNNING")
-                if current.has_active_payloads(ssh_pool):
-                    raise RuntimeError(
-                        "Predecessor payloads are still active; request_drain and wait before promotion"
-                    )
-                updated = self._allocation_record(successor)
-                updated["predecessors"] = [
-                    *metadata.get("predecessors", []),
-                    self._allocation_record(current),
-                ]
-                # Worker allocations follow the head and re-join the successor.
-                self._carry_session_state(metadata, updated)
-                self._write_session_metadata(current.session_dir, updated)
-                object.__setattr__(self, "_allocation", successor)
-                self._finish_promotion(successor, updated)
-                return successor
+        with self._lifecycle_lock, self._session_lock(current.session_dir):
+            metadata = self._read_session_metadata(current.session_dir)
+            if metadata and int(metadata["slurm_job_id"]) == successor.slurm_job_id:
+                # Another supervisor completed the same promotion.
+                published = self._allocation_from_record(metadata, current.session_dir)
+                object.__setattr__(self, "_allocation", published)
+                self._finish_promotion(published, metadata)
+                return published
+            if (
+                not metadata
+                or int(metadata["slurm_job_id"]) != current.slurm_job_id
+                or not metadata.get("successor")
+                or int(metadata["successor"]["slurm_job_id"]) != successor.slurm_job_id
+            ):
+                raise RuntimeError("Session allocations changed; retry promotion")
+            if self._get_job_state(successor.slurm_job_id) != "RUNNING":
+                raise RuntimeError("Successor allocation is not RUNNING")
+            if current.has_active_payloads(ssh_pool):
+                raise RuntimeError(
+                    "Predecessor payloads are still active; request_drain and wait before promotion"
+                )
+            updated = self._allocation_record(successor)
+            updated["predecessors"] = [
+                *metadata.get("predecessors", []),
+                self._allocation_record(current),
+            ]
+            # Worker allocations follow the head and re-join the successor.
+            self._carry_session_state(metadata, updated)
+            self._write_session_metadata(current.session_dir, updated)
+            object.__setattr__(self, "_allocation", successor)
+            self._finish_promotion(successor, updated)
+            return successor
 
     def _finish_promotion(
         self, allocation: "SlurmAllocation", metadata: dict[str, Any]
@@ -2018,13 +2016,15 @@ echo "Ray workers left the cluster"
                     successor = None
                 use_successor = successor_state == "RUNNING"
                 leader = None
-                if not use_successor and not (successor and not ended and not ray_lost):
-                    # A planned relay keeps its pending successor; otherwise a
-                    # running worker leads now, before anything new can start.
-                    if metadata.get("workers") and self._workers_can_host_head(
-                        head, launcher
-                    ):
-                        leader = self._pick_worker_leader(metadata, session_dir)
+                # A planned relay keeps its pending successor; otherwise a
+                # running worker leads now, before anything new can start.
+                if (
+                    not use_successor
+                    and not (successor and not ended and not ray_lost)
+                    and metadata.get("workers")
+                    and self._workers_can_host_head(head, launcher)
+                ):
+                    leader = self._pick_worker_leader(metadata, session_dir)
                 if not use_successor and leader is None:
                     if not successor:
                         self._publish_successor(head, metadata, config)
@@ -2096,7 +2096,9 @@ echo "Ray workers left the cluster"
                 try:
                     self._refresh_election(head, owner)
                 except Exception as exc:
-                    self.logger.debug(f"Could not refresh the election claim: {exc}")
+                    self.logger.debug(
+                        f"Could not refresh the election claim: {exc}", exc_info=True
+                    )
 
         refresher = threading.Thread(
             target=refresh_claim, name="slurm-election-claim", daemon=True
@@ -2129,59 +2131,59 @@ echo "Ray workers left the cluster"
             )
             self.logger.warning(
                 f"Worker allocation {worker.slurm_job_id} could not host the Ray "
-                f"head: {exc}"
+                f"head: {exc}",
+                exc_info=True,
             )
             return None
         finally:
             refreshing.set()
             refresher.join(timeout=5)
-        with self._lifecycle_lock:
-            with self._session_lock(head.session_dir):
-                metadata = self._read_session_metadata(head.session_dir) or {}
-                claim = metadata.get("election") or {}
-                published = int(metadata.get("slurm_job_id", 0))
-                if published != head.slurm_job_id or claim.get("owner") != owner:
-                    # Someone else finished or took over the election.
-                    if started_ray:
-                        self._stop_unclaimed_head(metadata, worker, owner)
-                    return None
-                metadata.pop("election")
-                head_live = self._get_job_state(
-                    head.slurm_job_id
-                ) not in TERMINAL_STATES and not self._head_ray_exited(head)
-                if self._get_job_state(worker.slurm_job_id) != "RUNNING" or (
-                    head_live and head.has_active_payloads(ssh_pool)
-                ):
-                    self._write_session_metadata(head.session_dir, metadata)
-                    if started_ray:
-                        self._stop_unclaimed_head(metadata, worker, owner)
-                    return None
-                updated = self._allocation_record(worker)
-                updated["predecessors"] = [
-                    *metadata.get("predecessors", []),
-                    self._allocation_record(head),
-                ]
-                self._carry_session_state(metadata, updated)
-                updated["workers"] = [
-                    record
-                    for record in updated.get("workers", [])
-                    if int(record["slurm_job_id"]) != worker.slurm_job_id
-                ]
-                successor = metadata.get("successor")
-                if successor and successor.get("elected"):
-                    self._require_ssh_pool().run(
-                        f"scancel {int(successor['slurm_job_id'])}"
-                    )
-                elif successor:
-                    updated["successor"] = successor
-                self._write_session_metadata(head.session_dir, updated)
-                object.__setattr__(self, "_allocation", worker)
-                self._finish_promotion(worker, updated)
-                self.logger.info(
-                    f"Worker allocation {worker.slurm_job_id} now hosts the Ray head "
-                    f"in place of allocation {head.slurm_job_id}"
+        with self._lifecycle_lock, self._session_lock(head.session_dir):
+            metadata = self._read_session_metadata(head.session_dir) or {}
+            claim = metadata.get("election") or {}
+            published = int(metadata.get("slurm_job_id", 0))
+            if published != head.slurm_job_id or claim.get("owner") != owner:
+                # Someone else finished or took over the election.
+                if started_ray:
+                    self._stop_unclaimed_head(metadata, worker, owner)
+                return None
+            metadata.pop("election")
+            head_live = self._get_job_state(
+                head.slurm_job_id
+            ) not in TERMINAL_STATES and not self._head_ray_exited(head)
+            if self._get_job_state(worker.slurm_job_id) != "RUNNING" or (
+                head_live and head.has_active_payloads(ssh_pool)
+            ):
+                self._write_session_metadata(head.session_dir, metadata)
+                if started_ray:
+                    self._stop_unclaimed_head(metadata, worker, owner)
+                return None
+            updated = self._allocation_record(worker)
+            updated["predecessors"] = [
+                *metadata.get("predecessors", []),
+                self._allocation_record(head),
+            ]
+            self._carry_session_state(metadata, updated)
+            updated["workers"] = [
+                record
+                for record in updated.get("workers", [])
+                if int(record["slurm_job_id"]) != worker.slurm_job_id
+            ]
+            successor = metadata.get("successor")
+            if successor and successor.get("elected"):
+                self._require_ssh_pool().run(
+                    f"scancel {int(successor['slurm_job_id'])}"
                 )
-                return worker
+            elif successor:
+                updated["successor"] = successor
+            self._write_session_metadata(head.session_dir, updated)
+            object.__setattr__(self, "_allocation", worker)
+            self._finish_promotion(worker, updated)
+            self.logger.info(
+                f"Worker allocation {worker.slurm_job_id} now hosts the Ray head "
+                f"in place of allocation {head.slurm_job_id}"
+            )
+            return worker
 
     def _refresh_election(self, head: "SlurmAllocation", owner: str) -> None:
         with self._session_lock(head.session_dir):
@@ -2202,25 +2204,24 @@ echo "Ray workers left the cluster"
 
         ``failed`` could not host the head; later elections try it last.
         """
-        with self._lifecycle_lock:
-            with self._session_lock(head.session_dir):
-                metadata = self._read_session_metadata(head.session_dir) or {}
-                if started is not None:
-                    self._stop_unclaimed_head(metadata, started, owner)
-                changed = False
-                if (
-                    failed is not None
-                    and int(metadata.get("slurm_job_id", 0)) != failed.slurm_job_id
-                ):
-                    failures = metadata.setdefault("failed_leaders", {})
-                    key = str(failed.slurm_job_id)
-                    failures[key] = int(failures.get(key, 0)) + 1
-                    changed = True
-                if (metadata.get("election") or {}).get("owner") == owner:
-                    metadata.pop("election")
-                    changed = True
-                if changed:
-                    self._write_session_metadata(head.session_dir, metadata)
+        with self._lifecycle_lock, self._session_lock(head.session_dir):
+            metadata = self._read_session_metadata(head.session_dir) or {}
+            if started is not None:
+                self._stop_unclaimed_head(metadata, started, owner)
+            changed = False
+            if (
+                failed is not None
+                and int(metadata.get("slurm_job_id", 0)) != failed.slurm_job_id
+            ):
+                failures = metadata.setdefault("failed_leaders", {})
+                key = str(failed.slurm_job_id)
+                failures[key] = int(failures.get(key, 0)) + 1
+                changed = True
+            if (metadata.get("election") or {}).get("owner") == owner:
+                metadata.pop("election")
+                changed = True
+            if changed:
+                self._write_session_metadata(head.session_dir, metadata)
 
     def _stop_unclaimed_head(
         self, metadata: dict[str, Any], worker: "SlurmAllocation", owner: str
@@ -2240,7 +2241,7 @@ echo "Ray workers left the cluster"
             return  # Another elector is promoting the same worker and its head.
         try:
             worker.stop_ray_head(self._require_ssh_pool())
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self.logger.warning(
                 f"Could not stop the Ray head in allocation {worker.slurm_job_id}: {exc}"
             )
@@ -2519,7 +2520,7 @@ echo "Ray workers left the cluster"
             observed_at, rows, files, accounted = self._observe_session_jobs(
                 session_dir, allocations
             )
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self.logger.warning(f"Could not observe the session's allocations: {exc}")
             observed_at, rows, files, accounted = time.time(), None, {}, {}
         snapshots = []
@@ -2634,7 +2635,7 @@ echo "Ray workers left the cluster"
                 head = self._adopt_head(metadata)
                 try:
                     now, rows, _, _ = self._observe_session_jobs(session_dir)
-                except Exception as exc:
+                except SSH_ERRORS as exc:
                     self.logger.warning(f"Could not read the scheduler state: {exc}")
                     now, rows = time.time(), None
                 held_back = None
@@ -2731,7 +2732,7 @@ echo "Ray workers left the cluster"
                             record, state, now, session_dir
                         ):
                             cancelled.append(int(record["slurm_job_id"]))
-                    except Exception as exc:
+                    except SSH_ERRORS as exc:
                         self.logger.warning(
                             f"Releasing worker allocation {record['slurm_job_id']} "
                             f"will be retried: {exc}"
@@ -2920,9 +2921,11 @@ echo "Ray workers left the cluster"
                     f"d={shlex.quote(allocation.working_dir)}",
                     "[ -f \"$d/drain_signal\" ] && printf '@drain\\n'",
                     '[ -f "$d/nodes.txt" ] && sed \'s/^/@node /\' "$d/nodes.txt"',
-                    'for f in "$d"/ray_nodes/*.id; do [ -f "$f" ] && '
-                    'printf \'@ray %s %s\\n\' "$(basename "$f" .id)" "$(cat "$f")"; '
-                    "done",
+                    (
+                        'for f in "$d"/ray_nodes/*.id; do [ -f "$f" ] && '
+                        'printf \'@ray %s %s\\n\' "$(basename "$f" .id)" "$(cat "$f")"; '
+                        "done"
+                    ),
                 ]
             )
         lines.append("true")
@@ -3024,8 +3027,8 @@ echo "Ray workers left the cluster"
                     head_node_path = f"{working_dir}/head_node.txt"
                     self._ssh_pool.run(f"test -f {shlex.quote(head_node_path)}")  # type: ignore
                     return
-                except:  # noqa: E722
-                    pass
+                except SSH_ERRORS:
+                    pass  # The head has not written its node file yet.
             elif state in TERMINAL_STATES:
                 raise RuntimeError(f"Allocation {job_id} failed with state: {state}")
 
@@ -3048,7 +3051,7 @@ echo "Ray workers left the cluster"
             )
             state = output.strip()
             return normalize_slurm_state(state.split()[0]) if state else ""
-        except Exception:
+        except SSH_ERRORS:
             return ""
 
 
@@ -3139,7 +3142,7 @@ class SlurmAllocation:
     def __init__(
         self,
         slurm_job_id: int,
-        nodes: List[str],
+        nodes: list[str],
         working_dir: str,
         config: SlurmSessionResource,
         session_dir: str | None = None,
@@ -3150,17 +3153,17 @@ class SlurmAllocation:
         self.session_dir = session_dir or working_dir
         self.config = config
         self.logger = get_dagster_logger()
-        self._failed_nodes: Set[str] = set()
+        self._failed_nodes: set[str] = set()
         self._exec_count = 0
         self._exec_lock = threading.Lock()
         self._ray_cluster_lock = threading.Lock()
-        self._ray_address: Optional[str] = None
-        self._ray_dashboard_url: Optional[str] = None
-        self._ray_fingerprint: Optional[tuple[Any, ...]] = None
+        self._ray_address: str | None = None
+        self._ray_dashboard_url: str | None = None
+        self._ray_fingerprint: tuple[Any, ...] | None = None
         # `ray start` arguments of a worker allocation's nodes, else None.
-        self.worker_ray_args: Optional[List[str]] = None
+        self.worker_ray_args: list[str] | None = None
         # Intent key of an allocation submitted by `reconcile_workers`.
-        self.intent: Optional[str] = None
+        self.intent: str | None = None
 
     @property
     def end_time(self) -> str | None:
@@ -3199,7 +3202,7 @@ class SlurmAllocation:
         if re.fullmatch(rf"{self.slurm_job_id}\.\d+", step):
             try:
                 ssh_pool.run(f"scancel {step}")
-            except Exception as exc:  # The step may already have ended.
+            except SSH_ERRORS as exc:  # The step may already have ended.
                 self.logger.debug(f"Could not cancel Ray head step {step}: {exc}")
         ssh_pool.run(
             "rm -f "
@@ -4085,7 +4088,7 @@ wait "$RAY_HEAD_PID"
                     f"test -f {shlex.quote(ready_path)} && "
                     f"cat {shlex.quote(address_path)} 2>/dev/null || true"
                 ).strip()
-            except Exception:
+            except SSH_ERRORS:
                 address = ""
 
             if address:
@@ -4120,7 +4123,7 @@ wait "$RAY_HEAD_PID"
             state = output.strip()
             if state not in {"RUNNING", ""}:
                 return False
-        except Exception:
+        except SSH_ERRORS:
             return False
 
         # Check node health
@@ -4146,11 +4149,11 @@ wait "$RAY_HEAD_PID"
             )
             ssh_pool.run(cmd, timeout=15)
             return True
-        except Exception as e:
+        except SSH_ERRORS as e:
             self.logger.warning(f"Node {node} ping failed: {e}")
             return False
 
-    def get_failed_nodes(self) -> List[str]:
+    def get_failed_nodes(self) -> list[str]:
         """Get list of failed nodes."""
         return list(self._failed_nodes)
 

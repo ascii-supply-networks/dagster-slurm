@@ -4,9 +4,8 @@ import json
 import os
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -29,22 +28,22 @@ class StepOIDCAuthProvider:
     token_url: str
     client_id: str
     username: str
-    app_password: Optional[str] = None
+    app_password: str | None = None
     scope: str = "profile"
     token_field: str = "access_token"
     context: str = "asc"
     refresh_skew_minutes: int = 30
-    cert_path: Optional[str] = None
-    ssh_key_path: Optional[str] = None
+    cert_path: str | None = None
+    ssh_key_path: str | None = None
     step_binary: str = "step"
     extra_step_args: list[str] = field(default_factory=list)
-    bootstrap_ca_url: Optional[str] = None
-    bootstrap_fingerprint: Optional[str] = None
-    authentik_api_base: Optional[str] = None
-    authentik_api_token: Optional[str] = None
+    bootstrap_ca_url: str | None = None
+    bootstrap_fingerprint: str | None = None
+    authentik_api_base: str | None = None
+    authentik_api_token: str | None = None
     authentik_token_identifier: str = "dagster-slurm"
     authentik_token_expires_days: int = 30
-    authentik_credentials_file: Optional[str] = None
+    authentik_credentials_file: str | None = None
     authentik_refresh_skew_days: int = 7
 
     def ensure(self) -> None:
@@ -62,7 +61,7 @@ class StepOIDCAuthProvider:
             self._bootstrap_step_ca()
         self._step_login(token)
 
-    def _read_cert_valid_until(self) -> Optional[datetime]:
+    def _read_cert_valid_until(self) -> datetime | None:
         cert_path = self._resolve_cert_path(self.cert_path)
         if not cert_path or not os.path.exists(cert_path):
             return None
@@ -73,7 +72,7 @@ class StepOIDCAuthProvider:
                 capture_output=True,
                 text=True,
             )
-        except Exception:
+        except (OSError, subprocess.SubprocessError):
             return None
         for line in result.stdout.splitlines():
             if "Valid:" in line and "to" in line:
@@ -85,13 +84,13 @@ class StepOIDCAuthProvider:
                 try:
                     dt = datetime.fromisoformat(candidate)
                     if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
+                        dt = dt.replace(tzinfo=UTC)
                     return dt
                 except ValueError:
                     continue
         return None
 
-    def _resolve_cert_path(self, raw_path: str | None) -> Optional[str]:
+    def _resolve_cert_path(self, raw_path: str | None) -> str | None:
         for candidate in self._candidate_cert_paths(raw_path):
             if candidate.exists():
                 return str(candidate)
@@ -123,7 +122,7 @@ class StepOIDCAuthProvider:
         add(Path(f"~/.step/ssh/certs/{self.context}.crt").expanduser())
         return candidates
 
-    def _resolve_ssh_key_path(self) -> Optional[str]:
+    def _resolve_ssh_key_path(self) -> str | None:
         candidates: list[Path] = []
         if self.ssh_key_path:
             candidates.append(Path(self.ssh_key_path).expanduser())
@@ -147,7 +146,7 @@ class StepOIDCAuthProvider:
 
     def _is_expiring_soon(self, valid_until: datetime) -> bool:
         return (
-            datetime.now(timezone.utc) + timedelta(minutes=self.refresh_skew_minutes)
+            datetime.now(UTC) + timedelta(minutes=self.refresh_skew_minutes)
             >= valid_until
         )
 
@@ -275,8 +274,7 @@ class StepOIDCAuthProvider:
         if value is None:
             return True
         return (
-            datetime.now(timezone.utc)
-            + timedelta(days=self.authentik_refresh_skew_days)
+            datetime.now(UTC) + timedelta(days=self.authentik_refresh_skew_days)
             >= value
         )
 

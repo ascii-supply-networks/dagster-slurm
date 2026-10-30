@@ -1,6 +1,5 @@
 import os
 import re
-from typing import Optional
 
 import dagster as dg
 from dagster import ConfigurableResource
@@ -38,7 +37,7 @@ def _status_poll_env() -> dict[str, float]:
     return overrides
 
 
-def _optional_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
+def _optional_env(var_name: str, default: str | None = None) -> str | None:
     """Return an optional string from the environment.
 
     Treat blank strings as unset so callers can clear defaults by exporting an empty value.
@@ -135,7 +134,7 @@ class SlurmQueueConfig(dg.ConfigurableResource):
     )
     num_nodes: int = Field(default=1, description="Number of nodes")
     time_limit: str = Field(default="00:30:00", description="Job time limit (HH:MM:SS)")
-    signal_before_timeout: Optional[str] = Field(
+    signal_before_timeout: str | None = Field(
         default=None,
         description=(
             "Signal sent to the batch shell before walltime, for example 'TERM@120'. "
@@ -144,21 +143,21 @@ class SlurmQueueConfig(dg.ConfigurableResource):
     )
     cpus: int = Field(default=2, description="CPUs per task")
     gpus_per_node: int = Field(default=0, description="GPUs per node")
-    mem: Optional[str] = Field(
+    mem: str | None = Field(
         default="4096M",
         description="Memory allocation (omit to use partition defaults)",
     )
-    mem_per_cpu: Optional[str] = Field(
+    mem_per_cpu: str | None = Field(
         default=None,
         description="Memory per CPU (alternative to mem, usually leave empty)",
     )
-    qos: Optional[str] = Field(
+    qos: str | None = Field(
         default=None, description="Quality of service / service level"
     )
-    reservation: Optional[str] = Field(
+    reservation: str | None = Field(
         default=None, description="Reservation name for scheduled windows"
     )
-    account: Optional[str] = Field(
+    account: str | None = Field(
         default=None,
         description="Accounting project/charge code (required on many systems)",
     )
@@ -176,7 +175,7 @@ class SlurmResource(ConfigurableResource):
 
     ssh: SSHConnectionResource = Field(description="SSH connection to Slurm cluster")
     queue: SlurmQueueConfig = Field(description="Default queue parameters")
-    remote_base: Optional[str] = Field(
+    remote_base: str | None = Field(
         default=None,
         description="Base directory on remote system (default: ~/pipelines/<run_id>)",
     )
@@ -202,7 +201,7 @@ class SlurmResource(ConfigurableResource):
         ge=1.0,
         description="Growth factor applied to the status polling interval.",
     )
-    _auth_provider: Optional[object] = PrivateAttr(default=None)
+    _auth_provider: object | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _validate_status_polling(self) -> "SlurmResource":
