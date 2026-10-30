@@ -346,9 +346,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c9/17/48032919343afa2906112d458aceda2043afdb24a2ee8eb4c60904d8ddf1/coverage-7.17.0-py3-none-any.whl", hash = "sha256:bac487dce0d2aff28ddf1a533a916f771416eee0e493960f611e49037b878e9d", size = 217383, upload-time = "2026-10-22T16:06:48.471Z" },
 ]
 
-[package.optional-dependencies]
-toml = []
-
 [[package]]
 name = "dagster"
 version = "1.13.27"
@@ -416,7 +413,7 @@ wheels = [
 
 [[package]]
 name = "dagster-slurm"
-version = "1.22.0"
+version = "1.22.0rc1"
 source = { editable = "projects/dagster-slurm" }
 dependencies = [
     { name = "dagster" },
@@ -430,9 +427,19 @@ ray = [
     { name = "ray" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "dagster", specifier = ">=1.13.0,<1.14" },
+    { name = "dagster-pipes", specifier = ">=1.13.0,<1.14" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pexpect", specifier = "~=4.9.0" },
+    { name = "ray", marker = "extra == 'ray'", specifier = ">=2.48.0" },
+]
+provides-extras = ["ray"]
+
 [[package]]
 name = "dagster-slurm-workspace"
-version = "1.22.0"
+version = "1.22.0rc1"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -444,6 +451,19 @@ dev = [
     { name = "python-semantic-release" },
     { name = "ruff" },
     { name = "ty" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "commitizen", specifier = "~=4.8.3" },
+    { name = "pytest", specifier = ">=8.3.4,<10" },
+    { name = "pytest-cov", specifier = "~=7.0.0" },
+    { name = "pytest-mock", specifier = ">=3.14.0,<4" },
+    { name = "python-semantic-release", specifier = "~=10.3.1" },
+    { name = "ruff", specifier = ">=0.12.8,<1" },
+    { name = "ty", specifier = ">=0.0.4,<1" },
 ]
 
 [[package]]
@@ -1132,7 +1152,7 @@ name = "pytest-cov"
 version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "coverage", extra = ["toml"] },
+    { name = "coverage" },
     { name = "pluggy" },
     { name = "pytest" },
 ]
