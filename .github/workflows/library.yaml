@@ -49,7 +49,6 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
-  SLURM_VERSION: 25-11-2-1
 
 jobs:
   changes:
@@ -163,9 +162,15 @@ jobs:
         run: uv run --frozen --no-sync --managed-python --python "$DEVENV_PYTHON_VERSION" pytest -m 'not (needs_slurm_docker or slow)' projects
 
   validation:
-    name: Validate library
+    name: Validate library (Slurm ${{ matrix.slurm }})
     runs-on: ubuntu-latest
     needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        # Production clusters upgrade slowly: test the 25.11 line next to the
+        # newest release. Keep in sync with slurm-image-builder.yml.
+        slurm: ["25-11-8-1", "26-05-5-1"]
     # runs-on: paid-ci-runner-more-disk
     permissions:
       contents: read
@@ -198,7 +203,8 @@ jobs:
       - name: Start SLURM Cluster
         if: needs.changes.outputs.run-expensive == 'true'
         env:
-          IMAGE_TAG: ${{ env.SLURM_VERSION }}
+          IMAGE_TAG: ${{ matrix.slurm }}
+          SLURM_TAG: slurm-${{ matrix.slurm }}
           BUILD_SLURM_IMAGE: ${{ needs.changes.outputs.build-slurm-image }}
         run: |
           compose_files=(-f docker-compose.yml)
