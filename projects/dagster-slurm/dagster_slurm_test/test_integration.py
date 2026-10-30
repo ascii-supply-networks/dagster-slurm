@@ -24,8 +24,8 @@ from dagster_slurm import (
     SlurmRunAllocationConfig,
     SSHConnectionResource,
 )
-from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.config.runtime import RuntimeVariant
+from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.launchers.base import ExecutionPlan
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
 from dagster_slurm.resources.session import SlurmSessionResource
@@ -355,7 +355,8 @@ def test_pre_timeout_signal_is_delivered_and_preserves_the_exit_code(
                 signal_pool.run(
                     f"scancel --batch --signal=USR1 {client._current_job_id}"
                 )
-        except Exception as exc:
+        # Anything the thread raises fails the test after the join below.
+        except Exception as exc:  # noqa: BLE001
             signal_errors.append(exc)
 
     signal_thread = threading.Thread(target=signal_batch_shell, daemon=True)
@@ -653,9 +654,11 @@ def test_run_scoped_allocation_is_shared_across_parallel_processes(
                 "slurmctld",
                 "bash",
                 "-lc",
-                f"rm -rf {shlex.quote(remote_run_root)} "
-                f"{shlex.quote(slurm_resource_for_testing.remote_base)}/"
-                f"allocations/dagster_{run_id}",
+                (
+                    f"rm -rf {shlex.quote(remote_run_root)} "
+                    f"{shlex.quote(slurm_resource_for_testing.remote_base)}/"
+                    f"allocations/dagster_{run_id}"
+                ),
             ],
             check=False,
         )

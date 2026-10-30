@@ -11,19 +11,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import dagster_slurm.resources.session as session_module
 import pytest
 from dagster import build_init_resource_context
-import dagster_slurm.resources.session as session_module
 from dagster_slurm import (
-    SlurmQueueConfig,
-    SlurmResource,
-    SSHConnectionResource,
     BashLauncher,
     ComputeResource,
     RayLauncher,
     RayPortConfig,
     SlurmAllocationScope,
+    SlurmQueueConfig,
+    SlurmResource,
     SlurmRunAllocationConfig,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.config.runtime import RuntimeVariant

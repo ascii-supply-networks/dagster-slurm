@@ -8,11 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 from dagster_slurm.helpers import ssh_pool as ssh_pool_module
 from dagster_slurm.helpers.ssh_control import control_socket_path
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.ssh import SSHConnectionResource
+from pydantic import ValidationError
 
 
 class DummyResult:
@@ -178,9 +178,11 @@ def test_host_key_failures_include_actionable_guidance(monkeypatch):
         staticmethod(fail_with_host_key_error),
     )
 
-    with SSHConnectionPool(ssh_resource) as pool:
-        with pytest.raises(RuntimeError, match="Add the verified key"):
-            pool.run("true")
+    with (
+        SSHConnectionPool(ssh_resource) as pool,
+        pytest.raises(RuntimeError, match="Add the verified key"),
+    ):
+        pool.run("true")
 
 
 def test_control_master_fallback_key_auth(monkeypatch, tmp_path):
@@ -813,9 +815,8 @@ def test_pool_reports_its_own_state_without_a_reporter(caplog):
         host="example.com", user="testuser", password="secret"
     )
 
-    with caplog.at_level(logging.WARNING):
-        with SSHConnectionPool(ssh_resource):
-            pass
+    with caplog.at_level(logging.WARNING), SSHConnectionPool(ssh_resource):
+        pass
 
     assert any(
         "SSH multiplexing is unavailable" in record.message for record in caplog.records

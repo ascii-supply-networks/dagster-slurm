@@ -215,9 +215,7 @@ class SSHConnectionResource(ConfigurableResource):
         """
         if self.uses_password_auth:
             return False
-        if self.jump_host and self.jump_host.uses_password_auth:
-            return False
-        return True
+        return not (self.jump_host and self.jump_host.uses_password_auth)
 
     @property
     def multiplexing_unsupported_reason(self) -> str | None:
@@ -254,9 +252,7 @@ class SSHConnectionResource(ConfigurableResource):
         """Return True when the resource explicitly requires a TTY."""
         if self.force_tty:
             return True
-        if self.jump_host and self.jump_host.requires_tty:
-            return True
-        return False
+        return bool(self.jump_host and self.jump_host.requires_tty)
 
     @classmethod
     def from_env(

@@ -147,7 +147,7 @@ class StartEstimate:
     resources before a submission arrives.
     """
 
-    config: "SlurmWorkerAllocationConfig"
+    config: SlurmWorkerAllocationConfig
     observed_at: float
     time_limit_seconds: int | None = None
     """Walltime the candidate would request, including an inherited one."""
@@ -173,8 +173,8 @@ class StartEstimator(Protocol):
 
     def estimate(
         self,
-        session: "SlurmSessionResource",
-        candidates: Sequence["SlurmWorkerAllocationConfig"],
+        session: SlurmSessionResource,
+        candidates: Sequence[SlurmWorkerAllocationConfig],
     ) -> list[StartEstimate]: ...
 
 
@@ -198,8 +198,8 @@ class SbatchTestOnlyEstimator:
 
     def estimate(
         self,
-        session: "SlurmSessionResource",
-        candidates: Sequence["SlurmWorkerAllocationConfig"],
+        session: SlurmSessionResource,
+        candidates: Sequence[SlurmWorkerAllocationConfig],
     ) -> list[StartEstimate]:
         if len(candidates) > self.max_candidates:
             raise ValueError(
@@ -240,7 +240,7 @@ class WorkerIntent:
     key: str
     count: int
     """Allocations wanted, counting pending and running ones."""
-    config: "SlurmWorkerAllocationConfig | None" = None
+    config: SlurmWorkerAllocationConfig | None = None
     """Shape of new allocations; unset fields inherit as in ``add_worker_allocation``."""
     drain_timeout: int | None = None
     """Seconds a released running allocation may drain before it is cancelled."""

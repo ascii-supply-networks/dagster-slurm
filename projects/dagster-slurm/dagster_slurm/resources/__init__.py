@@ -2,28 +2,27 @@
 
 from .session import (
     SlurmAllocation,
-    SlurmAllocationScope,
-    SlurmStepExecutionResult,
-    SlurmStepDrained,
     SlurmAllocationEnded,
+    SlurmAllocationScope,
     SlurmRunAllocationConfig,
-    SlurmWorkerAllocationConfig,
     SlurmSessionResource,
+    SlurmStepDrained,
+    SlurmStepExecutionResult,
+    SlurmWorkerAllocationConfig,
 )
 from .slurm import SlurmQueueConfig, SlurmResource
 from .ssh import SSHConnectionResource
 
-
 __all__ = [
     "SSHConnectionResource",
-    "SlurmResource",
-    "SlurmQueueConfig",
-    "SlurmSessionResource",
     "SlurmAllocation",
-    "SlurmAllocationScope",
-    "SlurmStepExecutionResult",
-    "SlurmStepDrained",
     "SlurmAllocationEnded",
+    "SlurmAllocationScope",
+    "SlurmQueueConfig",
+    "SlurmResource",
     "SlurmRunAllocationConfig",
+    "SlurmSessionResource",
+    "SlurmStepDrained",
+    "SlurmStepExecutionResult",
     "SlurmWorkerAllocationConfig",
 ]

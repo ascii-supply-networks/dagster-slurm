@@ -12,15 +12,13 @@ import signal
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from dagster_slurm import (
     BashLauncher,
+    SlurmQueueConfig,
     SlurmResource,
     SSHConnectionResource,
-    SlurmQueueConfig,
 )
 from dagster_slurm.pipes_clients.slurm_pipes_client import (
-    SlurmPipesClient,
     _TAG_ASSET_KEY,
     _TAG_JOB_ID,
     _TAG_RUN_DIR,
@@ -30,6 +28,7 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import (
     _TAG_SESSION_STEP_STATUS_PATH,
     _TAG_SESSION_STEP_STDERR_PATH,
     _TAG_SESSION_STEP_STDOUT_PATH,
+    SlurmPipesClient,
     _session_step_scoped_tag_key,
 )
 from dagster_slurm.resources.session import SlurmStepExecutionResult
@@ -156,10 +155,9 @@ def test_dagster_ui_cancel_still_works():
         patch.object(client, "_is_run_canceling", return_value=True),
     ):
         # Simulate the polling loop's SIGTERM + CANCELING path
-        if client._sigterm_received:
-            if client._is_run_canceling(None):
-                client._cancellation_requested = True
-                client._cancel_slurm_job(client._current_job_id)
+        if client._sigterm_received and client._is_run_canceling(None):
+            client._cancellation_requested = True
+            client._cancel_slurm_job(client._current_job_id)
 
         mock_cancel.assert_called_once_with(67890)
         assert client._cancellation_requested is True
@@ -178,10 +176,9 @@ def test_sigterm_without_canceling_status_does_not_cancel():
         patch.object(client, "_is_run_canceling", return_value=False),
     ):
         # Simulate the polling loop's SIGTERM path (reboot scenario)
-        if client._sigterm_received:
-            if client._is_run_canceling(None):
-                client._cancellation_requested = True
-                client._cancel_slurm_job(client._current_job_id)
+        if client._sigterm_received and client._is_run_canceling(None):
+            client._cancellation_requested = True
+            client._cancel_slurm_job(client._current_job_id)
 
         mock_cancel.assert_not_called()
         assert client._cancellation_requested is False
@@ -668,12 +665,14 @@ def test_interruptible_sleep_propagates_other_exceptions():
     """_interruptible_sleep re-raises non-interrupt exceptions."""
     client = _make_client()
 
-    with patch(
-        "dagster_slurm.pipes_clients.slurm_pipes_client.time.sleep",
-        side_effect=ValueError("unrelated error"),
+    with (
+        patch(
+            "dagster_slurm.pipes_clients.slurm_pipes_client.time.sleep",
+            side_effect=ValueError("unrelated error"),
+        ),
+        pytest.raises(ValueError, match="unrelated error"),
     ):
-        with pytest.raises(ValueError, match="unrelated error"):
-            client._interruptible_sleep(1, 42)
+        client._interruptible_sleep(1, 42)
 
 
 # ---------------------------------------------------------------------------

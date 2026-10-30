@@ -5,11 +5,11 @@ Run with: pytest -v -m integration
 """
 
 from pathlib import Path
-from typing import Dict, Any
-from .test_utils import run_dg_command, assert_materialization_success
+from typing import Any
 
 import pytest
 
+from .test_utils import assert_materialization_success, run_dg_command
 
 pytestmark = pytest.mark.slow
 
@@ -25,8 +25,8 @@ class TestPerformance:
     def test_staging_vs_production_performance(
         self,
         example_project_dir: Path,
-        deployment_metadata: Dict[str, Any],
-        docker_slurm_env: Dict[str, str],
+        deployment_metadata: dict[str, Any],
+        docker_slurm_env: dict[str, str],
         slurm_cluster_ready,
     ):
         """Compare execution time between staging and production modes."""

@@ -69,7 +69,7 @@ def normalize_slurm_metrics(
     if metrics is None:
         return ALL_SLURM_METRICS
     if isinstance(metrics, str):
-        raise ValueError("slurm_metrics must be a collection, not a single string")
+        raise TypeError("slurm_metrics must be a collection, not a single string")
 
     try:
         return frozenset(SlurmMetric(metric) for metric in metrics)
@@ -277,8 +277,9 @@ class SlurmMetricsCollector:
                 step_id=step_id,
             )
         except Exception as error:
+            # Metrics are diagnostics: a parsing bug must not fail the step.
             self.logger.warning(
-                "Failed to collect metrics for job %s: %s", job_id, error
+                "Failed to collect metrics for job %s: %s", job_id, error, exc_info=True
             )
             return self._empty_metrics(job_id, step_id=step_id)
 

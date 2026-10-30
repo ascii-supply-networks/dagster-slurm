@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 import dagster as dg
-
 from dagster_slurm import SlurmQueueConfig, SlurmResource, SSHConnectionResource
 from dagster_slurm.pipes_clients.slurm_pipes_client import (
     _TAG_ASSET_KEY,
@@ -53,12 +52,15 @@ class _FakeSshPool:
         return ""
 
 
+_ORPHAN_ASSET = dg.AssetKey("orphan_asset")
+
+
 def _add_started_run(
     instance: dg.DagsterInstance,
     *,
     run_id: str = "orphan-run",
     heartbeat: str | None = None,
-    asset_key: dg.AssetKey = dg.AssetKey("orphan_asset"),
+    asset_key: dg.AssetKey = _ORPHAN_ASSET,
 ) -> dg.DagsterRun:
     tags = {
         _TAG_JOB_ID: "42",

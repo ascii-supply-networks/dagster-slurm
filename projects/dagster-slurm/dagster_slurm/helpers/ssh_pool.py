@@ -6,11 +6,12 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional, Pattern, Union, cast
+from re import Pattern
+from typing import TYPE_CHECKING, cast
 
 from dagster import get_dagster_logger
-from typing import TYPE_CHECKING
 
 from .ssh_control import control_persist_value, control_socket_path
 
@@ -33,6 +34,15 @@ MULTIPLEXING_UNSUPPORTED_MESSAGE = (
     "share a connection that may still need to answer a password prompt, so every "
     "command opens its own connection. HPC sites rate-limit that, so prefer "
     "key-based authentication where the site allows it."
+)
+
+#: What a failed remote command raises: ``RuntimeError`` for a non-zero exit or
+#: failed authentication, ``subprocess.SubprocessError`` for a timeout and
+#: ``OSError`` when the local ``ssh`` process cannot run.
+SSH_ERRORS: tuple[type[Exception], ...] = (
+    RuntimeError,
+    OSError,
+    subprocess.SubprocessError,
 )
 
 
@@ -61,11 +71,11 @@ class SSHConnectionPool:
     def __init__(self, ssh_config: "SSHConnectionResource"):
         self.config = ssh_config
         self.logger = get_dagster_logger()
-        self.control_path: Optional[str] = self._prepare_control_path()
+        self.control_path: str | None = self._prepare_control_path()
         self._master_started = False
         self._owns_master = False
         self._fallback_mode = False
-        self._fallback_reason: Optional[str] = None
+        self._fallback_reason: str | None = None
         self._lock = threading.RLock()
         self._depth = 0
         self._last_master_check = 0.0
@@ -73,7 +83,7 @@ class SSHConnectionPool:
         #: Optional (level, message) sink. When unset the pool logs the state
         #: itself, so every caller - sensors, session and hetjob setup included
         #: - reports it without having to remember to.
-        self.reporter: Optional[Callable[[str, str], None]] = None
+        self.reporter: Callable[[str, str], None] | None = None
 
     def _collect_passwords(self) -> list[str]:
         passwords: list[str] = []
@@ -83,7 +93,7 @@ class SSHConnectionPool:
             passwords.append(self.config.password)
         return passwords
 
-    def _prepare_control_path(self) -> Optional[str]:
+    def _prepare_control_path(self) -> str | None:
         """Return the shared ControlMaster socket path, or None when unusable."""
         if not self.config.supports_multiplexing:
             return None
@@ -135,8 +145,9 @@ class SSHConnectionPool:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
-        except Exception:  # pragma: no cover - best effort probe
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover
             return False
 
         return completed.returncode == 0
@@ -165,7 +176,9 @@ class SSHConnectionPool:
         cmd.extend(self.config.get_key_auth_opts())
         cmd.append(f"{self.config.user}@{self.config.host}")
 
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        completed = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, check=False
+        )
         if completed.returncode != 0:
             # Another process may have won the race for the same socket.
             if self._master_is_alive():
@@ -190,7 +203,7 @@ class SSHConnectionPool:
         """
         return self._fallback_unsupported
 
-    def describe_multiplexing(self) -> Optional[tuple[str, str]]:
+    def describe_multiplexing(self) -> tuple[str, str] | None:
         """Return (log level, message) describing a degraded state, if any."""
         if not self._fallback_mode:
             return None
@@ -217,8 +230,9 @@ class SSHConnectionPool:
             try:
                 self.reporter(level, message)
                 return
-            except Exception as exc:  # pragma: no cover - reporting must not fail
-                self.logger.debug(f"Multiplexing reporter failed: {exc}")
+            except Exception as exc:  # pragma: no cover
+                # The reporter is caller code; reporting must not fail the pool.
+                self.logger.debug(f"Multiplexing reporter failed: {exc}", exc_info=True)
         if level == "error":
             self.logger.error(message)
         else:
@@ -261,7 +275,7 @@ class SSHConnectionPool:
 
         try:
             self._spawn_master()
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self._enter_fallback(str(exc))
             return
 
@@ -296,7 +310,7 @@ class SSHConnectionPool:
         )
         try:
             self._spawn_master()
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self._enter_fallback(
                 f"ControlMaster died mid-run and could not be restarted: {exc}"
             )
@@ -353,13 +367,13 @@ class SSHConnectionPool:
             prompt_timeout = float(max(30, min(effective_timeout, 180)))
             stdout_chunks: list[str] = []
 
-            ExpectPattern = Union[
-                Pattern[str],
-                Pattern[bytes],
-                bytes,
-                str,
-                type[pexpect.EOF | pexpect.TIMEOUT],
-            ]
+            ExpectPattern = (
+                Pattern[str]
+                | Pattern[bytes]
+                | bytes
+                | str
+                | type[pexpect.EOF | pexpect.TIMEOUT]
+            )
             prompts = cast(
                 list[ExpectPattern],
                 [
@@ -435,9 +449,10 @@ class SSHConnectionPool:
                     ],
                     capture_output=True,
                     timeout=5,
+                    check=False,
                 )
                 self.logger.debug("SSH ControlMaster closed")
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError) as e:
                 self.logger.warning(f"Error closing SSH master: {e}")
             finally:
                 self._master_started = False
@@ -458,7 +473,7 @@ class SSHConnectionPool:
             if self._should_close_master():
                 self.close_master()
 
-    def run(self, cmd: str, timeout: Optional[int] = None) -> str:
+    def run(self, cmd: str, timeout: int | None = None) -> str:
         """Run command using pooled connection.
 
         Args:
@@ -536,6 +551,7 @@ class SSHConnectionPool:
                     capture_output=True,
                     text=True,
                     timeout=timeout,
+                    check=False,
                 )
                 returncode = result.returncode
                 stdout = result.stdout
@@ -557,6 +573,7 @@ class SSHConnectionPool:
                         capture_output=True,
                         text=True,
                         timeout=timeout,
+                        check=False,
                     )
                     returncode = result.returncode
                     stdout = result.stdout
@@ -637,7 +654,9 @@ class SSHConnectionPool:
             )
 
             if self._master_started and not self._fallback_mode:
-                proc = subprocess.run(scp_cmd, capture_output=True, text=True)
+                proc = subprocess.run(
+                    scp_cmd, capture_output=True, text=True, check=False
+                )
                 returncode = proc.returncode
                 stdout = proc.stdout
                 stderr = proc.stderr
@@ -652,7 +671,9 @@ class SSHConnectionPool:
                     stdout = result.stdout
                     stderr = result.stderr
                 else:
-                    proc = subprocess.run(scp_cmd, capture_output=True, text=True)
+                    proc = subprocess.run(
+                        scp_cmd, capture_output=True, text=True, check=False
+                    )
                     returncode = proc.returncode
                     stdout = proc.stdout
                     stderr = proc.stderr

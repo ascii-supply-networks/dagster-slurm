@@ -23,7 +23,6 @@ Environment overrides:
 import hashlib
 import os
 from pathlib import Path
-from typing import Optional
 
 from dagster import get_dagster_logger
 
@@ -57,7 +56,7 @@ def control_dir() -> Path:
     return Path(configured or DEFAULT_CONTROL_DIR).expanduser()
 
 
-def ensure_control_dir() -> Optional[Path]:
+def ensure_control_dir() -> Path | None:
     """Create the control socket directory with private permissions.
 
     Returns:
@@ -79,7 +78,7 @@ def ensure_control_dir() -> Optional[Path]:
     return directory
 
 
-def control_socket_path(user: str, host: str, port: int) -> Optional[str]:
+def control_socket_path(user: str, host: str, port: int) -> str | None:
     """Return the deterministic control socket path for a connection target.
 
     The same target always maps to the same socket, so a master started by one
@@ -121,7 +120,7 @@ def control_socket_path(user: str, host: str, port: int) -> Optional[str]:
     return str(path)
 
 
-def multiplexing_opts(control_path: Optional[str], *, create: bool) -> list[str]:
+def multiplexing_opts(control_path: str | None, *, create: bool) -> list[str]:
     """Build OpenSSH options that attach a command to the shared control socket.
 
     Args:

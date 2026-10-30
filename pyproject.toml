@@ -229,11 +229,6 @@ url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 explicit = true
 
-[tool.ruff.lint]
-# Ruff 0.16 expanded its default rule set; keep the pre-0.16 defaults until the
-# codebase is migrated to the larger set deliberately.
-select = ["E4", "E7", "E9", "F"]
-
 [tool.pytest.ini_options]
 filterwarnings = [
   "ignore::dagster._utils.warnings.BetaWarning",
