@@ -10,7 +10,7 @@ import shlex
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
@@ -57,6 +57,7 @@ from ..scaling import (
     StartEstimate,
     StartEstimator,
     WorkerIntent,
+    _require_intent_key,
     parse_tres,
 )
 
@@ -2261,6 +2262,9 @@ echo "Ray workers left the cluster"
             failed = int(failures.get(str(record["slurm_job_id"]), 0))
             if failed >= _LEADER_ATTEMPTS:
                 continue
+            # A worker that reconcile_workers released is leaving the run.
+            if record.get("drain_deadline") is not None:
+                continue
             worker = self._allocation_from_record(record, session_dir)
             if self._get_job_state(worker.slurm_job_id) != "RUNNING":
                 continue
@@ -2566,6 +2570,9 @@ echo "Ray workers left the cluster"
                     if role == "worker"
                     else allocation.intent,
                     drain_deadline=record.get("drain_deadline"),
+                    submitted_at=(
+                        record.get("submitted_at") if role == "worker" else None
+                    ),
                 )
             )
         return SessionSnapshot(
@@ -2603,6 +2610,8 @@ echo "Ray workers left the cluster"
         *,
         observed: SessionSnapshot | None = None,
         max_observation_age: float = 300.0,
+        release: Collection[int] = (),
+        max_submissions: int | None = None,
     ) -> ReconcileResult:
         """Submit or release worker allocations until ``intent.count`` remain.
 
@@ -2615,11 +2624,21 @@ echo "Ray workers left the cluster"
         retry the release without extending the deadline and cancel the job
         once it passes.
 
+        ``release`` names allocations of the intent to release in this call,
+        whatever their order; ``count`` then applies to the others. Job IDs
+        that are not live allocations of the intent, or that are already
+        released, are ignored, so a caller can repeat a release. At most
+        ``max_submissions`` allocations are submitted; ``0`` only maintains
+        the intent.
+
         The scheduler is queried again before acting. When it does not answer,
         or ``observed`` is older than ``max_observation_age`` seconds or was
         taken under another head, nothing is submitted, but known releases and
         cleanup continue.
         """
+        if max_submissions is not None and max_submissions < 0:
+            raise ValueError("max_submissions must not be negative")
+        requested = {int(job_id) for job_id in release}
         submitted: list[int] = []
         released: list[int] = []
         cancelled: list[int] = []
@@ -2692,9 +2711,14 @@ echo "Ray workers left the cluster"
                 head_counts = int(
                     head.intent == intent.key and not self._allocation_draining(head)
                 )
-                active = [r for r in active if r not in expired]
+                chosen = [
+                    r
+                    for r in active
+                    if r not in expired and int(r["slurm_job_id"]) in requested
+                ]
+                active = [r for r in active if r not in expired and r not in chosen]
                 excess = len(active) + head_counts - intent.count
-                victims = list(expired)
+                victims = [*expired, *chosen]
                 if excess > 0 and rows is not None:
                     # Shed queued allocations first, then those with least time left.
                     def keep_order(record: dict[str, Any]) -> tuple[int, float]:
@@ -2740,15 +2764,18 @@ echo "Ray workers left the cluster"
                 self._store_if_changed(session_dir, metadata, stored)
 
                 missing = intent.count - len(active) - head_counts
-                if missing > 0 and held_back is None:
-                    config = intent.config or SlurmWorkerAllocationConfig()
-                    for _ in range(missing):
-                        worker = self._submit_intent_worker(
-                            metadata, head, config, intent.key, now
-                        )
-                        submitted.append(worker.slurm_job_id)
-                    if self._initialized:
-                        self._start_head_watch()
+                allowed = max(0, missing) if held_back is None else 0
+                if max_submissions is not None and allowed > max_submissions:
+                    allowed = max_submissions
+                    held_back = "max_submissions was reached"
+                config = intent.config or SlurmWorkerAllocationConfig()
+                for _ in range(allowed):
+                    worker = self._submit_intent_worker(
+                        metadata, head, config, intent.key, now
+                    )
+                    submitted.append(worker.slurm_job_id)
+                if submitted and self._initialized:
+                    self._start_head_watch()
                 live = [int(r["slurm_job_id"]) for r in active] + submitted
                 if head_counts:
                     live.insert(0, head.slurm_job_id)
@@ -2761,6 +2788,51 @@ echo "Ray workers left the cluster"
             recovered=tuple(recovered),
             held_back=held_back if missing > 0 else None,
         )
+
+    def assign_worker_intent(self, slurm_job_id: int, intent: str | None) -> None:
+        """Move a worker allocation into an intent, or out of every intent.
+
+        For an application that changes an allocation's role: a worker added
+        with ``add_worker_allocation`` can join an intent, so that
+        ``reconcile_workers`` counts and releases it, and a worker that must
+        stay can leave its intent, so that scale-in never releases it. An
+        allocation that ``reconcile_workers`` is releasing keeps its intent
+        until it ends. An allocation without a submission time never expires
+        through ``pending_timeout``.
+        """
+        if intent is not None:
+            _require_intent_key(intent)
+        with self._lifecycle_lock:
+            if self._allocation is None or self._torn_down:
+                raise RuntimeError("Session is not initialized")
+            session_dir = self._allocation.session_dir
+            with self._session_lock(session_dir):
+                metadata = self._read_session_metadata(session_dir)
+                if metadata is None:
+                    raise RuntimeError("Session allocation metadata is missing")
+                record = next(
+                    (
+                        record
+                        for record in metadata.get("workers", [])
+                        if int(record["slurm_job_id"]) == int(slurm_job_id)
+                    ),
+                    None,
+                )
+                if record is None:
+                    raise ValueError(
+                        f"{slurm_job_id} is not a worker allocation of this session"
+                    )
+                if record.get("drain_deadline") is not None:
+                    raise ValueError(
+                        f"Worker allocation {slurm_job_id} is being released"
+                    )
+                if record.get("intent") == intent:
+                    return
+                if intent is None:
+                    del record["intent"]
+                else:
+                    record["intent"] = intent
+                self._write_session_metadata(session_dir, metadata)
 
     def _store_if_changed(
         self, session_dir: str, metadata: dict[str, Any], stored: str

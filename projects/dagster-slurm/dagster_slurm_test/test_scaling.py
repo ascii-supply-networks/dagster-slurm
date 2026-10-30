@@ -433,6 +433,143 @@ def test_intent_survives_promotion_to_head(tmp_path):
     assert worker.slurm_job_id == job
 
 
+def test_reconcile_releases_the_named_allocations_whatever_their_order(tmp_path):
+    pool = ScalingPool()
+    pool.stuck_drains = True
+    session = make_session(tmp_path, pool)
+    jobs = session.reconcile_workers(WorkerIntent(key="w", count=3)).submitted
+    named, short, queued = jobs
+    pool.states.update({named: "RUNNING", short: "RUNNING"})
+    pool.time_left.update({named: "5:00:00", short: "10:00"})
+    shrink = WorkerIntent(key="w", count=2, drain_timeout=300)
+
+    # Count alone would cancel the queued allocation; the named one goes instead.
+    result = session.reconcile_workers(shrink, release=[named, 999_999])
+
+    assert result.released == (named,)
+    assert result.live == (short, queued)
+    assert result.submitted == ()
+    assert f"scancel --batch --signal=TERM {named}" in pool.commands
+    assert f"scancel {queued}" not in pool.commands
+    deadline = next(
+        w["drain_deadline"]
+        for w in _metadata(session)["workers"]
+        if w["slurm_job_id"] == named
+    )
+    assert deadline >= result.observed_at + 300
+
+    again = session.reconcile_workers(shrink, release=[named])
+    assert again.released == ()
+    assert again.live == (short, queued)
+    assert [
+        w["drain_deadline"]
+        for w in _metadata(session)["workers"]
+        if w["slurm_job_id"] == named
+    ] == [deadline]
+
+
+def test_a_named_release_is_replaced_while_the_count_holds(tmp_path):
+    pool = ScalingPool()
+    session = make_session(tmp_path, pool)
+    config = SlurmWorkerAllocationConfig(gpus_per_node=2, time_limit="00:30:00")
+    (job,) = session.reconcile_workers(
+        WorkerIntent(key="w", count=1, config=config)
+    ).submitted
+    pool.states[job] = "RUNNING"
+
+    result = session.reconcile_workers(
+        WorkerIntent(key="w", count=1, config=config), release=[job]
+    )
+
+    assert result.released == (job,)
+    (replacement,) = result.submitted
+    assert result.live == (replacement,)
+
+
+def test_max_submissions_bounds_what_one_call_submits(tmp_path):
+    pool = ScalingPool()
+    session = make_session(tmp_path, pool)
+    intent = WorkerIntent(key="w", count=3)
+
+    first = session.reconcile_workers(intent, max_submissions=1)
+    assert len(first.submitted) == 1
+    assert first.held_back == "max_submissions was reached"
+
+    # A policy that adds nothing keeps the intent's count at what it observed.
+    # An allocation that ends after that observation is not replaced.
+    snapshot = session.inspect()
+    (job,) = first.submitted
+    pool.states[job] = "CANCELLED"
+    keep = WorkerIntent(key="w", count=len(snapshot.workers("w")))
+    result = session.reconcile_workers(keep, observed=snapshot, max_submissions=0)
+    assert result.submitted == ()
+    assert result.live == ()
+    assert result.held_back == "max_submissions was reached"
+
+    with pytest.raises(ValueError, match="max_submissions"):
+        session.reconcile_workers(intent, max_submissions=-1)
+
+
+def test_inspect_reports_when_reconcile_submitted_a_worker(tmp_path):
+    pool = ScalingPool()
+    session = make_session(tmp_path, pool)
+    result = session.reconcile_workers(WorkerIntent(key="w", count=1))
+    session.add_worker_allocation()
+
+    by_intent, direct = session.inspect().workers()
+
+    assert by_intent.intent == "w"
+    assert by_intent.submitted_at == result.observed_at
+    assert direct.intent is None
+    assert direct.submitted_at is None
+    assert session.inspect().head.submitted_at is None
+
+
+def test_assign_worker_intent_moves_a_worker_into_and_out_of_an_intent(tmp_path):
+    pool = ScalingPool()
+    pool.stuck_drains = True
+    session = make_session(tmp_path, pool)
+    direct = session.add_worker_allocation()
+    (kept,) = session.reconcile_workers(WorkerIntent(key="w", count=1)).submitted
+    pool.states.update({direct.slurm_job_id: "RUNNING", kept: "RUNNING"})
+
+    session.assign_worker_intent(direct.slurm_job_id, "w")
+    session.assign_worker_intent(kept, None)
+    session.assign_worker_intent(kept, None)  # Repeating a move changes nothing.
+
+    assert {w.slurm_job_id: w.intent for w in session.inspect().workers()} == {
+        direct.slurm_job_id: "w",
+        kept: None,
+    }
+    result = session.reconcile_workers(WorkerIntent(key="w", count=0))
+    assert result.released == (direct.slurm_job_id,)
+    assert f"scancel --batch --signal=TERM {kept}" not in pool.commands
+    # The adopted allocation has no submission time, so it never expires.
+    assert session.inspect().workers("w")[0].submitted_at is None
+
+    with pytest.raises(ValueError, match="is being released"):
+        session.assign_worker_intent(direct.slurm_job_id, None)
+    with pytest.raises(ValueError, match="not a worker allocation"):
+        session.assign_worker_intent(session.allocation.slurm_job_id, "w")
+    with pytest.raises(ValueError, match="Intent keys"):
+        session.assign_worker_intent(kept, "has space")
+
+
+def test_a_released_worker_never_leads_the_run(tmp_path):
+    pool = ScalingPool()
+    session = make_session(tmp_path, pool)
+    released, kept = session.reconcile_workers(WorkerIntent(key="w", count=2)).submitted
+    pool.states.update({released: "RUNNING", kept: "RUNNING"})
+    pool.failing_drains = 1  # No drain marker: only the deadline says it leaves.
+
+    session.reconcile_workers(WorkerIntent(key="w", count=1), release=[released])
+
+    metadata = _metadata(session)
+    leader = session._pick_worker_leader(metadata, session.allocation.session_dir)
+    assert leader is not None
+    assert leader["slurm_job_id"] == kept
+
+
 @pytest.mark.parametrize(
     ("bad", "message"),
     [

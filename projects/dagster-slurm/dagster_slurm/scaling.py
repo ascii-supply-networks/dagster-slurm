@@ -61,6 +61,8 @@ class AllocationSnapshot:
     """Intent key of a worker allocation submitted by ``reconcile_workers``."""
     drain_deadline: float | None = None
     """Login-node epoch seconds after which ``reconcile_workers`` cancels it."""
+    submitted_at: float | None = None
+    """Login-node epoch seconds when ``reconcile_workers`` submitted it."""
 
     @property
     def ended(self) -> bool:
@@ -248,8 +250,7 @@ class WorkerIntent:
     """Cancel an allocation of this intent still pending after this many seconds."""
 
     def __post_init__(self) -> None:
-        if not _INTENT_KEY_RE.fullmatch(self.key):
-            raise ValueError("Intent keys use 1-64 letters, digits, '.', '_' or '-'")
+        _require_intent_key(self.key)
         if self.count < 0:
             raise ValueError("count must not be negative")
         if self.drain_timeout is not None and self.drain_timeout < 1:
@@ -275,6 +276,11 @@ class ReconcileResult:
     """Submissions of an interrupted earlier call, found by their token."""
     held_back: str | None = None
     """Why the call did not submit, although the intent wanted more allocations."""
+
+
+def _require_intent_key(key: str) -> None:
+    if not _INTENT_KEY_RE.fullmatch(key):
+        raise ValueError("Intent keys use 1-64 letters, digits, '.', '_' or '-'")
 
 
 def parse_tres(value: str) -> dict[str, str] | None:
