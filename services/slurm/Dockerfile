@@ -6,7 +6,14 @@ LABEL org.opencontainers.image.source="https://github.com/giovtorres/slurm-docke
       org.label-schema.docker.cmd="docker-compose up -d" \
       maintainer="Georg Heiler"
 
+# Resolve every package from Rocky's primary CDN instead of the mirror list.
+# Mirrors sync at different times, and the dnf calls below can reach different
+# mirrors: an upgraded python3 from a current mirror then conflicts with an older
+# python3-devel from a lagging one.
 RUN set -ex \
+    && sed -i -e 's/^mirrorlist=/#mirrorlist=/' \
+              -e 's|^#baseurl=http://dl.rockylinux.org/|baseurl=https://dl.rockylinux.org/|' \
+              /etc/yum.repos.d/rocky*.repo \
     && yum makecache \
     && yum -y update \
     && yum -y install dnf-plugins-core \

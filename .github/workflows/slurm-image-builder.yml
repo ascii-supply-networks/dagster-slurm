@@ -6,6 +6,13 @@ on:
     paths:
       - "services/slurm/**"
       - "docker-compose.yml"
+      - ".github/workflows/slurm-image-builder.yml"
+  # Build without pushing, so image changes are tested before they reach main.
+  pull_request:
+    paths:
+      - "services/slurm/**"
+      - "docker-compose.yml"
+      - ".github/workflows/slurm-image-builder.yml"
   workflow_dispatch:
 
 concurrency:
@@ -21,6 +28,8 @@ jobs:
   build-slurm-image:
     name: Build and Push SLURM Image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    # The arm64 build uses a paid larger runner; spend it only on this repo's branches.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       packages: write
@@ -40,6 +49,7 @@ jobs:
         uses: actions/checkout@v7.0.1
 
       - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -70,7 +80,7 @@ jobs:
         with:
           context: ./services/slurm
           platforms: ${{ matrix.platform }}
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.arch }}
@@ -80,6 +90,7 @@ jobs:
     name: Create Multi-Arch Manifest
     runs-on: ubuntu-latest
     needs: build-slurm-image
+    if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: write
