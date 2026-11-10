@@ -2,6 +2,40 @@
 
 <!-- version list -->
 
+## v1.24.0-rc.1 (2026-11-10)
+
+### Bug Fixes
+
+- Require shared ssh controlmaster
+  ([#234](https://github.com/ascii-supply-networks/dagster-slurm/pull/234),
+  [`f2ba00e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2ba00e942b2c5f2ebe5d48f7785e82426438a67))
+
+- **ci**: Export the temporary SSH key path from the runner step
+  ([#234](https://github.com/ascii-supply-networks/dagster-slurm/pull/234),
+  [`f2ba00e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2ba00e942b2c5f2ebe5d48f7785e82426438a67))
+
+- **ci**: Use temporary SSH keys for Slurm deployment and tests
+  ([#234](https://github.com/ascii-supply-networks/dagster-slurm/pull/234),
+  [`f2ba00e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2ba00e942b2c5f2ebe5d48f7785e82426438a67))
+
+- **ssh**: Remove stale sockets before master authentication
+  ([#234](https://github.com/ascii-supply-networks/dagster-slurm/pull/234),
+  [`f2ba00e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2ba00e942b2c5f2ebe5d48f7785e82426438a67))
+
+- **ssh**: Require a shared ControlMaster for every transport
+  ([#234](https://github.com/ascii-supply-networks/dagster-slurm/pull/234),
+  [`f2ba00e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2ba00e942b2c5f2ebe5d48f7785e82426438a67))
+
+- **types**: Annotate the master startup lock as a generator
+  ([#234](https://github.com/ascii-supply-networks/dagster-slurm/pull/234),
+  [`f2ba00e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2ba00e942b2c5f2ebe5d48f7785e82426438a67))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`f2953eb`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2953eb8ac84fa97ab7419651340187f854c5920))
+
+
 ## v1.24.0 (2026-10-30)
 
 ### Chores
