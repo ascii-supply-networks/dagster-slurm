@@ -22,7 +22,7 @@ Environment overrides:
 
 import hashlib
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -74,7 +74,7 @@ def ensure_control_dir() -> Path | None:
 
 
 @contextmanager
-def master_start_lock(control_path: str) -> Iterator[None]:
+def master_start_lock(control_path: str) -> Generator[None, None, None]:
     """Serialize cold starts across workers without opening SSH connections."""
     import fcntl
 
