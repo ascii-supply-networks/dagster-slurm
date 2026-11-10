@@ -592,6 +592,26 @@ def test_live_master_is_reused_instead_of_respawned(monkeypatch, tmp_path):
     assert not [cmd for cmd in commands if "-M" in cmd]
 
 
+def test_stale_socket_is_removed_before_authentication(monkeypatch, tmp_path):
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    assert pool.control_path is not None
+    socket = Path(pool.control_path)
+    socket.touch()
+    state = {"alive": False}
+
+    def fake_run(cmd, **kwargs):
+        if "-O" in cmd:
+            return DummyResult(returncode=0 if state["alive"] else 255)
+        if "-M" in cmd:
+            assert not socket.exists(), "stale socket would leak an unpooled session"
+            state["alive"] = True
+        return DummyResult(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pool:
+        assert pool.multiplexing_active
+
+
 def test_exit_leaves_master_alive_for_the_next_caller(monkeypatch, tmp_path):
     commands: list[list[str]] = []
     state = {"alive": False}

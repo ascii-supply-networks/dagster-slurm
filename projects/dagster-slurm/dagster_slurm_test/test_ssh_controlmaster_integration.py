@@ -152,6 +152,17 @@ def test_commands_transfers_streams_and_legacy_helper_share_one_connection(local
     assert log.read_text().count("Accepted publickey") == 1
 
 
+def test_stale_socket_is_replaced_before_authenticating(local_ssh):
+    ssh, log = local_ssh
+    pool = SSHConnectionPool(ssh)
+    assert pool.control_path is not None
+    with socket.socket(socket.AF_UNIX) as stale:
+        stale.bind(pool.control_path)
+    with pool:
+        assert pool.run("printf recovered", timeout=5) == "recovered"
+    assert log.read_text().count("Accepted publickey") == 1
+
+
 def test_missing_socket_blocks_network_fallback_for_every_command_builder(local_ssh):
     ssh, log = local_ssh
     with SSHConnectionPool(ssh) as pool:

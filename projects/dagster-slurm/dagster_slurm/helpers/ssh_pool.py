@@ -139,6 +139,10 @@ class SSHConnectionPool:
             if self._master_is_alive():
                 self._owns_master = False
                 return
+            # -M can authenticate and exit successfully without publishing a
+            # master when a dead process left its socket behind. Remove it
+            # under the same lock before opening the connection.
+            Path(self.control_path).unlink(missing_ok=True)
             self._spawn_master_locked()
 
     def _spawn_master_locked(self) -> None:
