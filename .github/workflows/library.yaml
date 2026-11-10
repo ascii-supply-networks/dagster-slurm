@@ -163,6 +163,7 @@ jobs:
       packages: read
     env:
       DEVENV_PYTHON_VERSION: "3.11"
+      SLURM_EDGE_NODE_KEY_PATH: ${{ runner.temp }}/dagster-slurm-ci/id_ed25519
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
@@ -222,7 +223,17 @@ jobs:
         if: needs.changes.outputs.run-expensive == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y openssh-client sshpass netcat-openbsd
+          sudo apt-get install -y openssh-client netcat-openbsd
+
+      - name: Provision temporary SSH key for SLURM
+        if: needs.changes.outputs.run-expensive == 'true'
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$(dirname "$SLURM_EDGE_NODE_KEY_PATH")"
+          ssh-keygen -q -t ed25519 -N '' -f "$SLURM_EDGE_NODE_KEY_PATH"
+          docker exec -i --user submitter slurmctld sh -c \
+            'umask 077; mkdir -p /home/submitter/.ssh; cat >> /home/submitter/.ssh/authorized_keys' \
+            < "$SLURM_EDGE_NODE_KEY_PATH.pub"
 
       - name: Trust SLURM test container host keys
         if: needs.changes.outputs.run-expensive == 'true'
@@ -252,7 +263,6 @@ jobs:
         env:
           # Define credentials as ENV vars for clarity and reuse
           SSH_USER: submitter
-          SSH_PASS: submitter
           SSH_HOST: localhost
           SSH_PORT: 2223
         run: |
@@ -287,12 +297,9 @@ jobs:
           echo "---"
           echo "### STEP 3: Full SSH Connection Test (The Final Boss)"
           echo "---"
-          # This is the most robust command.
-          # -o PreferredAuthentications=password and -o PubkeyAuthentication=no force it to use only the method we care about.
-          # -vvv provides maximum client-side debug information.
-          if ! sshpass -p "$SSH_PASS" ssh -vvv \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
+          if ! ssh -vvv -i "$SLURM_EDGE_NODE_KEY_PATH" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o KexAlgorithms=+diffie-hellman-group14-sha256 \
@@ -321,7 +328,6 @@ jobs:
           SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
-          SLURM_EDGE_NODE_PASSWORD: submitter
           SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
           PYTHONUNBUFFERED: "1"
         run: |
@@ -345,7 +351,6 @@ jobs:
           SLURM_EDGE_NODE_HOST: localhost
           SLURM_EDGE_NODE_PORT: 2223
           SLURM_EDGE_NODE_USER: submitter
-          SLURM_EDGE_NODE_PASSWORD: submitter
           SLURM_DEPLOYMENT_BASE_PATH: /home/submitter/pipelines/deployments
           # Randomize Ray ports in CI to prevent conflicts with default port 6379.
           # Uses RAY_PORT_SEED instead of SLURM_JOB_ID to avoid side effects
