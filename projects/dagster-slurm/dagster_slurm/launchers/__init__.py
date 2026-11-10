@@ -6,9 +6,9 @@ from .script import BashLauncher
 from .spark import SparkLauncher
 
 __all__ = [
+    "BashLauncher",
     "ComputeLauncher",
     "ExecutionPlan",
-    "BashLauncher",
     "RayLauncher",
     "RayPortConfig",
     "SparkLauncher",

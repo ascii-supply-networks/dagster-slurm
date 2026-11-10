@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import List, Optional
 
 import dagster as dg
 from pydantic import Field
@@ -59,7 +58,7 @@ class SlurmRunConfig(dg.Config):
         ),
     )
 
-    remote_payload_path: Optional[str] = Field(
+    remote_payload_path: str | None = Field(
         default=None,
         description=(
             "Optional remote path to an existing payload when skip_payload_upload=True. "
@@ -67,7 +66,7 @@ class SlurmRunConfig(dg.Config):
         ),
     )
 
-    environment_name: Optional[str] = Field(
+    environment_name: str | None = Field(
         default=None,
         description=(
             "Named environment produced by ComputeResource.project_setup_cmd. "
@@ -75,7 +74,7 @@ class SlurmRunConfig(dg.Config):
         ),
     )
 
-    extra_files: Optional[List[str]] = Field(
+    extra_files: list[str] | None = Field(
         default=None,
         description=(
             "Additional local files to upload alongside the payload script. "

@@ -2,6 +2,108 @@
 
 <!-- version list -->
 
+## v1.24.0 (2026-10-30)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`153ef52`](https://github.com/ascii-supply-networks/dagster-slurm/commit/153ef524344490e94913b0bc4c6160ecb133d5b7))
+
+
+## v1.23.0-rc.2 (2026-10-30)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`8b1ba11`](https://github.com/ascii-supply-networks/dagster-slurm/commit/8b1ba1192e9ac3c9bc9ebbf36d3aa9b3781c5fae))
+
+### Features
+
+- Named releases, intent moves and a submission budget for scaling hooks
+  ([#233](https://github.com/ascii-supply-networks/dagster-slurm/pull/233),
+  [`02a9ce1`](https://github.com/ascii-supply-networks/dagster-slurm/commit/02a9ce1d7e89002ddefe8bf6a4b090d4c3cd974d))
+
+
+## v1.23.0-rc.1 (2026-10-30)
+
+### Bug Fixes
+
+- Read Slurm job logs with the status poll
+  ([#229](https://github.com/ascii-supply-networks/dagster-slurm/pull/229),
+  [`3d4e416`](https://github.com/ascii-supply-networks/dagster-slurm/commit/3d4e416e43f9f2a08c9f9ea8072754bea567c578))
+
+- Start at most one SSH ControlMaster per control socket
+  ([#230](https://github.com/ascii-supply-networks/dagster-slurm/pull/230),
+  [`ffea17d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/ffea17dec1e47bbbafc11427de3777fa69ee15e4))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`b6ec108`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b6ec108fd95f19d05917964f8893bd0a437ce5df))
+
+- Validate the library against one Slurm version in CI
+  ([#232](https://github.com/ascii-supply-networks/dagster-slurm/pull/232),
+  [`f2fa936`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f2fa936521b6f9e411bc9feac5a01e630249a28c))
+
+- **examples**: Remove previously built packages before rebuilding
+  ([#231](https://github.com/ascii-supply-networks/dagster-slurm/pull/231),
+  [`b498858`](https://github.com/ascii-supply-networks/dagster-slurm/commit/b49885897bb29f2f4e978c31bbcdd5ca4137208b))
+
+
+## v1.23.0 (2026-10-30)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`c982d13`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c982d13e8e180cbea8c0a63a289e23acc93e7bf2))
+
+
+## v1.22.0-rc.2 (2026-10-30)
+
+### Chores
+
+- Test against slurm 25.11 and 26.05
+  ([#228](https://github.com/ascii-supply-networks/dagster-slurm/pull/228),
+  [`a663e4f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/a663e4fe8a5d1e3156848e2d5b7476d59dad4cc6))
+
+- Update uv lockfile version [skip ci]
+  ([`bce6d59`](https://github.com/ascii-supply-networks/dagster-slurm/commit/bce6d59bdd1337c0c74c13d3046623bdbdcaa0a9))
+
+### Continuous Integration
+
+- Reuse Slurm images built from the same sources and prune old ones
+  ([#228](https://github.com/ascii-supply-networks/dagster-slurm/pull/228),
+  [`a663e4f`](https://github.com/ascii-supply-networks/dagster-slurm/commit/a663e4fe8a5d1e3156848e2d5b7476d59dad4cc6))
+
+
+## v1.22.0-rc.1 (2026-10-30)
+
+### Bug Fixes
+
+- Build the Slurm image from Rocky's primary repository
+  ([#227](https://github.com/ascii-supply-networks/dagster-slurm/pull/227),
+  [`52f24b8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/52f24b8f3c5c0b299c7deea5d8e1ee3b931520eb))
+
+### Chores
+
+- Adopt ruff's default rule set
+  ([#226](https://github.com/ascii-supply-networks/dagster-slurm/pull/226),
+  [`dfb08b2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/dfb08b23a39000c3ba2b6d682fbf5a7f05049068))
+
+- Refresh dependencies and CI actions, drop Python 3.10
+  ([#223](https://github.com/ascii-supply-networks/dagster-slurm/pull/223),
+  [`1367e9d`](https://github.com/ascii-supply-networks/dagster-slurm/commit/1367e9df4695443efbf1cd9d8e8db5be1a664b28))
+
+- Update uv lockfile version [skip ci]
+  ([`f326e71`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f326e71f6d0edba7ef42dcc441bec1dae408bab6))
+
+### Features
+
+- Add hooks for application-driven worker scaling (#222)
+  ([#224](https://github.com/ascii-supply-networks/dagster-slurm/pull/224),
+  [`46154e8`](https://github.com/ascii-supply-networks/dagster-slurm/commit/46154e82848410f7ecfe7d7b4585ed212dc65005))
+
+
 ## v1.21.0-rc.2 (2026-09-29)
 
 ### Bug Fixes

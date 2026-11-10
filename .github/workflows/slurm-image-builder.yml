@@ -6,6 +6,14 @@ on:
     paths:
       - "services/slurm/**"
       - "docker-compose.yml"
+      - ".github/workflows/slurm-image-builder.yml"
+  # Build image changes before they reach main. Pull requests push only the
+  # content-addressed tag, never the version or 'latest' tags.
+  pull_request:
+    paths:
+      - "services/slurm/**"
+      - "docker-compose.yml"
+      - ".github/workflows/slurm-image-builder.yml"
   workflow_dispatch:
 
 concurrency:
@@ -15,19 +23,25 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/slurm-docker-cluster
-  SLURM_VERSION: 25-11-2-1
+  # The 'latest' tags follow this version, which docker-compose.yml also uses.
+  DEFAULT_SLURM_VERSION: 25-11-8-1
 
 jobs:
   build-slurm-image:
-    name: Build and Push SLURM Image (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
+    name: Build SLURM ${{ matrix.slurm }} Image (${{ matrix.target.platform }})
+    runs-on: ${{ matrix.target.runner }}
+    # The arm64 build uses a paid larger runner; spend it only on this repo's branches.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
       matrix:
-        include:
+        # Production clusters upgrade slowly: keep the 25.11 line next to the
+        # newest release. Keep in sync with library.yaml.
+        slurm: ["25-11-8-1", "26-05-5-1"]
+        target:
           - platform: linux/amd64
             runner: ubuntu-latest
             arch: amd64
@@ -37,14 +51,37 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
+
+      - name: Compute the content-addressed tag
+        id: key
+        run: |
+          # The image depends only on services/slurm and the Slurm release, so
+          # their git tree hash names it. library.yaml derives the same tag to
+          # pull this image instead of building its own.
+          inputs="$(git rev-parse --short=12 HEAD:services/slurm)"
+          echo "tag=${{ matrix.slurm }}-${inputs}-${{ matrix.target.arch }}" >> "$GITHUB_OUTPUT"
 
       - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@v4.4.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Check for an image built from the same sources
+        id: existing
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.key.outputs.tag }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract Docker metadata
         id: meta
@@ -52,48 +89,67 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Create a 'latest' tag for pushes to the main branch (good for consumers)
-            type=raw,value=latest-${{ matrix.arch }},enable={{is_default_branch}}
+            # Create a 'latest' tag for the default version on main (good for consumers)
+            type=raw,value=latest-${{ matrix.target.arch }},enable=${{ github.ref == 'refs/heads/main' && matrix.slurm == env.DEFAULT_SLURM_VERSION }}
 
             # === USE THE VERSION TO CREATE A STABLE TAG ===
-            # This creates a tag like '25-11-2-1-amd64'
-            type=raw,value=${{ env.SLURM_VERSION }}-${{ matrix.arch }}
+            # This creates a tag like '25-11-8-1-amd64'
+            type=raw,value=${{ matrix.slurm }}-${{ matrix.target.arch }},enable=${{ github.event_name != 'pull_request' }}
 
             # Create a unique tag based on the commit SHA (for traceability)
-            type=sha,prefix=,suffix=-${{ matrix.arch }},format=short
+            type=sha,prefix=${{ matrix.slurm }}-,suffix=-${{ matrix.target.arch }},format=short,enable=${{ github.event_name != 'pull_request' }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.2.0
+            # Content-addressed tag, also pushed from pull requests, that later
+            # runs reuse instead of rebuilding
+            type=raw,value=${{ steps.key.outputs.tag }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v7.3.0
+        if: steps.existing.outputs.found != 'true'
+        uses: docker/build-push-action@v7.4.0
         with:
           context: ./services/slurm
-          platforms: ${{ matrix.platform }}
+          platforms: ${{ matrix.target.platform }}
+          build-args: SLURM_TAG=slurm-${{ matrix.slurm }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.slurm }}-${{ matrix.target.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.slurm }}-${{ matrix.target.arch }}
+
+      - name: Point the release tags at the existing image
+        if: steps.existing.outputs.found == 'true' && github.event_name != 'pull_request'
+        env:
+          SOURCE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.key.outputs.tag }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while read -r tag; do
+            if [ -n "$tag" ] && [ "$tag" != "$SOURCE" ]; then
+              docker buildx imagetools create -t "$tag" "$SOURCE"
+            fi
+          done <<< "$TAGS"
 
   create-manifest:
-    name: Create Multi-Arch Manifest
+    name: Create Multi-Arch Manifest (${{ matrix.slurm }})
     runs-on: ubuntu-latest
     needs: build-slurm-image
+    if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        slurm: ["25-11-8-1", "26-05-5-1"]
 
     steps:
       - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@v4.4.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push multi-arch manifest for latest
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && matrix.slurm == env.DEFAULT_SLURM_VERSION
         run: |
           docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64 \
@@ -101,6 +157,32 @@ jobs:
 
       - name: Create and push multi-arch manifest for version
         run: |
-          docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SLURM_VERSION }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SLURM_VERSION }}-amd64 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.SLURM_VERSION }}-arm64
+          docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.slurm }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.slurm }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.slurm }}-arm64
+
+  cleanup:
+    name: Clean up old images
+    runs-on: ubuntu-latest
+    needs: [build-slurm-image, create-manifest]
+    # On main this deletes; on pull requests it only logs what it would delete.
+    if: >-
+      !cancelled()
+      && needs.build-slurm-image.result == 'success'
+      && (github.event_name == 'pull_request' || needs.create-manifest.result == 'success')
+    permissions:
+      packages: write
+
+    steps:
+      - name: Keep the 10 newest tagged images and the release tags
+        uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          package: dagster-slurm/slurm-docker-cluster
+          keep-n-tagged: 10
+          # 'latest' and the current version tags, with and without the
+          # architecture suffix. Keep the versions in sync with the matrix.
+          exclude-tags: ^(latest|25-11-8-1|26-05-5-1)(-(amd64|arm64))?$
+          use-regex: true
+          delete-untagged: true
+          validate: true
+          dry-run: ${{ github.event_name == 'pull_request' }}

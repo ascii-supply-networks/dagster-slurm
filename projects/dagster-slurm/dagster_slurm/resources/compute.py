@@ -2,7 +2,7 @@
 
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from dagster import (
     AssetExecutionContext,
@@ -10,13 +10,13 @@ from dagster import (
     InitResourceContext,
     get_dagster_logger,
 )
-from pydantic import Field, PrivateAttr, model_validator
 from dagster._core.pipes.client import PipesClientCompletedInvocation
+from pydantic import Field, PrivateAttr, model_validator
 
 from ..config.environment import ExecutionMode
 from ..config.runtime import SlurmRunConfig
-from ..helpers.metrics import SlurmMetricSelection, SlurmMetricsCallback
-from ..helpers.ssh_pool import SSHConnectionPool
+from ..helpers.metrics import SlurmMetricsCallback, SlurmMetricSelection
+from ..helpers.ssh_pool import SSH_ERRORS, SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..launchers.ray import RayLauncher
 from ..managers.hetjob import HeterogeneousJobManager, HetJobComponent
@@ -36,8 +36,8 @@ _DEFAULT_HEAD_MEM = "8G"
 
 
 def _deep_merge_payload(
-    base: Dict[str, Any], override: Dict[str, Any]
-) -> Dict[str, Any]:
+    base: dict[str, Any], override: dict[str, Any]
+) -> dict[str, Any]:
     """Merge ``override`` into ``base``, recursing into nested config models.
 
     ``model_dump(exclude_unset=True)`` is recursive, so an override that touches
@@ -131,11 +131,11 @@ class ComputeResource(ConfigurableResource):
     )
 
     # Optional resources (mode-dependent)
-    slurm: Optional[SlurmResource] = Field(
+    slurm: SlurmResource | None = Field(
         default=None, description="Slurm config (required for slurm modes)"
     )
 
-    session: Optional[SlurmSessionResource] = Field(
+    session: SlurmSessionResource | None = Field(
         default=None, description="Session resource (required for slurm-session mode)"
     )
 
@@ -153,7 +153,7 @@ class ComputeResource(ConfigurableResource):
         description="Run-owned Slurm allocation shape when allocation_scope='run'.",
     )
 
-    ray_head_allocation: Optional[SlurmRunAllocationConfig] = Field(
+    ray_head_allocation: SlurmRunAllocationConfig | None = Field(
         default=None,
         description=(
             "Run the Ray head and payload drivers in a separate allocation of this "
@@ -184,11 +184,11 @@ class ComputeResource(ConfigurableResource):
         description="Auto-detect platform (ARM vs x86) for pixi pack command",
     )
 
-    pack_platform: Optional[str] = Field(
+    pack_platform: str | None = Field(
         default=None,
         description="Override platform for pack command: 'linux-64', 'linux-aarch64', 'osx-arm64'",
     )
-    pre_deployed_env_path: Optional[str] = Field(
+    pre_deployed_env_path: str | None = Field(
         default=None,
         description="If set, uses a pre-deployed environment at this path instead of live packaging.",
     )
@@ -207,7 +207,7 @@ class ComputeResource(ConfigurableResource):
         description="Timeout in seconds for remote environment packing on the edge node.",
     )
 
-    project_setup_cmd: Optional[List[str]] = Field(
+    project_setup_cmd: list[str] | None = Field(
         default=None,
         description=(
             "Optional project-level command that prepares multiple named environments "
@@ -216,12 +216,12 @@ class ComputeResource(ConfigurableResource):
         ),
     )
 
-    project_setup_env: Dict[str, str] = Field(
+    project_setup_env: dict[str, str] = Field(
         default_factory=dict,
         description="Environment variables passed to project_setup_cmd.",
     )
 
-    project_setup_input_globs: Optional[List[str]] = Field(
+    project_setup_input_globs: list[str] | None = Field(
         default=None,
         description=(
             "Additional project-relative glob patterns staged for project_setup_cmd. "
@@ -229,7 +229,7 @@ class ComputeResource(ConfigurableResource):
         ),
     )
 
-    default_environment_name: Optional[str] = Field(
+    default_environment_name: str | None = Field(
         default=None,
         description=(
             "Default named environment produced by project_setup_cmd. Can be "
@@ -237,7 +237,7 @@ class ComputeResource(ConfigurableResource):
         ),
     )
 
-    cache_inject_globs: Optional[List[str]] = Field(
+    cache_inject_globs: list[str] | None = Field(
         default=None,
         description=(
             "List of --inject glob patterns whose file contents should affect the "
@@ -247,7 +247,7 @@ class ComputeResource(ConfigurableResource):
         ),
     )
 
-    default_extra_files: Optional[List[str]] = Field(
+    default_extra_files: list[str] | None = Field(
         default=None,
         description=(
             "List of local file paths to upload alongside the payload for every run. "
@@ -280,8 +280,8 @@ class ComputeResource(ConfigurableResource):
     )
 
     # Private state for cluster management
-    _active_clusters: Dict[str, Dict[str, Any]] = PrivateAttr(default_factory=dict)
-    _run_allocation_session: Optional[SlurmSessionResource] = PrivateAttr(default=None)
+    _active_clusters: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
+    _run_allocation_session: SlurmSessionResource | None = PrivateAttr(default=None)
     _run_allocation_session_lock: threading.RLock = PrivateAttr(
         default_factory=threading.RLock
     )
@@ -369,7 +369,7 @@ class ComputeResource(ConfigurableResource):
     def get_pipes_client(
         self,
         context: InitResourceContext,
-        launcher: Optional[ComputeLauncher] = None,
+        launcher: ComputeLauncher | None = None,
     ):
         """Get appropriate Pipes client for this mode.
 
@@ -533,7 +533,7 @@ class ComputeResource(ConfigurableResource):
 
     def _run_allocation_shape(
         self, cfg: SlurmRunAllocationConfig | SlurmSessionResource | None = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Resolve a run allocation shape, by default the run's compute."""
         if not self.slurm:
             raise ValueError("slurm resource is required for run-scoped allocation")
@@ -597,7 +597,7 @@ class ComputeResource(ConfigurableResource):
 
     def _validate_run_allocation_overrides(
         self,
-        extra_slurm_opts: Dict[str, Any],
+        extra_slurm_opts: dict[str, Any],
     ) -> None:
         """Fail if an asset tries to change the run-owned allocation shape."""
         shape = self._run_allocation_shape()
@@ -619,7 +619,7 @@ class ComputeResource(ConfigurableResource):
                     f"match run_allocation value {expected[key]!r}."
                 )
 
-    def _resolve_launcher(self, override: Optional[ComputeLauncher]) -> ComputeLauncher:
+    def _resolve_launcher(self, override: ComputeLauncher | None) -> ComputeLauncher:
         """Merge launcher overrides with the deployment default when possible."""
         if override is None:
             return self.default_launcher
@@ -640,7 +640,7 @@ class ComputeResource(ConfigurableResource):
 
         return override
 
-    def _get_metadata_by_key(self, context) -> Dict[Any, Dict[str, Any]]:
+    def _get_metadata_by_key(self, context) -> dict[Any, dict[str, Any]]:
         """Return asset metadata mapping if available, otherwise {}."""
         has_assets_def = getattr(context, "has_assets_def", False)
         if callable(has_assets_def):
@@ -678,7 +678,8 @@ class ComputeResource(ConfigurableResource):
         for output_name in self._get_output_names(context):
             try:
                 key = context.asset_key_for_output(output_name)
-            except Exception:
+            # Dagster raises different errors for outputs without an asset key.
+            except Exception:  # noqa: BLE001, S112
                 continue
             if key:
                 asset_keys.append(key)
@@ -691,14 +692,14 @@ class ComputeResource(ConfigurableResource):
                 if key in seen:
                     continue
                 seen.add(key)
-            except Exception:
+            except TypeError:
                 # Non-hashable keys: keep them
                 pass
             unique_keys.append(key)
 
         return unique_keys
 
-    def _should_force_env_push(self, context, explicit: Optional[bool]) -> bool:
+    def _should_force_env_push(self, context, explicit: bool | None) -> bool:
         """Determine whether to force uploading the environment for this execution."""
         if explicit is not None:
             return explicit
@@ -720,11 +721,11 @@ class ComputeResource(ConfigurableResource):
     def _resolve_payload_strategy(
         self,
         context,
-        skip_upload_explicit: Optional[bool],
-        remote_path_explicit: Optional[str],
-        payload_path: Optional[str] = None,
-        effective_env_path: Optional[str] = None,
-    ) -> tuple[bool, Optional[str]]:
+        skip_upload_explicit: bool | None,
+        remote_path_explicit: str | None,
+        payload_path: str | None = None,
+        effective_env_path: str | None = None,
+    ) -> tuple[bool, str | None]:
         """Decide payload upload behavior and remote path, with asset metadata fallback.
 
         Resolution order for skip_upload:
@@ -739,8 +740,8 @@ class ComputeResource(ConfigurableResource):
         3. Asset metadata (slurm_payload_path)
         4. Derived from pre_deployed_env_path: {env_path}/scripts/{filename}
         """
-        skip_upload: Optional[bool] = None
-        remote_path: Optional[str] = remote_path_explicit
+        skip_upload: bool | None = None
+        remote_path: str | None = remote_path_explicit
 
         # Check explicit parameter first
         if skip_upload_explicit is not None:
@@ -774,9 +775,9 @@ class ComputeResource(ConfigurableResource):
     def _resolve_extra_files(
         self,
         context,
-        explicit_files: Optional[List[str]],
-        config_files: Optional[List[str]],
-    ) -> Optional[List[str]]:
+        explicit_files: list[str] | None,
+        config_files: list[str] | None,
+    ) -> list[str] | None:
         """Resolve and merge extra_files from all sources.
 
         Merge order (additive):
@@ -838,12 +839,10 @@ class ComputeResource(ConfigurableResource):
 
         return resolved
 
-    def _resolve_env_overrides(
-        self, context
-    ) -> tuple[Optional[list[str]], Optional[str]]:
+    def _resolve_env_overrides(self, context) -> tuple[list[str] | None, str | None]:
         """Read per-asset environment overrides from metadata."""
-        pack_cmd_override: Optional[list[str]] = None
-        pre_deployed_env_path: Optional[str] = None
+        pack_cmd_override: list[str] | None = None
+        pre_deployed_env_path: str | None = None
 
         try:
             metadata_by_key = self._get_metadata_by_key(context)
@@ -862,7 +861,7 @@ class ComputeResource(ConfigurableResource):
                     if "slurm_pre_deployed_env_path" in metadata:
                         env_path_values.append(metadata["slurm_pre_deployed_env_path"])
 
-                def _normalize_pack_cmd(value: Any) -> Optional[list[str]]:
+                def _normalize_pack_cmd(value: Any) -> list[str] | None:
                     if value is None:
                         return None
                     if isinstance(value, list) and all(
@@ -907,13 +906,15 @@ class ComputeResource(ConfigurableResource):
                 if unique_env_paths:
                     pre_deployed_env_path = unique_env_paths[0]
         except Exception as exc:  # pragma: no cover - best effort
-            get_dagster_logger().debug(
-                f"Could not resolve env overrides from asset metadata: {exc}"
+            logger = get_dagster_logger()
+            logger.debug(
+                f"Could not resolve env overrides from asset metadata: {exc}",
+                exc_info=True,
             )
 
         return pack_cmd_override, pre_deployed_env_path
 
-    def _resolve_environment_name(self, context) -> Optional[str]:
+    def _resolve_environment_name(self, context) -> str | None:
         """Read one named project environment from selected asset metadata."""
         metadata_by_key = self._get_metadata_by_key(context)
         if not metadata_by_key:
@@ -944,16 +945,16 @@ class ComputeResource(ConfigurableResource):
         self,
         context,
         payload_path: str,
-        launcher: Optional[ComputeLauncher] = None,
-        extra_slurm_opts: Optional[Dict[str, Any]] = None,
-        resource_requirements: Optional[Dict[str, Any]] = None,
-        force_env_push: Optional[bool] = None,
-        skip_payload_upload: Optional[bool] = None,
-        remote_payload_path: Optional[str] = None,
-        environment_name: Optional[str] = None,
-        config: Optional[SlurmRunConfig] = None,
-        extra_files: Optional[List[str]] = None,
-        metrics_collector: Optional[SlurmMetricsCallback] = None,
+        launcher: ComputeLauncher | None = None,
+        extra_slurm_opts: dict[str, Any] | None = None,
+        resource_requirements: dict[str, Any] | None = None,
+        force_env_push: bool | None = None,
+        skip_payload_upload: bool | None = None,
+        remote_payload_path: str | None = None,
+        environment_name: str | None = None,
+        config: SlurmRunConfig | None = None,
+        extra_files: list[str] | None = None,
+        metrics_collector: SlurmMetricsCallback | None = None,
         poll_timeout: int = 3600,
         slurm_metrics: SlurmMetricSelection | None = None,
         **kwargs,
@@ -1161,9 +1162,10 @@ class ComputeResource(ConfigurableResource):
             )
 
         # Add use_session flag for session mode
-        if self.mode == ExecutionMode.SLURM_SESSION:
-            kwargs.setdefault("use_session", True)
-        elif self.allocation_scope == SlurmAllocationScope.RUN:
+        if (
+            self.mode == ExecutionMode.SLURM_SESSION
+            or self.allocation_scope == SlurmAllocationScope.RUN
+        ):
             kwargs.setdefault("use_session", True)
 
         # Run with the configured client
@@ -1175,8 +1177,8 @@ class ComputeResource(ConfigurableResource):
     def run_hetjob(
         self,
         context,
-        assets: List[Tuple[str, str, Dict[str, Any]]],
-        launchers: Optional[Dict[str, ComputeLauncher]] = None,
+        assets: list[tuple[str, str, dict[str, Any]]],
+        launchers: dict[str, ComputeLauncher] | None = None,
     ):
         """Run multiple assets as a heterogeneous Slurm job.
 
@@ -1363,7 +1365,7 @@ class ComputeResource(ConfigurableResource):
                     try:
                         ssh_pool.run(f"rm -rf {working_dir}")
                         logger.info(f"Cleaned up working directory: {working_dir}")
-                    except Exception as cleanup_error:
+                    except SSH_ERRORS as cleanup_error:
                         logger.warning(f"Cleanup failed: {cleanup_error}")
                 else:
                     logger.info(
@@ -1377,15 +1379,15 @@ class ComputeResource(ConfigurableResource):
                 try:
                     ssh_pool.run(f"rm -rf {working_dir}")
                     logger.info(f"Cleaned up working directory: {working_dir}")
-                except Exception as cleanup_error:
+                except SSH_ERRORS as cleanup_error:
                     logger.warning(f"Cleanup failed: {cleanup_error}")
 
     def _get_or_create_cluster(
         self,
-        launcher: Optional[ComputeLauncher],
-        requirements: Dict[str, Any],
+        launcher: ComputeLauncher | None,
+        requirements: dict[str, Any],
         context,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Get existing cluster if resources match, otherwise return None to create new.
 
         Args:
@@ -1408,7 +1410,7 @@ class ComputeResource(ConfigurableResource):
         logger = get_dagster_logger()
 
         # Check active clusters for compatible match
-        for cluster_id, info in self._active_clusters.items():
+        for info in self._active_clusters.values():
             if info["framework"] != framework:
                 continue
 

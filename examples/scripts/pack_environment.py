@@ -169,10 +169,19 @@ def _targets_requiring_build(base_dir: Path) -> list[BuildTarget]:
     return targets
 
 
+def _remove_artifacts(base_dir: Path, pattern: str) -> None:
+    for artifact in base_dir.glob(pattern):
+        if artifact.is_file():
+            print(f"Removing old artifact {artifact.relative_to(base_dir)}")
+            artifact.unlink()
+
+
 def _run_build(base_dir: Path, target: BuildTarget) -> None:
     build_dir = target.build_dir
     build_cmd = target.build_cmd
     build_path = base_dir / build_dir
+    # Packages from earlier builds would also match the inject pattern.
+    _remove_artifacts(base_dir, target.pattern)
     print(f"📦 Building in {build_dir}:")
     print(f"   $ {' '.join(build_cmd)}")
 

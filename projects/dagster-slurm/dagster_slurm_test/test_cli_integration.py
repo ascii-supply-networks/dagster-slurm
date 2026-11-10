@@ -7,11 +7,11 @@ Run with: pytest -v -m integration
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 import pytest
-from .test_utils import run_dg_command, assert_materialization_success
 
+from .test_utils import assert_materialization_success, run_dg_command
 
 pytestmark = pytest.mark.needs_slurm_docker
 
@@ -45,6 +45,7 @@ class TestDevelopmentMode:
             capture_output=True,
             text=True,
             timeout=LIST_DEFS_TIMEOUT,
+            check=False,
         )
 
         assert result.returncode == 0
@@ -114,10 +115,9 @@ class TestStagingDockerMode:
     @pytest.fixture(autouse=True)
     def require_slurm(self, slurm_cluster_ready):
         """Ensure SLURM cluster is ready for all staging tests."""
-        pass
 
     def test_list_defs_staging(
-        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+        self, example_project_dir: Path, docker_slurm_env: dict[str, str]
     ):
         """Test listing definitions in staging mode."""
         result = subprocess.run(
@@ -141,12 +141,13 @@ class TestStagingDockerMode:
             capture_output=True,
             text=True,
             timeout=LIST_DEFS_TIMEOUT,
+            check=False,
         )
 
         assert result.returncode == 0
 
     def test_slurm_payload_executes_in_docker(
-        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+        self, example_project_dir: Path, docker_slurm_env: dict[str, str]
     ):
         """Smoke test: execute a single asset via SLURM in the dockerized cluster."""
         result = run_dg_command(
@@ -161,7 +162,7 @@ class TestStagingDockerMode:
         assert "Submitted job" in result.stderr
 
     def test_bash_assets_staging(
-        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+        self, example_project_dir: Path, docker_slurm_env: dict[str, str]
     ):
         """Test shell/bash assets on SLURM with interactive build."""
         result = run_dg_command(
@@ -184,7 +185,7 @@ class TestStagingDockerMode:
         )
 
     def test_ray_staging(
-        self, example_project_dir: Path, docker_slurm_env: Dict[str, str]
+        self, example_project_dir: Path, docker_slurm_env: dict[str, str]
     ):
         """Test Ray multi-node cluster on SLURM with interactive build."""
         result = run_dg_command(
@@ -214,13 +215,12 @@ class TestProductionDockerMode:
     @pytest.fixture(autouse=True)
     def require_slurm(self, slurm_cluster_ready):
         """Ensure SLURM cluster is ready for all production tests."""
-        pass
 
     def test_bash_assets_production(
         self,
         example_project_dir: Path,
-        deployment_metadata: Dict[str, Any],
-        docker_slurm_env: Dict[str, str],
+        deployment_metadata: dict[str, Any],
+        docker_slurm_env: dict[str, str],
     ):
         """Test shell/bash assets with pre-deployed environment."""
         result = run_dg_command(
@@ -243,8 +243,8 @@ class TestProductionDockerMode:
     def test_ray_assets_production(
         self,
         example_project_dir: Path,
-        deployment_metadata: Dict[str, Any],
-        docker_slurm_env: Dict[str, str],
+        deployment_metadata: dict[str, Any],
+        docker_slurm_env: dict[str, str],
     ):
         """Test Ray assets with pre-deployed environment."""
         result = run_dg_command(

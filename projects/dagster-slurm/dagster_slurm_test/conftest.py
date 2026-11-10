@@ -1,31 +1,30 @@
 """Pytest configuration and fixtures."""
 
-import os
-import shutil
-import tempfile
-from pathlib import Path
-from typing import Iterator, Type
 import base64
-
+import json
+import os
+import platform
+import shutil
+import subprocess
+import tempfile
+import time
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 from dagster_slurm import (
-    ComputeResource,
-    SlurmQueueConfig,
-    SlurmPipesClient,
-    SlurmResource,
-    SSHConnectionResource,
     BashLauncher,
     ComputeLauncher,
+    ComputeResource,
     RayLauncher,
+    SlurmPipesClient,
+    SlurmQueueConfig,
+    SlurmResource,
     SparkLauncher,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
-import subprocess
-import time
-import json
-from typing import Any, Dict
-import platform
 from loguru import logger
 
 DOCKER_SLURM_DEPLOYMENT_BASE_PATH = "/home/submitter/pipelines/deployments"
@@ -44,7 +43,7 @@ def isolate_integration_dagster_home(request, monkeypatch) -> None:
     monkeypatch.setenv("DAGSTER_HOME", str(INTEGRATION_DAGSTER_HOME))
 
 
-def _docker_slurm_env(key_path: Path | None = None) -> Dict[str, str]:
+def _docker_slurm_env(key_path: Path | None = None) -> dict[str, str]:
     """Return a hermetic Slurm Docker environment for subprocess-based tests."""
     env = {
         "SLURM_EDGE_NODE_HOST": "127.0.0.1",
@@ -231,7 +230,7 @@ def slurm_resource_for_testing() -> SlurmResource:
 
 
 def _compute_resource_factory(
-    slurm_resource: SlurmResource, launcher_class: Type[ComputeLauncher]
+    slurm_resource: SlurmResource, launcher_class: type[ComputeLauncher]
 ) -> ComputeResource:
     """A factory to create a ComputeResource with a specific launcher."""
     return ComputeResource(
@@ -288,6 +287,7 @@ def slurm_cluster_ready():
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
 
             if result.returncode == 0 and "idle" in result.stdout:
@@ -317,7 +317,7 @@ def _cleanup_ray_on_host():
         ["pkill", "-9", "-f", "gcs_server"],
     ):
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
         except (
             subprocess.TimeoutExpired,
             subprocess.CalledProcessError,
@@ -348,16 +348,19 @@ def _cleanup_ray_on_slurm_nodes():
                     container,
                     "bash",
                     "-c",
-                    "ray stop --force 2>/dev/null; "
-                    "pkill -9 -f 'ray::' 2>/dev/null; "
-                    "pkill -9 -f 'raylet' 2>/dev/null; "
-                    "pkill -9 -f 'gcs_server' 2>/dev/null; "
-                    "rm -rf /tmp/ray /tmp/r[0-9]* 2>/dev/null; "
-                    "true",
+                    (
+                        "ray stop --force 2>/dev/null; "
+                        "pkill -9 -f 'ray::' 2>/dev/null; "
+                        "pkill -9 -f 'raylet' 2>/dev/null; "
+                        "pkill -9 -f 'gcs_server' 2>/dev/null; "
+                        "rm -rf /tmp/ray /tmp/r[0-9]* 2>/dev/null; "
+                        "true"
+                    ),
                 ],
                 capture_output=True,
                 text=True,
                 timeout=15,
+                check=False,
             )
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
             pass
@@ -428,7 +431,7 @@ def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
 
 
 @pytest.fixture(scope="module")
-def docker_slurm_env(docker_ssh_key: Path) -> Dict[str, str]:
+def docker_slurm_env(docker_ssh_key: Path) -> dict[str, str]:
     """Environment overrides that force example subprocesses onto Docker Slurm."""
     return _docker_slurm_env(key_path=docker_ssh_key)
 
@@ -485,7 +488,12 @@ def _ensure_remote_deployment(
             "-lc",
             f"test -f {path}/activate.sh && test -d {path}/env",
         ]
-        return subprocess.run(check_cmd, capture_output=True, text=True).returncode == 0
+        return (
+            subprocess.run(
+                check_cmd, capture_output=True, text=True, check=False
+            ).returncode
+            == 0
+        )
 
     if _check(deployment_path):
         return deployment_path
@@ -522,7 +530,7 @@ def _ensure_remote_deployment(
 def deployment_metadata(
     example_project_dir: Path,
     docker_ssh_key: Path,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Read deployment metadata for PRODUCTION_DOCKER mode."""
 
     metadata_file = example_project_dir / "deployment_metadata.json"

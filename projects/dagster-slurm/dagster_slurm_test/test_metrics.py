@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from dagster import FloatMetadataValue
-
 from dagster_slurm import BashLauncher, SlurmMetric, SlurmMetricsContext
 from dagster_slurm.helpers.metrics import (
     SlurmJobMetrics,
@@ -48,17 +47,15 @@ def test_parse_exit_code():
 
 
 def test_collect_job_metrics_includes_gpu_tres_and_raw_step_rows():
-    sacct_output = "\n".join(
-        (
-            "123|00:10:00|00:40:00|2048M|2|8|COMPLETED|0:0|node[01-02]|"
-            "cpu=8,gres/gpu=4|cpu=8,gres/gpu=4|||||",
-            "123.batch|00:10:00|00:40:00|2048M|2|8|COMPLETED|0:0|node[01-02]|"
-            "cpu=8,gres/gpu=4|cpu=8,gres/gpu=4|"
-            "gres/gpumem=4G,gres/gpuutil=37.5|"
-            "gres/gpumem=8G,gres/gpuutil=92|"
-            "gres/gpuutil=node02|gres/gpuutil=3|"
-            "gres/gpumem=12G,gres/gpuutil=150",
-        )
+    sacct_output = (
+        "123|00:10:00|00:40:00|2048M|2|8|COMPLETED|0:0|node[01-02]|"
+        "cpu=8,gres/gpu=4|cpu=8,gres/gpu=4|||||\n"
+        "123.batch|00:10:00|00:40:00|2048M|2|8|COMPLETED|0:0|node[01-02]|"
+        "cpu=8,gres/gpu=4|cpu=8,gres/gpu=4|"
+        "gres/gpumem=4G,gres/gpuutil=37.5|"
+        "gres/gpumem=8G,gres/gpuutil=92|"
+        "gres/gpuutil=node02|gres/gpuutil=3|"
+        "gres/gpumem=12G,gres/gpuutil=150"
     )
 
     metrics = SlurmMetricsCollector().collect_job_metrics(
@@ -232,14 +229,12 @@ def test_collect_session_step_metrics_queries_completed_step():
 
 
 def test_collect_job_metrics_uses_step_average_in_shared_allocation():
-    sacct_output = "\n".join(
-        (
-            "123|00:10:00|00:40:00|2048M|2|8|RUNNING|0:0|node[01-02]|"
-            "gres/gpu=4|gres/gpu=4|gres/gpuutil=10|||||",
-            "123.7|00:01:00|00:00:30|1024K|1|1|COMPLETED|0:0|node01|"
-            "gres/gpu=1|gres/gpu=1|gres/gpuutil=40|gres/gpuutil=80|"
-            "gres/gpuutil=node01|gres/gpuutil=0|gres/gpuutil=40",
-        )
+    sacct_output = (
+        "123|00:10:00|00:40:00|2048M|2|8|RUNNING|0:0|node[01-02]|"
+        "gres/gpu=4|gres/gpu=4|gres/gpuutil=10|||||\n"
+        "123.7|00:01:00|00:00:30|1024K|1|1|COMPLETED|0:0|node01|"
+        "gres/gpu=1|gres/gpu=1|gres/gpuutil=40|gres/gpuutil=80|"
+        "gres/gpuutil=node01|gres/gpuutil=0|gres/gpuutil=40"
     )
 
     metrics = SlurmMetricsCollector().collect_job_metrics(

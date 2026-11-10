@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
 
-from dagster_slurm.auth.authentik import AuthentikCredentialStore, AuthentikCredentials
+from dagster_slurm.auth.authentik import AuthentikCredentials, AuthentikCredentialStore
 from dagster_slurm.auth.step_oidc import StepOIDCAuthProvider
-
 
 EXAMPLE_RESOURCES_PATH = (
     Path(__file__).resolve().parents[3]
@@ -208,7 +207,7 @@ def test_provider_bootstraps_credentials_file_when_missing(monkeypatch, tmp_path
     monkeypatch.setattr(
         provider,
         "_read_cert_valid_until",
-        lambda: datetime.now(timezone.utc) + timedelta(hours=4),
+        lambda: datetime.now(UTC) + timedelta(hours=4),
     )
 
     provider.ensure()
@@ -380,7 +379,7 @@ def test_musica_resources_accept_existing_cert_without_oidc_bootstrap(
     monkeypatch.setattr(
         StepOIDCAuthProvider,
         "_read_cert_valid_until",
-        lambda self: datetime.now(timezone.utc) + timedelta(hours=4),
+        lambda self: datetime.now(UTC) + timedelta(hours=4),
     )
 
     resources = resources_module.get_resources()

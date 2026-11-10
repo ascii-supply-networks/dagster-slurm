@@ -6,9 +6,9 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 from dagster_slurm.helpers.ray_dashboard import (

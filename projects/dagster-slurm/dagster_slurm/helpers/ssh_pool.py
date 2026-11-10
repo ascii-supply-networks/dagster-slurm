@@ -30,6 +30,15 @@ MULTIPLEXING_UNSUPPORTED_MESSAGE = (
     "Refusing unpooled SSH; use key-based or inherited agent authentication."
 )
 
+#: What a failed remote command raises: ``RuntimeError`` for a non-zero exit or
+#: failed authentication, ``subprocess.SubprocessError`` for a timeout and
+#: ``OSError`` when the local ``ssh`` process cannot run.
+SSH_ERRORS: tuple[type[Exception], ...] = (
+    RuntimeError,
+    OSError,
+    subprocess.SubprocessError,
+)
+
 
 class SSHConnectionPool:
     """Reuse SSH connections via ControlMaster.
@@ -120,11 +129,23 @@ class SSHConnectionPool:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
-        except Exception:  # pragma: no cover - best effort probe
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover
             return False
 
         return completed.returncode == 0
+
+    def _remove_stale_socket(self) -> None:
+        """Delete a control socket that no master answers on.
+
+        OpenSSH clears such a socket itself only in ``ControlMaster=auto`` mode.
+        The pool uses ``-M`` and ``ControlMaster=no``, so a master that died
+        uncleanly would otherwise stop every later ``ssh -M`` from binding.
+        """
+        if self.control_path and os.path.lexists(self.control_path):
+            self.logger.info("Removing stale SSH control socket %s", self.control_path)
+            Path(self.control_path).unlink(missing_ok=True)
 
     def _spawn_master(self) -> None:
         """Start a background ControlMaster, raising on failure."""
@@ -139,10 +160,7 @@ class SSHConnectionPool:
             if self._master_is_alive():
                 self._owns_master = False
                 return
-            # -M can authenticate and exit successfully without publishing a
-            # master when a dead process left its socket behind. Remove it
-            # under the same lock before opening the connection.
-            Path(self.control_path).unlink(missing_ok=True)
+            self._remove_stale_socket()
             self._spawn_master_locked()
 
     def _spawn_master_locked(self) -> None:
@@ -169,9 +187,11 @@ class SSHConnectionPool:
         cmd.extend(self.config.get_key_auth_opts())
         cmd.append(f"{self.config.user}@{self.config.host}")
 
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        completed = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, check=False
+        )
         if completed.returncode != 0:
-            # Another process may have won the race for the same socket.
+            # Another client outside the lock may have started a master.
             if self._master_is_alive():
                 self._owns_master = False
                 return
@@ -218,8 +238,9 @@ class SSHConnectionPool:
             try:
                 self.reporter(level, message)
                 return
-            except Exception as exc:  # pragma: no cover - reporting must not fail
-                self.logger.debug(f"Multiplexing reporter failed: {exc}")
+            except Exception as exc:  # pragma: no cover
+                # The reporter is caller code; reporting must not fail the pool.
+                self.logger.debug(f"Multiplexing reporter failed: {exc}", exc_info=True)
         if level == "error":
             self.logger.error(message)
         else:
@@ -266,7 +287,7 @@ class SSHConnectionPool:
 
         try:
             self._spawn_master()
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self._fail_multiplexing(str(exc))
             return
 
@@ -301,7 +322,7 @@ class SSHConnectionPool:
         )
         try:
             self._spawn_master()
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self._fail_multiplexing(
                 f"ControlMaster died mid-run and could not be restarted: {exc}"
             )
@@ -352,9 +373,10 @@ class SSHConnectionPool:
                     ],
                     capture_output=True,
                     timeout=5,
+                    check=False,
                 )
                 self.logger.debug("SSH ControlMaster closed")
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError) as e:
                 self.logger.warning(f"Error closing SSH master: {e}")
             finally:
                 self._master_started = False
@@ -423,7 +445,7 @@ class SSHConnectionPool:
                 ssh_cmd.append("-tt")
             ssh_cmd.extend([f"{self.config.user}@{self.config.host}", remote_cmd])
             result = subprocess.run(
-                ssh_cmd, capture_output=True, text=True, timeout=timeout
+                ssh_cmd, capture_output=True, text=True, timeout=timeout, check=False
             )
             returncode, stdout, stderr = result.returncode, result.stdout, result.stderr
 
@@ -479,7 +501,7 @@ class SSHConnectionPool:
                 local_path,
                 f"{self.config.user}@{self.config.host}:{remote_path}",
             ]
-            proc = subprocess.run(scp_cmd, capture_output=True, text=True)
+            proc = subprocess.run(scp_cmd, capture_output=True, text=True, check=False)
             returncode, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
 
         if returncode != 0:

@@ -4,22 +4,22 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import pytest
 from dagster import AssetKey
-
 from dagster_slurm import (
     BashLauncher,
     ComputeResource,
-    SSHConnectionResource,
     SlurmQueueConfig,
     SlurmResource,
     SlurmRunConfig,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.helpers.env_packaging import compute_env_cache_key
@@ -87,7 +87,7 @@ class LocalShellPool(FakePool):
 
 @contextmanager
 def open_session_stub(*_args, **_kwargs):
-    yield SimpleNamespace(get_bootstrap_env_vars=lambda: {})
+    yield SimpleNamespace(get_bootstrap_env_vars=dict)
 
 
 class MessageReaderStub:

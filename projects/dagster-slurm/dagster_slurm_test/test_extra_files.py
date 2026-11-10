@@ -4,9 +4,8 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import pytest
-
-from dagster_slurm.launchers import BashLauncher
 from dagster_slurm.config.runtime import RuntimeVariant
+from dagster_slurm.launchers import BashLauncher
 from dagster_slurm.launchers.base import ComputeLauncher, ExecutionPlan
 from dagster_slurm.resources.compute import ComputeResource
 

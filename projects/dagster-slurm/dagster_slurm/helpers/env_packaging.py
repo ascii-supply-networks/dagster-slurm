@@ -1,23 +1,22 @@
 """Environment packaging using pixi pack."""
 
-import os
 import glob
+import hashlib
+import os
 import re
 import shlex
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
-
-import hashlib
 
 from dagster import get_dagster_logger
 
 
 def pack_environment_with_pixi(
-    project_dir: Optional[Path] = None,
-    pack_cmd: Optional[list[str]] = None,
+    project_dir: Path | None = None,
+    pack_cmd: list[str] | None = None,
     timeout: int = 600,
-    env_overrides: Optional[dict[str, str]] = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> Path:
     """Pack environment using 'pixi pack'.
 
@@ -247,9 +246,9 @@ def _resolve_and_hash_inject_files(
 def compute_env_cache_key(
     pack_cmd: Sequence[str],
     lockfile: Path = Path("pixi.lock"),
-    cache_inject_globs: Optional[Sequence[str]] = None,
-    env_overrides: Optional[dict[str, str]] = None,
-) -> Optional[str]:
+    cache_inject_globs: Sequence[str] | None = None,
+    env_overrides: dict[str, str] | None = None,
+) -> str | None:
     """Compute a stable cache key for the packed environment.
 
     Uses the pixi lockfile contents, the pack command, and the contents of
@@ -312,7 +311,7 @@ def compute_env_cache_key(
     return digest.hexdigest()[:16]
 
 
-def _extract_pack_path_from_output(output: str, base_dir: Path) -> Optional[Path]:
+def _extract_pack_path_from_output(output: str, base_dir: Path) -> Path | None:
     """Extract pack file path from pixi-pack output.
 
     Examples:
@@ -344,7 +343,7 @@ def _extract_pack_path_from_output(output: str, base_dir: Path) -> Optional[Path
     return None
 
 
-def _find_pack_file(search_dir: Path) -> Optional[Path]:
+def _find_pack_file(search_dir: Path) -> Path | None:
     """Find the most recent pack file (executable or tarball)."""
     import glob
 

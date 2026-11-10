@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import getpass
+import io
 import os
 import shutil
 import socket
@@ -13,17 +14,13 @@ import tempfile
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
-from dagster_slurm import (
-    BashLauncher,
-    SlurmPipesClient,
-    SlurmQueueConfig,
-    SlurmResource,
-)
 from dagster_slurm.helpers import SSHConnectionPool
 from dagster_slurm.helpers.message_readers import SSHMessageReader
 from dagster_slurm.helpers.ssh_helpers import ssh_run
+from dagster_slurm.pipes_clients.slurm_pipes_client import _SlurmLogFollower
 from dagster_slurm.resources.ssh import SSHConnectionResource
 
 
@@ -102,6 +99,7 @@ def local_ssh(
                     ],
                     capture_output=True,
                     timeout=5,
+                    check=False,
                 )
                 server.terminate()
                 server.wait(timeout=5)
@@ -111,17 +109,10 @@ def local_ssh(
 def _commands(ssh: SSHConnectionResource, root: Path) -> list[list[str]]:
     local_file = root / "upload"
     local_file.write_text("payload")
-    client = SlurmPipesClient(
-        slurm_resource=SlurmResource(
-            ssh=ssh, queue=SlurmQueueConfig(), remote_base=str(root / "remote")
-        ),
-        launcher=BashLauncher(),
-    )
     tails = [
         SSHMessageReader(
             remote_path="/unused", ssh_config=ssh
         )._build_ssh_tail_command(),
-        client._build_tail_command("/unused"),
     ]
     commands = [
         [*ssh.get_ssh_base_command(), "true"],
@@ -163,6 +154,23 @@ def test_stale_socket_is_replaced_before_authenticating(local_ssh):
     assert log.read_text().count("Accepted publickey") == 1
 
 
+def test_log_polls_reuse_the_shared_master(local_ssh):
+    ssh, log = local_ssh
+    remote_log = log.parent / "job.log"
+    remote_log.write_text("first\n")
+    output = io.StringIO()
+    follower = _SlurmLogFollower(
+        [("stdout", str(remote_log), output, "")], Mock(), Mock()
+    )
+    with SSHConnectionPool(ssh) as pool:
+        follower.consume(pool.run(follower.script(), timeout=5))
+    remote_log.write_text("first\nsecond\n")
+    with SSHConnectionPool(ssh) as pool:
+        follower.consume(pool.run(follower.script(), timeout=5))
+    assert output.getvalue() == "first\nsecond\n"
+    assert log.read_text().count("Accepted publickey") == 1
+
+
 def test_missing_socket_blocks_network_fallback_for_every_command_builder(local_ssh):
     ssh, log = local_ssh
     with SSHConnectionPool(ssh) as pool:
@@ -172,7 +180,9 @@ def test_missing_socket_blocks_network_fallback_for_every_command_builder(local_
         pool.close_master()
         before = log.read_text().count("Connection from")
         for command in commands:
-            result = subprocess.run(command, capture_output=True, timeout=5)
+            result = subprocess.run(
+                command, capture_output=True, timeout=5, check=False
+            )
             assert result.returncode != 0
         assert log.read_text().count("Connection from") == before
     assert log.read_text().count("Accepted publickey") == 1
@@ -277,4 +287,5 @@ def test_explicit_jump_and_target_share_their_masters(local_ssh):
         ["ssh", "-S", str(target.control_socket_path()), "-O", "exit", target.host],
         capture_output=True,
         timeout=5,
+        check=False,
     )

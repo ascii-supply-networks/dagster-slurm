@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import List, Optional
 
 
 class Runner(ABC):
@@ -18,10 +17,10 @@ class Runner(ABC):
     @abstractmethod
     def execute_script(
         self,
-        script_lines: List[str],
+        script_lines: list[str],
         working_dir: str,
         wait: bool = True,
-        line_callback: Optional[Callable[[str], object]] = None,
+        line_callback: Callable[[str], object] | None = None,
     ) -> int:
         """Execute a shell script.
 
@@ -35,7 +34,6 @@ class Runner(ABC):
             Job/process ID
 
         """
-        pass
 
     @abstractmethod
     def upload_file(self, local_path: str, remote_path: str) -> None:
@@ -44,14 +42,11 @@ class Runner(ABC):
         For LocalRunner: copy within filesystem
         For remote: handled by SSHConnectionPool
         """
-        pass
 
     @abstractmethod
     def create_directory(self, path: str) -> None:
         """Create directory (with parents) in execution environment."""
-        pass
 
     @abstractmethod
     def wait_for_completion(self, job_id: int) -> None:
         """Block until job completes."""
-        pass

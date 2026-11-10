@@ -12,10 +12,9 @@
   pythonVersionEnv = builtins.getEnv "DEVENV_PYTHON_VERSION";
   pythonVersion =
     if pythonVersionEnv == ""
-    then "3.10"
+    then "3.11"
     else pythonVersionEnv;
   pythonPackages = {
-    "3.10" = inputs.nixpkgs-python.packages.${pkgs.stdenv.hostPlatform.system}."3.10";
     "3.11" = pkgs.python311;
     "3.12" = pkgs.python312;
     "3.13" = pkgs.python313;
@@ -36,8 +35,8 @@
     nativeCheckInputs = (old.nativeCheckInputs or []) ++ [pkgs.gitMinimal];
   });
 
-  pixi = pkgs.callPackage ./nix/pixi-0_73_0.nix {};
-  bun = pkgs.callPackage ./nix/bun-1_3_14.nix {};
+  pixi = pkgs.callPackage ./nix/pixi-0_83_0.nix {};
+  bun = pkgs.callPackage ./nix/bun-1_4_4.nix {};
 in {
   languages.python = {
     enable = true;

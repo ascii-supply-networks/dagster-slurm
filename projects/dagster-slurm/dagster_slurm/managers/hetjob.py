@@ -3,12 +3,11 @@
 import re
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 from dagster import get_dagster_logger
 
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
-from ..helpers.ssh_pool import SSHConnectionPool
+from ..helpers.ssh_pool import SSH_ERRORS, SSHConnectionPool
 from ..resources.slurm import SlurmResource
 
 
@@ -23,7 +22,7 @@ class HetJobComponent:
     gpus_per_node: int = 0
     time_limit: str = "01:00:00"
     script_path: str = ""
-    partition: Optional[str] = None
+    partition: str | None = None
 
 
 class HeterogeneousJobManager:
@@ -65,7 +64,7 @@ class HeterogeneousJobManager:
 
     def submit_heterogeneous_job(
         self,
-        components: List[HetJobComponent],
+        components: list[HetJobComponent],
         job_name: str,
     ) -> int:
         """Submit heterogeneous job with multiple resource configurations.
@@ -162,7 +161,7 @@ class HeterogeneousJobManager:
 
         return job_id
 
-    def _generate_wrapper_script(self, components: List[HetJobComponent]) -> str:
+    def _generate_wrapper_script(self, components: list[HetJobComponent]) -> str:
         """Generate wrapper script that runs each component on its allocated resources.
 
         Uses SLURM_HET_SIZE and SLURM_PROCID to dispatch to correct component.
@@ -243,7 +242,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
         self,
         job_id: int,
         poll_interval: int = 5,
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
     ):
         """Wait for heterogeneous job to complete.
 
@@ -321,7 +320,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
             state = output.strip()
             return normalize_slurm_state(state.split()[0]) if state else ""
 
-        except Exception as e:
+        except SSH_ERRORS as e:
             self.logger.warning(f"Error querying job state: {e}")
             return ""
 
@@ -350,7 +349,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                         self.logger.error(
                             f"Component {i} log (last 50 lines):\n{log_content}"
                         )
-                except:  # noqa: E722
+                except SSH_ERRORS:
                     break
 
             # Get main job output
@@ -360,7 +359,7 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                 )
                 if job_out.strip():
                     self.logger.error(f"Job output (last 100 lines):\n{job_out}")
-            except:  # noqa: E722
+            except SSH_ERRORS:
                 pass
 
             # Get main job errors
@@ -370,13 +369,13 @@ echo "[$({date_fmt})] Component $SLURM_PROCID completed successfully"
                 )
                 if job_err.strip():
                     self.logger.error(f"Job errors (last 100 lines):\n{job_err}")
-            except:  # noqa: E722
+            except SSH_ERRORS:
                 pass
 
-        except Exception as e:
+        except SSH_ERRORS as e:
             self.logger.warning(f"Could not retrieve failure details: {e}")
 
-    def get_component_logs(self, job_id: int) -> Dict[int, str]:
+    def get_component_logs(self, job_id: int) -> dict[int, str]:
         """Retrieve logs from all components.
 
         Args:

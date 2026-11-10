@@ -102,3 +102,12 @@ ssh submitter@localhost -p 2223
 # password: submitter
 sinfo
 ```
+
+The cluster runs Slurm 25.11 by default, the line most production clusters still use. CI also tests against the newest release, 26.05. To run that one locally, select its image:
+
+```bash
+docker compose down -v
+IMAGE_TAG=26-05-5-1 SLURM_TAG=slurm-26-05-5-1 docker compose up -d
+```
+
+`IMAGE_TAG` picks the published image and `SLURM_TAG` the Slurm release that `docker compose build` compiles. Every image has its own SSH host keys, so after switching versions or pulling a rebuilt image, remove the old entry with `ssh-keygen -R "[localhost]:2223"` before connecting again. Changes to the Slurm versions go in `docker-compose.yml`, `.github/workflows/library.yaml` and `.github/workflows/slurm-image-builder.yml`.

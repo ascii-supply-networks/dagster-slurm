@@ -1,6 +1,6 @@
 import shlex
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import dagster as dg
 
@@ -21,10 +21,10 @@ class BashLauncher(ComputeLauncher):
         payload_path: str,
         python_executable: str,
         working_dir: str,
-        pipes_context: Dict[str, str],
-        extra_env: Optional[Dict[str, str]] = None,
-        allocation_context: Optional[Dict[str, Any]] = None,
-        activation_script: Optional[str] = None,
+        pipes_context: dict[str, str],
+        extra_env: dict[str, str] | None = None,
+        allocation_context: dict[str, Any] | None = None,
+        activation_script: str | None = None,
     ) -> ExecutionPlan:
         """Generate bash execution plan.
 

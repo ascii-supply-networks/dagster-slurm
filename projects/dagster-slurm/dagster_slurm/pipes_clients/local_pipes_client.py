@@ -1,13 +1,13 @@
 """Local Pipes client for dev mode."""
 
+import atexit
 import os
+import shutil
 import sys
 import tempfile
-import atexit
-import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from dagster import (
     AssetExecutionContext,
@@ -32,7 +32,7 @@ class LocalPipesClient(PipesClient):
     def __init__(
         self,
         launcher: ComputeLauncher,
-        base_dir: Optional[str] = None,
+        base_dir: str | None = None,
         require_pixi: bool = True,
     ):
         """Args:
@@ -68,7 +68,7 @@ class LocalPipesClient(PipesClient):
             try:
                 shutil.rmtree(self.base_dir)
                 self.logger.debug(f"Cleaned up temporary directory: {self.base_dir}")
-            except Exception as e:
+            except OSError as e:
                 self.logger.warning(f"Failed to clean up temp dir {self.base_dir}: {e}")
 
     def cleanup(self):
@@ -95,11 +95,11 @@ class LocalPipesClient(PipesClient):
         *,
         context: AssetExecutionContext,
         payload_path: str,
-        python_executable: Optional[str] = None,
-        extra_env: Optional[Dict[str, str]] = None,
-        extras: Optional[Dict[str, Any]] = None,
-        extra_slurm_opts: Optional[Dict[str, Any]] = None,
-        extra_files: Optional[list[str]] = None,
+        python_executable: str | None = None,
+        extra_env: dict[str, str] | None = None,
+        extras: dict[str, Any] | None = None,
+        extra_slurm_opts: dict[str, Any] | None = None,
+        extra_files: list[str] | None = None,
     ) -> PipesClientCompletedInvocation:
         """Execute payload locally.
 

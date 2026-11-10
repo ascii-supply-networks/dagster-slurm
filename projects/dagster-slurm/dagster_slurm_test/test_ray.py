@@ -1,9 +1,8 @@
 from collections.abc import Callable, Mapping
 from threading import Event
 
-import pytest
-
 import dagster_slurm.ray as ray_helpers
+import pytest
 from dagster_slurm import (
     run_with_ray_reserve_topup,
     wait_for_stable_ray_resources,
@@ -132,7 +131,7 @@ def test_run_with_ray_reserve_topup_skips_reserve_after_timeout():
         reserve,
         {"GPU": 1.0},
         timeout_seconds=0,
-        resource_provider=lambda: {},
+        resource_provider=dict,
     )
 
     assert result == ("primary", None)
@@ -163,6 +162,6 @@ def test_wait_for_stable_ray_resources_validates_configuration(
     with pytest.raises(ValueError, match=message):
         wait_for_stable_ray_resources(
             minimum_resources,
-            resource_provider=lambda: {},
+            resource_provider=dict,
             **kwargs,
         )

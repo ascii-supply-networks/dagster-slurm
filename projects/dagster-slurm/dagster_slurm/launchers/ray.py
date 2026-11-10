@@ -2,15 +2,15 @@
 
 import shlex
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
+import dagster as dg
 from pydantic import Field, model_validator
 
 from dagster_slurm.config.runtime import RuntimeVariant
 from dagster_slurm.helpers.ray_dashboard import RAY_DASHBOARD_URL_MARKER
 
 from .base import ComputeLauncher, ExecutionPlan
-import dagster as dg
 
 
 class RayPortConfig(dg.Config):
@@ -278,7 +278,7 @@ class RayLauncher(ComputeLauncher):
 
     # Ray configuration
     num_gpus_per_node: int = Field(default=0, description="GPUs to allocate per node")
-    ray_address: Optional[str] = Field(
+    ray_address: str | None = Field(
         default=None, description="Connect to existing cluster (skip startup)"
     )
     dashboard_port: int = Field(
@@ -287,14 +287,14 @@ class RayLauncher(ComputeLauncher):
         le=65535,
         description="Ray dashboard port for the fixed strategy.",
     )
-    object_store_memory_gb: Optional[int] = Field(
+    object_store_memory_gb: int | None = Field(
         default=None, description="Object store size (None = auto)"
     )
     ray_start_args: list[str] = Field(
         default_factory=list,
         description="Extra arguments to pass to ray start on the head node.",
     )
-    redis_password: Optional[str] = Field(
+    redis_password: str | None = Field(
         default=None, description="Redis password (None = auto-generate with uuidgen)"
     )
     ray_port: int = Field(
@@ -320,7 +320,7 @@ class RayLauncher(ComputeLauncher):
         default_factory=list,
         description="Optional shell commands to run before ray start (e.g., ulimit).",
     )
-    worker_cpu_bind: Optional[str] = Field(
+    worker_cpu_bind: str | None = Field(
         default="none",
         description=(
             "Value for srun --cpu-bind when starting workers. "
@@ -350,14 +350,14 @@ class RayLauncher(ComputeLauncher):
         default_factory=RayPortConfig,
         description="Allowed port pool and fixed service ports.",
     )
-    network_interface: Optional[str] = Field(
+    network_interface: str | None = Field(
         default=None,
         description=(
             "Network interface to bind on every Ray node, such as 'ib0'. "
             "Ignored when node_ip_address_command is set."
         ),
     )
-    node_ip_address_command: Optional[str] = Field(
+    node_ip_address_command: str | None = Field(
         default=None,
         description=(
             "Shell command run on each Ray node to resolve its bind IP. "
@@ -448,10 +448,10 @@ class RayLauncher(ComputeLauncher):
         payload_path: str,
         python_executable: str,
         working_dir: str,
-        pipes_context: Dict[str, str],
-        extra_env: Optional[Dict[str, str]] = None,
-        allocation_context: Optional[Dict[str, Any]] = None,
-        activation_script: Optional[str] = None,
+        pipes_context: dict[str, str],
+        extra_env: dict[str, str] | None = None,
+        allocation_context: dict[str, Any] | None = None,
+        activation_script: str | None = None,
     ) -> ExecutionPlan:
         """Generate Ray execution plan."""
         date_fmt = "date +%Y-%m-%dT%H:%M:%S%z"
@@ -560,7 +560,7 @@ class RayLauncher(ComputeLauncher):
     def _generate_local_template(
         self,
         date_fmt: str,
-        activation_script: Optional[str],
+        activation_script: str | None,
         working_dir: str,
         python_executable: str,
     ) -> str:
@@ -802,7 +802,7 @@ class RayLauncher(ComputeLauncher):
         working_dir: str,
         date_fmt: str,
         activation_script: str,
-        allocation_context: Optional[Dict[str, Any]] = None,
+        allocation_context: dict[str, Any] | None = None,
     ) -> tuple[str, dict]:
         """
         Generates a robust Ray cluster startup script with proper shutdown.

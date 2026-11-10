@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import time
 import json
 import shlex
+import time
 from collections.abc import Sequence
 from typing import Any
 

@@ -6,14 +6,12 @@ ComputeResource.run() -> SlurmPipesClient.run() -> _execute_standalone()
 """
 
 import inspect
-import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from dagster import AssetKey
 from dagster._core.errors import DagsterPipesExecutionError
-
 from dagster_slurm import ComputeResource
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.helpers import SlurmJobMetrics
@@ -209,106 +207,6 @@ def test_wait_for_job_respects_custom_poll_timeout(
         )
 
 
-def test_stream_cleanup_terminates_tail_processes_before_single_join(
-    slurm_pipes_client: SlurmPipesClient,
-):
-    """Blocked tail readers should stop promptly and be joined only once."""
-    events = []
-
-    class BlockingTailProcess:
-        def __init__(self, stream_key):
-            self.stream_key = stream_key
-            self.released = threading.Event()
-            self.stdout = SimpleNamespace(readline=self._readline)
-            self.returncode = None
-            self.terminate_calls = 0
-
-        def _readline(self):
-            self.released.wait(timeout=5)
-            return ""
-
-        def poll(self):
-            return self.returncode
-
-        def terminate(self):
-            self.terminate_calls += 1
-            events.append(f"terminate:{self.stream_key}")
-            self.returncode = -15
-            self.released.set()
-
-        def wait(self, timeout=None):
-            if not self.released.wait(timeout=timeout):
-                raise TimeoutError
-            return self.returncode
-
-        def kill(self):
-            self.returncode = -9
-            self.released.set()
-
-    class RecordingThread:
-        def __init__(self, stream_key, process):
-            self.stream_key = stream_key
-            self._thread = threading.Thread(target=process.stdout.readline)
-            self.join_calls = 0
-            self._thread.start()
-
-        def join(self, timeout=None):
-            self.join_calls += 1
-            events.append(f"join:{self.stream_key}")
-            self._thread.join(timeout=timeout)
-
-        def is_alive(self):
-            return self._thread.is_alive()
-
-    stdout_process = BlockingTailProcess("stdout")
-    stderr_process = BlockingTailProcess("stderr")
-    stdout_thread = RecordingThread("stdout", stdout_process)
-    stderr_thread = RecordingThread("stderr", stderr_process)
-    stop_streaming = threading.Event()
-    stream_processes = {
-        "stdout": stdout_process,
-        "stderr": stderr_process,
-    }
-
-    slurm_pipes_client._stop_streaming_threads(
-        stop_streaming=stop_streaming,
-        stream_processes=stream_processes,
-        stream_processes_lock=threading.Lock(),
-        stream_threads=(stdout_thread, stderr_thread),
-    )
-
-    assert stop_streaming.is_set()
-    assert stdout_process.terminate_calls == 1
-    assert stderr_process.terminate_calls == 1
-    assert stream_processes == {}
-    assert events[:2] == ["terminate:stdout", "terminate:stderr"]
-    assert stdout_thread.join_calls == 1
-    assert stderr_thread.join_calls == 1
-    assert not stdout_thread.is_alive()
-    assert not stderr_thread.is_alive()
-
-
-def test_stream_cleanup_does_not_raise_for_process_errors(
-    slurm_pipes_client: SlurmPipesClient,
-):
-    """Tail cleanup failures should not mask the Slurm job outcome."""
-    process = MagicMock()
-    process.poll.side_effect = OSError("process disappeared")
-    process.wait.side_effect = OSError("process disappeared")
-    thread = MagicMock()
-    stream_processes = {"stdout": process}
-
-    slurm_pipes_client._stop_streaming_threads(
-        stop_streaming=threading.Event(),
-        stream_processes=stream_processes,
-        stream_processes_lock=threading.Lock(),
-        stream_threads=(thread,),
-    )
-
-    assert stream_processes == {}
-    thread.join.assert_called_once_with(timeout=5)
-
-
 def test_get_job_state_normalizes_truncated_terminal_state(
     slurm_pipes_client: SlurmPipesClient,
 ):
@@ -330,22 +228,24 @@ def test_validate_final_slurm_outcome_rejects_failed_batch_state(
         "12345|TIMEOUT|0:0\n12345.batch|OUT_OF_ME+|0:125\n12345.extern|COMPLETED|0:0\n"
     )
 
-    with patch.object(
-        slurm_pipes_client.metrics_collector,
-        "collect_job_metrics",
-        return_value=SlurmJobMetrics(
-            job_id=12345,
-            elapsed_seconds=340.0,
-            cpu_time_seconds=0.0,
-            max_rss_mb=24554.0,
-            node_hours=0.0,
-            cpu_efficiency=0.0,
-            state="OUT_OF_MEMORY",
-            exit_code=0,
+    with (
+        patch.object(
+            slurm_pipes_client.metrics_collector,
+            "collect_job_metrics",
+            return_value=SlurmJobMetrics(
+                job_id=12345,
+                elapsed_seconds=340.0,
+                cpu_time_seconds=0.0,
+                max_rss_mb=24554.0,
+                node_hours=0.0,
+                cpu_efficiency=0.0,
+                state="OUT_OF_MEMORY",
+                exit_code=0,
+            ),
         ),
+        pytest.raises(RuntimeError, match=r"12345 did not complete successfully"),
     ):
-        with pytest.raises(RuntimeError, match=r"12345 did not complete successfully"):
-            slurm_pipes_client._validate_final_slurm_outcome(12345, mock_ssh_pool)
+        slurm_pipes_client._validate_final_slurm_outcome(12345, mock_ssh_pool)
 
 
 def test_validate_final_slurm_outcome_accepts_clean_completed_job(

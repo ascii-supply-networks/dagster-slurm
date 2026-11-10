@@ -196,9 +196,11 @@ def test_ssh_message_reader_emits_one_bounded_stdio_summary(monkeypatch, tmp_pat
     ]
     assert summary_calls == [
         (
-            "SSHMessageReader summary: total_messages=%d; "
-            "stdout_messages=%d, stdout_bytes=%d; "
-            "stderr_messages=%d, stderr_bytes=%d",
+            (
+                "SSHMessageReader summary: total_messages=%d; "
+                "stdout_messages=%d, stdout_bytes=%d; "
+                "stderr_messages=%d, stderr_bytes=%d"
+            ),
             5,
             2,
             21,

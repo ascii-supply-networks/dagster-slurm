@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 from dagster import ConfigurableResource
 
@@ -12,9 +12,9 @@ class ExecutionPlan:
 
     kind: RuntimeVariant  # "shell_script", "ray", "spark"
     payload: list[str]  # Shell script lines
-    environment: Dict[str, str]  # Environment variables
-    resources: Dict[str, Any]  # Resource requirements
-    auxiliary_scripts: Dict[str, str] = field(default_factory=dict)
+    environment: dict[str, str]  # Environment variables
+    resources: dict[str, Any]  # Resource requirements
+    auxiliary_scripts: dict[str, str] = field(default_factory=dict)
 
 
 class ComputeLauncher(ConfigurableResource):
@@ -25,10 +25,10 @@ class ComputeLauncher(ConfigurableResource):
         payload_path: str,
         python_executable: str,
         working_dir: str,
-        pipes_context: Dict[str, str],
-        extra_env: Optional[Dict[str, str]] = None,
-        allocation_context: Optional[Dict[str, Any]] = None,
-        activation_script: Optional[str] = None,
+        pipes_context: dict[str, str],
+        extra_env: dict[str, str] | None = None,
+        allocation_context: dict[str, Any] | None = None,
+        activation_script: str | None = None,
     ) -> ExecutionPlan:
         """Prepare execution plan.
 

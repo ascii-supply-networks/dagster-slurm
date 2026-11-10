@@ -7,9 +7,3 @@ inputs:
   stax-src:
     url: github:cesarferreira/stax/v0.102.2
     flake: false
-  # Provides Python versions dropped from nixpkgs-unstable.
-  nixpkgs-python:
-    url: github:cachix/nixpkgs-python
-    inputs:
-      nixpkgs:
-        follows: nixpkgs

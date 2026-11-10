@@ -1,10 +1,11 @@
 """Slurm Pipes client for remote execution."""
 
+import contextlib
 import glob
 import hashlib
 import os
-import posixpath
 import platform
+import posixpath
 import re
 import shlex
 import signal
@@ -12,12 +13,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
+import tomllib
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, TypeVar
+from typing import Any, Optional
 
 from dagster import (
     AssetExecutionContext,
@@ -34,31 +35,29 @@ from dagster._core.errors import DagsterPipesExecutionError
 from dagster._core.pipes.client import PipesClientCompletedInvocation
 from dagster._utils.interrupts import _received_interrupt
 
-from dagster_slurm._compat import tomllib
-
 from ..helpers.env_packaging import compute_env_cache_key, pack_environment_with_pixi
 from ..helpers.message_readers import SSHMessageReader
 from ..helpers.metrics import (
     DEFAULT_SLURM_METADATA_KEYS,
     SlurmJobMetrics,
-    SlurmMetricSelection,
     SlurmMetricsCallback,
     SlurmMetricsCollector,
     SlurmMetricsContext,
+    SlurmMetricSelection,
     normalize_slurm_metrics,
 )
 from ..helpers.ray_dashboard import RayDashboardLogEmitter
+from ..helpers.signals import build_pre_timeout_supervisor_script
 from ..helpers.ssh_helpers import TERMINAL_STATES, normalize_slurm_state
-from ..helpers.ssh_pool import SSHConnectionPool
+from ..helpers.ssh_pool import SSH_ERRORS, SSHConnectionPool
 from ..launchers.base import ComputeLauncher
 from ..launchers.ray import RayLauncher
-from ..helpers.signals import build_pre_timeout_supervisor_script
 from ..resources.session import (
     SlurmAllocation,
-    SlurmSessionResource,
-    SlurmStepExecutionResult,
-    SlurmStepDrained,
     SlurmAllocationEnded,
+    SlurmSessionResource,
+    SlurmStepDrained,
+    SlurmStepExecutionResult,
 )
 from ..resources.slurm import SlurmResource, validate_signal_before_timeout
 
@@ -106,31 +105,118 @@ def _session_step_tags_for_asset(
     return scoped_tags
 
 
-class _TerminableProcess(Protocol):
-    """Process operations required by log-stream cleanup."""
+class _SlurmLogFollower:
+    """Read a Slurm job's new stdout/stderr output as part of each status poll.
 
-    def poll(self) -> Optional[int]: ...
+    Following each file with its own ``tail -F`` held an SSH session open for
+    the whole job, and without a ControlMaster each poll of a file cost a full
+    connection. Both count against sshd's MaxSessions and MaxStartups limits,
+    which a few concurrent runs exhausted. :meth:`script` is appended to the
+    status query instead, so reading the logs costs neither.
 
-    def terminate(self) -> None: ...
+    The output travels hex-encoded. Byte offsets stay exact, invalid UTF-8
+    cannot break decoding, and log text cannot collide with protocol markers.
+    """
 
-    def wait(self, timeout: Optional[float] = None) -> int: ...
+    #: Bytes read per file and poll; anything beyond follows on the next poll.
+    MAX_BYTES_PER_POLL = 256 * 1024
 
-    def kill(self) -> None: ...
+    def __init__(
+        self,
+        streams: list[tuple[str, str, Any, str]],
+        dashboard_log_emitter: RayDashboardLogEmitter,
+        logger: Any,
+    ):
+        """Args:
+        streams: ``(key, remote_path, output_stream, prefix)`` per log file.
+        dashboard_log_emitter: Receives every forwarded line.
+        logger: Where a failure to forward a line is reported.
 
+        """
+        self._streams = streams
+        self._dashboard_log_emitter = dashboard_log_emitter
+        self._logger = logger
+        self._marker = f"__DAGSTER_SLURM_LOG_{uuid.uuid4().hex}__"
+        self._offsets = dict.fromkeys(self._keys, 0)
+        self._partial_lines = dict.fromkeys(self._keys, b"")
+        #: Lines read per key, blank ones included, so they line up with the
+        #: ``splitlines()`` of the whole file.
+        self.lines_read = dict.fromkeys(self._keys, 0)
 
-class _JoinableThread(Protocol):
-    """Thread operation required by log-stream cleanup."""
+    @property
+    def _keys(self) -> list[str]:
+        return [key for key, _, _, _ in self._streams]
 
-    def join(self, timeout: Optional[float] = None) -> None: ...
+    def script(self) -> str:
+        """Shell snippet printing each file's unread bytes as hex, between markers."""
+        parts = []
+        for key, path, _, _ in self._streams:
+            parts.append(f"printf '\\n%s\\n' {shlex.quote(self._marker + key)}")
+            parts.append(
+                f"tail -c +{self._offsets[key] + 1} {shlex.quote(path)} 2>/dev/null"
+                f" | head -c {self.MAX_BYTES_PER_POLL} | od -An -v -tx1 | tr -d ' '"
+            )
+        parts.append(f"printf '\\n%s\\n' {shlex.quote(self._marker + 'end')}")
+        return "; ".join(parts)
 
+    def consume(self, output: str) -> str:
+        """Forward the log output framed in ``output``; return the text before it."""
+        lines = output.splitlines()
+        try:
+            start = lines.index(self._marker + self._keys[0])
+        except ValueError:
+            return output
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in lines[start:]:
+            if line.startswith(self._marker):
+                current = line[len(self._marker) :]
+                sections[current] = []
+            elif current is not None:
+                sections[current].append(line)
+        if "end" in sections:  # otherwise truncated: read it all again next poll
+            for key, _, stream, prefix in self._streams:
+                try:
+                    data = bytes.fromhex("".join(sections.get(key, [])))
+                except ValueError:
+                    continue
+                self._forward(key, data, stream, prefix)
+        return "\n".join(lines[:start])
 
-_TerminableProcessT = TypeVar("_TerminableProcessT", bound=_TerminableProcess)
+    def finish(self) -> None:
+        """Forward the last line of each file when it lacks a final newline."""
+        for key, _, stream, prefix in self._streams:
+            self._write(key, self._partial_lines[key], stream, prefix)
+            self._partial_lines[key] = b""
 
+    def _forward(self, key: str, data: bytes, stream: Any, prefix: str) -> None:
+        # A line without its newline may still be being written; read it again
+        # next poll so it is not forwarded in two pieces. A single line longer
+        # than one read is forwarded in pieces instead of never.
+        end = data.rfind(b"\n") + 1
+        if not end and len(data) >= self.MAX_BYTES_PER_POLL:
+            end = len(data)
+        self._offsets[key] += end
+        self._partial_lines[key] = data[end:]
+        self._write(key, data[:end], stream, prefix)
 
-#: Log polling cadence used only when ControlMaster is unavailable and each
-#: round costs a full SSH connection.
-_FALLBACK_STREAM_POLL_SECONDS = 1.0
-_FALLBACK_STREAM_POLL_MAX_SECONDS = 15.0
+    def _write(self, key: str, data: bytes, stream: Any, prefix: str) -> None:
+        if not data:
+            return
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        self.lines_read[key] += len(lines)
+        try:
+            for line in lines:
+                if not line.strip():
+                    continue
+                self._dashboard_log_emitter.process_line(line)
+                stream.write(f"{prefix}{line}\n")
+            stream.flush()
+        except Exception:
+            # Forwarding a log line must never stop the job's supervision.
+            self._logger.warning(
+                "Could not forward Slurm %s output", key, exc_info=True
+            )
 
 
 def _remote_join_under_root(root: str, base: str, relative_path: str) -> str:
@@ -188,14 +274,14 @@ class SlurmPipesClient(PipesClient):
         cleanup_on_failure: bool = True,
         debug_mode: bool = False,
         auto_detect_platform: bool = True,
-        pack_platform: Optional[str] = None,
-        pre_deployed_env_path: Optional[str] = None,
-        cache_inject_globs: Optional[list[str]] = None,
+        pack_platform: str | None = None,
+        pre_deployed_env_path: str | None = None,
+        cache_inject_globs: list[str] | None = None,
         pack_on_remote: bool = False,
         remote_pack_timeout: int = 600,
-        project_setup_cmd: Optional[list[str]] = None,
-        project_setup_env: Optional[dict[str, str]] = None,
-        project_setup_input_globs: Optional[list[str]] = None,
+        project_setup_cmd: list[str] | None = None,
+        project_setup_env: dict[str, str] | None = None,
+        project_setup_input_globs: list[str] | None = None,
         run_allocation_scope: bool = False,
     ):
         """Args:
@@ -249,17 +335,17 @@ class SlurmPipesClient(PipesClient):
         *,
         context: AssetExecutionContext,
         payload_path: str,
-        extra_env: Optional[Dict[str, str]] = None,
-        extras: Optional[Dict[str, Any]] = None,
+        extra_env: dict[str, str] | None = None,
+        extras: dict[str, Any] | None = None,
         use_session: bool = False,
-        extra_slurm_opts: Optional[Dict[str, Any]] = None,
-        force_env_push: Optional[bool] = None,
-        skip_payload_upload: Optional[bool] = None,
-        remote_payload_path: Optional[str] = None,
-        pack_cmd_override: Optional[list[str]] = None,
-        pre_deployed_env_path_override: Optional[str] = None,
-        environment_name: Optional[str] = None,
-        extra_files: Optional[list[str]] = None,
+        extra_slurm_opts: dict[str, Any] | None = None,
+        force_env_push: bool | None = None,
+        skip_payload_upload: bool | None = None,
+        remote_payload_path: str | None = None,
+        pack_cmd_override: list[str] | None = None,
+        pre_deployed_env_path_override: str | None = None,
+        environment_name: str | None = None,
+        extra_files: list[str] | None = None,
         slurm_metrics: SlurmMetricSelection | None = None,
         metrics_collector: SlurmMetricsCallback | None = None,
         poll_timeout: int = 3600,
@@ -473,7 +559,7 @@ class SlurmPipesClient(PipesClient):
                         if not self.debug_mode and not defer_cleanup:
                             try:
                                 self._schedule_async_cleanup(ssh_pool, run_dir)
-                            except Exception as e:
+                            except SSH_ERRORS as e:
                                 self.logger.warning(f"Cleanup failed: {e}")
 
                         return PipesClientCompletedInvocation(session)
@@ -537,7 +623,7 @@ class SlurmPipesClient(PipesClient):
                         if not self.debug_mode and not defer_cleanup:
                             try:
                                 self._schedule_async_cleanup(ssh_pool, run_dir)
-                            except Exception as e:
+                            except SSH_ERRORS as e:
                                 self.logger.warning(f"Cleanup failed: {e}")
 
                         return PipesClientCompletedInvocation(session)
@@ -782,7 +868,7 @@ class SlurmPipesClient(PipesClient):
                 if not self.debug_mode and not defer_cleanup:
                     try:
                         self._schedule_async_cleanup(ssh_pool, run_dir)
-                    except Exception as e:
+                    except SSH_ERRORS as e:
                         self.logger.warning(f"Cleanup failed: {e}")
 
         except Exception as e:
@@ -839,7 +925,9 @@ class SlurmPipesClient(PipesClient):
                     with ssh_pool:
                         self._schedule_async_cleanup(ssh_pool, run_dir)
                 except Exception as cleanup_error:
-                    self.logger.warning(f"Cleanup failed: {cleanup_error}")
+                    self.logger.warning(
+                        f"Cleanup failed: {cleanup_error}", exc_info=True
+                    )
             elif self.debug_mode and run_dir:
                 self.logger.warning(
                     f"DEBUG MODE: Keeping failed run directory for inspection: {run_dir}"
@@ -905,18 +993,8 @@ class SlurmPipesClient(PipesClient):
                     remote_base, run_id, context.op_execution_context
                 )
                 self._schedule_async_cleanup(ssh_pool, run_dir)
-        except Exception as exc:
+        except SSH_ERRORS as exc:
             self.logger.warning(f"Deferred run_dir cleanup failed: {exc}")
-
-    @property
-    def _control_path(self) -> Optional[str]:
-        """Live ControlMaster socket, or None once the pool degraded.
-
-        Read through to the pool so log-streaming commands started later never
-        keep pointing at a socket the pool has already abandoned.
-        """
-        pool = self._ssh_pool
-        return getattr(pool, "control_path", None) if pool is not None else None
 
     def _attach_multiplexing_reporter(
         self,
@@ -943,7 +1021,7 @@ class SlurmPipesClient(PipesClient):
 
         ssh_pool.reporter = report
 
-    def _is_run_canceling(self, op_context: Optional[OpExecutionContext]) -> bool:
+    def _is_run_canceling(self, op_context: OpExecutionContext | None) -> bool:
         """Check if the Dagster run is being cancelled by the user.
 
         Queries the Dagster instance database for a fresh run status.
@@ -956,7 +1034,9 @@ class SlurmPipesClient(PipesClient):
             run = op_context.instance.get_run_by_id(op_context.run_id)
             return run is not None and run.status == DagsterRunStatus.CANCELING
         except Exception as exc:
-            self.logger.debug(f"Could not check run cancel status: {exc}")
+            self.logger.debug(
+                f"Could not check run cancel status: {exc}", exc_info=True
+            )
             return False
 
     @staticmethod
@@ -991,7 +1071,7 @@ class SlurmPipesClient(PipesClient):
         self,
         remote_base: str,
         run_id: str,
-        op_context: Optional[OpExecutionContext],
+        op_context: OpExecutionContext | None,
     ) -> str:
         """Return the remote work directory for one Dagster step invocation."""
         execution_key = self._get_execution_key_string(op_context)
@@ -1002,9 +1082,7 @@ class SlurmPipesClient(PipesClient):
     def _new_session_invocation_dir(step_dir: str) -> str:
         return f"{step_dir}/invocations/{uuid.uuid4().hex}"
 
-    def _get_execution_key_string(
-        self, op_context: Optional[OpExecutionContext]
-    ) -> str:
+    def _get_execution_key_string(self, op_context: OpExecutionContext | None) -> str:
         """Return a stable identity for one step, partition, and mapping instance."""
         parts = [self._get_step_key_string(op_context)]
 
@@ -1018,7 +1096,7 @@ class SlurmPipesClient(PipesClient):
 
         return "__".join(parts)
 
-    def _get_step_key_string(self, op_context: Optional[OpExecutionContext]) -> str:
+    def _get_step_key_string(self, op_context: OpExecutionContext | None) -> str:
         """Best-effort extraction of a stable Dagster step key."""
         if op_context is None:
             return "step"
@@ -1039,8 +1117,8 @@ class SlurmPipesClient(PipesClient):
         return "step"
 
     def _get_partition_key_string(
-        self, op_context: Optional[OpExecutionContext]
-    ) -> Optional[str]:
+        self, op_context: OpExecutionContext | None
+    ) -> str | None:
         """Best-effort extraction of the partition identity for this invocation."""
         if op_context is None:
             return None
@@ -1082,8 +1160,8 @@ class SlurmPipesClient(PipesClient):
         return None
 
     def _get_mapping_key_string(
-        self, op_context: Optional[OpExecutionContext]
-    ) -> Optional[str]:
+        self, op_context: OpExecutionContext | None
+    ) -> str | None:
         """Best-effort extraction of a dynamic mapping key, when present."""
         if op_context is None:
             return None
@@ -1092,7 +1170,8 @@ class SlurmPipesClient(PipesClient):
         if callable(get_mapping_key):
             try:
                 mapping_key = get_mapping_key()
-            except Exception:
+            # Context accessors raise different Dagster errors per context type.
+            except Exception:  # noqa: BLE001
                 return None
             if mapping_key:
                 return str(mapping_key)
@@ -1107,7 +1186,8 @@ class SlurmPipesClient(PipesClient):
     def _safe_context_attr(obj: Any, name: str) -> Any:
         try:
             return getattr(obj, name, None)
-        except Exception:
+        # Context properties raise different Dagster errors per context type.
+        except Exception:  # noqa: BLE001
             return None
 
     @staticmethod
@@ -1125,33 +1205,27 @@ class SlurmPipesClient(PipesClient):
         return f"{trimmed}-{digest}"
 
     def _get_asset_key_string(
-        self, op_context: Optional[OpExecutionContext]
-    ) -> Optional[str]:
+        self, op_context: OpExecutionContext | None
+    ) -> str | None:
         """Best-effort extraction of asset key as a string."""
         if op_context is None:
             return None
-        try:
-            # Single-asset context
-            asset_key = getattr(op_context, "asset_key", None)
-            if asset_key is not None:
-                return str(asset_key)
-        except Exception:
-            pass
-        try:
-            # Multi-asset context
-            selected = getattr(op_context, "selected_asset_keys", None)
-            if selected:
-                return "/".join(str(k) for k in sorted(selected))
-        except Exception:
-            pass
+        # Single-asset context
+        asset_key = self._safe_context_attr(op_context, "asset_key")
+        if asset_key is not None:
+            return str(asset_key)
+        # Multi-asset context
+        selected = self._safe_context_attr(op_context, "selected_asset_keys")
+        if selected:
+            return "/".join(str(k) for k in sorted(selected))
         return None
 
     def _store_job_tags(
         self,
-        op_context: Optional[OpExecutionContext],
+        op_context: OpExecutionContext | None,
         job_id: int,
         run_dir: str,
-        asset_key: Optional[str],
+        asset_key: str | None,
     ) -> None:
         """Write reattach tags to the Dagster run. Best-effort."""
         if op_context is None:
@@ -1165,11 +1239,11 @@ class SlurmPipesClient(PipesClient):
                 tags[_TAG_ASSET_KEY] = asset_key
             op_context.instance.add_run_tags(op_context.run_id, tags)
         except Exception as exc:
-            self.logger.debug(f"Could not store reattach tags: {exc}")
+            self.logger.debug(f"Could not store reattach tags: {exc}", exc_info=True)
 
     def _store_session_step_tags(
         self,
-        op_context: Optional[OpExecutionContext],
+        op_context: OpExecutionContext | None,
         *,
         result: SlurmStepExecutionResult,
         run_dir: str,
@@ -1202,11 +1276,13 @@ class SlurmPipesClient(PipesClient):
         try:
             op_context.instance.add_run_tags(op_context.run_id, tags)
         except Exception as exc:
-            self.logger.debug(f"Could not store session step tags: {exc}")
+            self.logger.debug(
+                f"Could not store session step tags: {exc}", exc_info=True
+            )
 
     def _store_supervisor_heartbeat(
         self,
-        op_context: Optional[OpExecutionContext],
+        op_context: OpExecutionContext | None,
         *,
         now: float | None = None,
         force: bool = False,
@@ -1229,14 +1305,16 @@ class SlurmPipesClient(PipesClient):
                 {_TAG_LAST_SUPERVISOR_HEARTBEAT: str(int(timestamp))},
             )
         except Exception as exc:
-            self.logger.debug(f"Could not store Slurm supervisor heartbeat: {exc}")
+            self.logger.debug(
+                f"Could not store Slurm supervisor heartbeat: {exc}", exc_info=True
+            )
 
     def _find_reattachable_job(
         self,
-        op_context: Optional[OpExecutionContext],
+        op_context: OpExecutionContext | None,
         ssh_pool: SSHConnectionPool,
-        asset_key: Optional[str],
-    ) -> Optional[Dict[str, str]]:
+        asset_key: str | None,
+    ) -> dict[str, str] | None:
         """Look for a Slurm job from a previous failed Dagster run.
 
         Returns ``{"job_id": "...", "run_dir": "..."}`` for the first
@@ -1249,7 +1327,7 @@ class SlurmPipesClient(PipesClient):
         if op_context is None:
             return None
 
-        candidates: list[Dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
 
         def add_tag_candidate(tags: Any, *, allow_completed: bool) -> None:
             if not isinstance(tags, Mapping):
@@ -1290,7 +1368,7 @@ class SlurmPipesClient(PipesClient):
             current_tags = getattr(op_context.dagster_run, "tags", {}) or {}
             add_tag_candidate(current_tags, allow_completed=True)
         except Exception as exc:
-            self.logger.debug(f"Could not check current run tags: {exc}")
+            self.logger.debug(f"Could not check current run tags: {exc}", exc_info=True)
 
         # Strategy 1: Retry path – check parent run's tags
         try:
@@ -1300,7 +1378,7 @@ class SlurmPipesClient(PipesClient):
                 if parent_run:
                     add_tag_candidate(parent_run.tags, allow_completed=True)
         except Exception as exc:
-            self.logger.debug(f"Could not check parent run tags: {exc}")
+            self.logger.debug(f"Could not check parent run tags: {exc}", exc_info=True)
 
         # Strategy 2: Re-materialize path – query recent FAILURE runs
         if not candidates and asset_key:
@@ -1315,7 +1393,7 @@ class SlurmPipesClient(PipesClient):
                 for run in failed_runs:
                     add_tag_candidate(run.tags, allow_completed=False)
             except Exception as exc:
-                self.logger.debug(f"Could not query failed runs: {exc}")
+                self.logger.debug(f"Could not query failed runs: {exc}", exc_info=True)
 
         # Return first candidate whose job is known to Slurm (any state).
         # An empty state means the job_id is completely unknown — skip it.
@@ -1326,11 +1404,11 @@ class SlurmPipesClient(PipesClient):
                     if (
                         self.session is not None
                         and self.session._allocation is not None
+                        and int(cand["job_id"]) != self.session.allocation.slurm_job_id
                     ):
-                        if int(cand["job_id"]) != self.session.allocation.slurm_job_id:
-                            # Cached Dagster context/parent tags can still name
-                            # a predecessor after promotion. Never replay it.
-                            continue
+                        # Cached Dagster context/parent tags can still name
+                        # a predecessor after promotion. Never replay it.
+                        continue
                     session_status = ssh_pool.run(
                         f"cat {shlex.quote(str(session_status_path))} "
                         "2>/dev/null || true"
@@ -1375,37 +1453,6 @@ class SlurmPipesClient(PipesClient):
         """Return True if the Slurm job is in an active state."""
         state = self._get_job_state(job_id, ssh_pool)
         return state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}
-
-    def _await_stream_quiescence(
-        self,
-        streamed_lines: dict,
-        streamed_lock: Any,
-        job_id: int,
-        *,
-        timeout: float,
-        interval: float = 0.05,
-    ) -> None:
-        """Wait until the log-streaming threads stop producing new lines.
-
-        Two consecutive quiet samples mean the tail has drained. Bounded by
-        `timeout` so a stuck stream cannot hold the step open.
-        """
-        deadline = time.time() + timeout
-        quiet_samples = 0
-        with streamed_lock:
-            previous = sum(streamed_lines.values())
-
-        while time.time() < deadline:
-            self._interruptible_sleep(interval, job_id)
-            with streamed_lock:
-                current = sum(streamed_lines.values())
-            if current == previous:
-                quiet_samples += 1
-                if quiet_samples >= 2:
-                    return
-            else:
-                quiet_samples = 0
-                previous = current
 
     @staticmethod
     def _bounded_poll_sleep(
@@ -1522,7 +1569,7 @@ class SlurmPipesClient(PipesClient):
                 for output_name in output_names:
                     add_output_metadata(metadata, output_name=output_name)
         except Exception as e:
-            self.logger.warning(f"Failed to collect metrics: {e}")
+            self.logger.warning(f"Failed to collect metrics: {e}", exc_info=True)
 
     def _collect_custom_metrics(
         self,
@@ -1578,6 +1625,7 @@ class SlurmPipesClient(PipesClient):
                 "Custom Slurm metrics collector failed for job %s: %s",
                 job_id,
                 error,
+                exc_info=True,
             )
             return {}
 
@@ -1794,7 +1842,7 @@ class SlurmPipesClient(PipesClient):
                 self.logger.info(
                     f"Job {job_id} current state before cancellation: {current_state}"
                 )
-            except Exception as check_error:
+            except SSH_ERRORS as check_error:
                 self.logger.debug(f"Could not check job state: {check_error}")
 
             # Execute scancel
@@ -1810,20 +1858,20 @@ class SlurmPipesClient(PipesClient):
                 )
                 final_state = verify_output.strip()
                 self.logger.info(f"Job {job_id} state after scancel: {final_state}")
-            except Exception as verify_error:
+            except SSH_ERRORS as verify_error:
                 self.logger.debug(f"Could not verify cancellation: {verify_error}")
 
             self.logger.info(
                 f"✓ Slurm job {job_id} cancellation command sent successfully"
             )
-        except Exception as e:
-            self.logger.error(f"❌ Failed to cancel Slurm job {job_id}: {e}")
+        except Exception:
+            self.logger.exception(f"❌ Failed to cancel Slurm job {job_id}")
 
     def _get_pack_command(
         self,
-        override: Optional[list[str]] = None,
+        override: list[str] | None = None,
         full_build: bool = False,
-        target_platform: Optional[str] = None,
+        target_platform: str | None = None,
     ) -> list[str]:
         """Determine the appropriate pack command based on platform or override.
 
@@ -1857,7 +1905,7 @@ class SlurmPipesClient(PipesClient):
             return ["pixi", "run", "--frozen", "pack-only"]
 
     def _normalize_pack_command(
-        self, pack_cmd: list[str], target_platform: Optional[str] = None
+        self, pack_cmd: list[str], target_platform: str | None = None
     ) -> list[str]:
         """Apply platform-specific fixes to custom pack commands."""
         if not self._is_pack_environment_script(pack_cmd):
@@ -1878,9 +1926,7 @@ class SlurmPipesClient(PipesClient):
         """Return True when the command invokes the workspace pack helper."""
         return any(arg.endswith("scripts/pack_environment.py") for arg in pack_cmd)
 
-    def _resolve_pack_platform(
-        self, ssh_pool: Optional[SSHConnectionPool] = None
-    ) -> str:
+    def _resolve_pack_platform(self, ssh_pool: SSHConnectionPool | None = None) -> str:
         """Resolve the target Linux platform for packed Slurm environments."""
         env_override = os.environ.get("SLURM_PACK_PLATFORM", "").strip()
         if env_override:
@@ -1893,9 +1939,10 @@ class SlurmPipesClient(PipesClient):
                 return "linux-aarch64"
             return "linux-64"
 
-        if ssh_pool is not None:
-            if remote_platform := self._detect_remote_pack_platform(ssh_pool):
-                return remote_platform
+        if ssh_pool is not None and (
+            remote_platform := self._detect_remote_pack_platform(ssh_pool)
+        ):
+            return remote_platform
 
         if not self.auto_detect_platform:
             return "linux-64"
@@ -1922,14 +1969,12 @@ class SlurmPipesClient(PipesClient):
 
         return "linux-64"
 
-    def _detect_remote_pack_platform(
-        self, ssh_pool: SSHConnectionPool
-    ) -> Optional[str]:
+    def _detect_remote_pack_platform(self, ssh_pool: SSHConnectionPool) -> str | None:
         """Detect the target platform from the remote submitter host."""
         try:
             remote_system = ssh_pool.run("uname -s").strip().lower()
             remote_machine = ssh_pool.run("uname -m").strip().lower()
-        except Exception as exc:  # pragma: no cover - best effort
+        except SSH_ERRORS as exc:  # pragma: no cover - best effort
             self.logger.debug(f"Could not detect remote submitter architecture: {exc}")
             return None
 
@@ -1972,7 +2017,7 @@ class SlurmPipesClient(PipesClient):
         return result.returncode == 0 and result.stdout.strip() == "1"
 
     def _build_pack_env_overrides(
-        self, ssh_pool: Optional[SSHConnectionPool] = None
+        self, ssh_pool: SSHConnectionPool | None = None
     ) -> dict[str, str]:
         """Build environment overrides that influence pixi-pack output."""
         return {"SLURM_PACK_PLATFORM": self._resolve_pack_platform(ssh_pool=ssh_pool)}
@@ -2007,8 +2052,8 @@ class SlurmPipesClient(PipesClient):
     def _compute_environment_cache_key(
         self,
         pack_cmd: list[str],
-        env_overrides: Optional[dict[str, str]] = None,
-    ) -> Optional[str]:
+        env_overrides: dict[str, str] | None = None,
+    ) -> str | None:
         """Return a cache key derived from the lockfile, pack command, and inject files."""
         try:
             return compute_env_cache_key(
@@ -2016,7 +2061,7 @@ class SlurmPipesClient(PipesClient):
                 cache_inject_globs=self.cache_inject_globs,
                 env_overrides=env_overrides,
             )
-        except Exception as exc:  # pragma: no cover - best effort
+        except OSError as exc:  # pragma: no cover - best effort
             self.logger.debug(f"Could not compute environment cache key: {exc}")
             return None
 
@@ -2066,7 +2111,7 @@ class SlurmPipesClient(PipesClient):
 
     def _load_pixi_task_command(
         self, task_name: str, project_dir: Path
-    ) -> Optional[list[str]]:
+    ) -> list[str] | None:
         """Load a task command from the local pixi/pyproject manifest if present."""
         manifest = project_dir / "pixi.toml"
         if not manifest.exists():
@@ -2097,7 +2142,7 @@ class SlurmPipesClient(PipesClient):
         self,
         pack_cmds: list[list[str]],
         project_dir: Path,
-        extra_input_globs: Optional[list[str]] = None,
+        extra_input_globs: list[str] | None = None,
     ) -> list[tuple[Path, str]]:
         """Return local files to stage for remote packing.
 
@@ -2182,7 +2227,7 @@ class SlurmPipesClient(PipesClient):
         ssh_pool: SSHConnectionPool,
         remote_pack_root: str,
         pack_cmds: list[list[str]],
-        extra_input_globs: Optional[list[str]] = None,
+        extra_input_globs: list[str] | None = None,
     ) -> str:
         """Upload the small set of files needed to run pixi-pack remotely.
 
@@ -2519,7 +2564,7 @@ rm -rf {pack_root_quoted}
             python_quoted = shlex.quote(python_executable)
             ssh_pool.run(f"test -f {activation_quoted} && test -x {python_quoted}")
             return True
-        except Exception:
+        except SSH_ERRORS:
             return False
 
     def _prepare_environment(
@@ -2528,9 +2573,9 @@ rm -rf {pack_root_quoted}
         remote_base: str,
         run_dir: str,
         force_env_push: bool,
-        pack_cmd_override: Optional[list[str]] = None,
-        pre_deployed_env_path_override: Optional[str] = None,
-        environment_name: Optional[str] = None,
+        pack_cmd_override: list[str] | None = None,
+        pre_deployed_env_path_override: str | None = None,
+        environment_name: str | None = None,
     ) -> tuple[str, str]:
         """Ensure a usable Python environment exists and return activation + python paths."""
         pre_deployed_env_path = (
@@ -2677,7 +2722,7 @@ rm -rf {pack_root_quoted}
                     env_overrides=pack_env_overrides,
                 )
                 return activation_script, python_executable
-            except Exception as exc:
+            except (*SSH_ERRORS, ValueError, tarfile.TarError) as exc:
                 self.logger.warning(
                     "Remote environment packing failed; falling back to local "
                     "packaging and upload. Remote packing requires pixi, pixi-pack, "
@@ -2734,7 +2779,7 @@ rm -rf {pack_root_quoted}
         ssh_pool: SSHConnectionPool,
         pack_file_path: str,
         extract_dir: str,
-        pack_file_tmp_path: Optional[str] = None,
+        pack_file_tmp_path: str | None = None,
     ) -> str:
         """Extract the self-extracting environment and return activation script path.
 
@@ -2804,8 +2849,8 @@ rm -rf {pack_root_quoted}
             try:
                 tree_output = ssh_pool.run(f"ls -laR {run_dir} | head -100")
                 self.logger.error(f"Files in run dir:\n{tree_output}")
-            except:  # noqa: E722
-                pass
+            except SSH_ERRORS as listing_error:
+                self.logger.debug(f"Could not list {run_dir}: {listing_error}")
             raise RuntimeError(
                 f"Environment extraction appeared to succeed but validation failed. "
                 f"Expected activate.sh in {run_dir} and bin/python in {extract_dir}"
@@ -3005,7 +3050,7 @@ rm -rf {pack_root_quoted}
 
     def _resolve_signal_before_timeout(
         self,
-        extra_slurm_opts: Optional[Dict[str, Any]],
+        extra_slurm_opts: dict[str, Any] | None,
     ) -> str | None:
         """Resolve and validate the effective pre-timeout signal."""
         time_limit: Any = self.slurm.queue.time_limit
@@ -3042,12 +3087,12 @@ rm -rf {pack_root_quoted}
 
     def _read_pre_timeout_signal(
         self, ssh_pool: SSHConnectionPool, run_dir: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return the pre-timeout signal the workload received, if any."""
         marker = self._pre_timeout_marker_path(run_dir)
         try:
             output = ssh_pool.run(f"cat {shlex.quote(marker)} 2>/dev/null || true")
-        except Exception as exc:  # pragma: no cover - diagnostics only
+        except SSH_ERRORS as exc:  # pragma: no cover - diagnostics only
             self.logger.debug(f"Could not read pre-timeout marker: {exc}")
             return None
         return output.strip() or None
@@ -3062,8 +3107,8 @@ rm -rf {pack_root_quoted}
         run_dir: str,
         ssh_pool: SSHConnectionPool,
         message_reader,
-        extra_slurm_opts: Optional[Dict[str, Any]] = None,
-        op_context: Optional[OpExecutionContext] = None,
+        extra_slurm_opts: dict[str, Any] | None = None,
+        op_context: OpExecutionContext | None = None,
         poll_timeout: int = 3600,
     ) -> int:
         """Execute as standalone sbatch job with real-time log streaming.
@@ -3182,13 +3227,11 @@ rm -rf {pack_root_quoted}
         except Exception as e:
             self.logger.error(f"Failed to write job script: {e}")
             # Clean up temp files if they exist
-            try:
+            with contextlib.suppress(OSError):
                 if "local_temp_path" in locals():
                     Path(local_temp_path).unlink(missing_ok=True)
                 if "local_aux_path" in locals():
                     Path(local_aux_path).unlink(missing_ok=True)
-            except:  # noqa: E722
-                pass
             raise RuntimeError(f"Could not write job script to {script_path}") from e
 
         # Verify file was uploaded
@@ -3264,7 +3307,7 @@ rm -rf {pack_root_quoted}
         ssh_pool: SSHConnectionPool,
         run_dir: str,
         job_id: int,
-        op_context: Optional[OpExecutionContext] = None,
+        op_context: OpExecutionContext | None = None,
         stdout_path: str | None = None,
         stderr_path: str | None = None,
     ) -> None:
@@ -3292,11 +3335,7 @@ rm -rf {pack_root_quoted}
                 op_context.log.info if op_context is not None else self.logger.info
             )
             dashboard_log_emitter = RayDashboardLogEmitter(log_info)
-            setattr(
-                message_reader,
-                "_ray_dashboard_log_emitter",
-                dashboard_log_emitter,
-            )
+            message_reader._ray_dashboard_log_emitter = dashboard_log_emitter
 
         # Fetch both files in a single command: two round trips to a login
         # node is two round trips, and this runs on every completed job.
@@ -3312,8 +3351,7 @@ rm -rf {pack_root_quoted}
                     forwarded = forwarded_lines.get(label, 0)
                     streamed = streamed_lines.get(label, 0)
                     offset = max(forwarded, streamed)
-                    if offset > len(lines):
-                        offset = len(lines)
+                    offset = min(offset, len(lines))
                     remainder_lines = lines[offset:]
                     remainder_lines = [line for line in remainder_lines if line.strip()]
                     if not remainder_lines:
@@ -3326,7 +3364,8 @@ rm -rf {pack_root_quoted}
                     stream.flush()
             except Exception as exc:
                 self.logger.debug(
-                    f"Could not fetch final {label} for job {job_id}: {exc}"
+                    f"Could not fetch final {label} for job {job_id}: {exc}",
+                    exc_info=True,
                 )
 
     @staticmethod
@@ -3350,11 +3389,11 @@ rm -rf {pack_root_quoted}
 
         try:
             output = ssh_pool.run(script)
-        except Exception:
+        except SSH_ERRORS:
             return {}
 
         contents: dict[str, str] = {}
-        current: Optional[str] = None
+        current: str | None = None
         buffer: list[str] = []
         for line in output.splitlines():
             if line.startswith(marker):
@@ -3390,7 +3429,7 @@ rm -rf {pack_root_quoted}
         output_file: str,
         error_file: str,
         script_path: str,
-        extra_opts: Optional[Dict[str, Any]] = None,
+        extra_opts: dict[str, Any] | None = None,
     ) -> str:
         """Build sbatch submission command.
 
@@ -3453,7 +3492,7 @@ rm -rf {pack_root_quoted}
             reservation = extra_opts.get("reservation", reservation)
             account = extra_opts.get("account", account)
 
-        def _normalize_optional(value: Optional[Any]) -> Optional[str]:
+        def _normalize_optional(value: Any | None) -> str | None:
             if value is None:
                 return None
             if isinstance(value, str):
@@ -3493,7 +3532,7 @@ rm -rf {pack_root_quoted}
             sbatch_opts.append(f"--mem={mem}")
 
         # Add node count (important for multi-node jobs)
-        final_num_nodes: Optional[int] = None
+        final_num_nodes: int | None = None
         if num_nodes and num_nodes > 0:
             final_num_nodes = num_nodes
 
@@ -3528,7 +3567,7 @@ rm -rf {pack_root_quoted}
         run_dir: str,
         message_reader,
         poll_timeout: int = 3600,
-        op_context: Optional[OpExecutionContext] = None,
+        op_context: OpExecutionContext | None = None,
     ):
         """Wait for job completion while streaming stdout/stderr and robustly
         polling the job state.
@@ -3549,11 +3588,6 @@ rm -rf {pack_root_quoted}
             2, job_id
         )  # Wait for job to start and create log files
 
-        stop_streaming = threading.Event()
-        streamed_lines = {"stdout": 0, "stderr": 0}
-        streamed_lock = threading.Lock()
-        stream_processes: dict[str, subprocess.Popen[str]] = {}
-        stream_processes_lock = threading.Lock()
         dashboard_log_emitter = getattr(
             message_reader, "_ray_dashboard_log_emitter", None
         )
@@ -3562,112 +3596,16 @@ rm -rf {pack_root_quoted}
                 op_context.log.info if op_context is not None else self.logger.info
             )
             dashboard_log_emitter = RayDashboardLogEmitter(log_info)
-            setattr(
-                message_reader,
-                "_ray_dashboard_log_emitter",
-                dashboard_log_emitter,
-            )
+            message_reader._ray_dashboard_log_emitter = dashboard_log_emitter
 
-        def stream_file(remote_path: str, output_stream, prefix: str, stream_key: str):
-            try:
-                tail_cmd = self._build_tail_command(remote_path)
-                if tail_cmd is None:
-                    next_line = 1
-                    quoted_path = shlex.quote(remote_path)
-                    # Every poll is a full SSH connection in this mode, so an
-                    # idle log file must not be polled once per second.
-                    poll_interval = _FALLBACK_STREAM_POLL_SECONDS
-                    self.logger.debug(
-                        "Streaming %s via polling fallback (ControlMaster unavailable)",
-                        remote_path,
-                    )
-                    while not stop_streaming.is_set():
-                        try:
-                            output = ssh_pool.run(
-                                f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
-                            )
-                        except Exception as exc:
-                            if not stop_streaming.is_set():
-                                self.logger.debug(
-                                    "Polling fallback for %s failed: %s",
-                                    remote_path,
-                                    exc,
-                                )
-                            break
-
-                        lines = output.splitlines() if output else []
-                        if lines:
-                            for line in lines:
-                                if not line.strip():
-                                    continue
-                                dashboard_log_emitter.process_line(line)
-                                output_stream.write(f"{prefix}{line}\n")
-                            output_stream.flush()
-                            with streamed_lock:
-                                streamed_lines[stream_key] += sum(
-                                    1 for line in lines if line.strip()
-                                )
-                            next_line += len(lines)
-                            poll_interval = _FALLBACK_STREAM_POLL_SECONDS
-                        else:
-                            poll_interval = min(
-                                poll_interval * 2, _FALLBACK_STREAM_POLL_MAX_SECONDS
-                            )
-
-                        stop_streaming.wait(poll_interval)
-                    return
-
-                with stream_processes_lock:
-                    if stop_streaming.is_set():
-                        return
-                    proc = subprocess.Popen(
-                        tail_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                        bufsize=1,
-                    )
-                    stream_processes[stream_key] = proc
-
-                try:
-                    if not proc.stdout:
-                        self.logger.warning(f"No stdout for {stream_key}")
-                        return
-                    while not stop_streaming.is_set():
-                        line = proc.stdout.readline()
-                        if not line:
-                            if proc.poll() is not None:
-                                break
-                            time.sleep(0.1)
-                            continue
-                        if not line.strip():
-                            continue
-                        dashboard_log_emitter.process_line(line)
-                        output_stream.write(f"{prefix}{line}")
-                        output_stream.flush()
-                        with streamed_lock:
-                            streamed_lines[stream_key] += 1
-                finally:
-                    with stream_processes_lock:
-                        owns_process = stream_processes.pop(stream_key, None) is proc
-                    if owns_process:
-                        self._terminate_stream_processes({stream_key: proc})
-            except Exception as e:
-                self.logger.warning(f"Error streaming {remote_path}: {e}")
-
-        stdout_thread = threading.Thread(
-            target=stream_file,
-            args=(stdout_path, sys.stdout, "[SLURM] ", "stdout"),
-            daemon=True,
+        log_follower = _SlurmLogFollower(
+            [
+                ("stdout", stdout_path, sys.stdout, "[SLURM] "),
+                ("stderr", stderr_path, sys.stderr, "[SLURM ERR] "),
+            ],
+            dashboard_log_emitter,
+            self.logger,
         )
-        stdout_thread.start()
-
-        stderr_thread = threading.Thread(
-            target=stream_file,
-            args=(stderr_path, sys.stderr, "[SLURM ERR] ", "stderr"),
-            daemon=True,
-        )
-        stderr_thread.start()
 
         start_time = time.time()
         last_state = None
@@ -3733,8 +3671,10 @@ rm -rf {pack_root_quoted}
                             self._sigterm_received = False
                             _received_interrupt["received"] = False
 
-                    # Get current job state
-                    state = self._get_job_state(job_id, ssh_pool)
+                    # Get current job state, and the new log output with it
+                    state = self._get_job_state(
+                        job_id, ssh_pool, log_follower=log_follower
+                    )
 
                     # Track state changes
                     if state != last_state:
@@ -3806,7 +3746,7 @@ rm -rf {pack_root_quoted}
                                             )
                             except RuntimeError:
                                 raise
-                            except Exception as e:
+                            except SSH_ERRORS as e:
                                 self.logger.debug(
                                     f"Could not get detailed job info: {e}"
                                 )
@@ -3823,7 +3763,7 @@ rm -rf {pack_root_quoted}
                                         resolved_state = normalize_slurm_state(
                                             match.group(1)
                                         )
-                                except Exception as e:
+                                except SSH_ERRORS as e:
                                     self.logger.debug(
                                         f"Could not get scontrol job info: {e}"
                                     )
@@ -3870,17 +3810,6 @@ rm -rf {pack_root_quoted}
                             f"Job {job_id} reached terminal state: {state}"
                         )
 
-                        # Let the log-streaming threads catch up. Waiting for
-                        # them to go quiet returns as soon as the tail has
-                        # drained, instead of spending a flat two seconds on
-                        # every job that finishes.
-                        self._await_stream_quiescence(
-                            streamed_lines,
-                            streamed_lock,
-                            job_id,
-                            timeout=2.0,
-                        )
-
                         if state in {"CANCELLED", "PREEMPTED"}:
                             self.logger.warning(f"Job {job_id} was {state}")
                             self._cancellation_requested = True
@@ -3907,7 +3836,7 @@ rm -rf {pack_root_quoted}
                                 else:
                                     sys.stderr.write("  (stderr is empty)\n")
                                     sys.stderr.flush()
-                            except Exception as e:
+                            except SSH_ERRORS as e:
                                 sys.stderr.write(f"  Failed to read stderr: {e}\n")
                                 sys.stderr.flush()
 
@@ -3980,138 +3909,38 @@ rm -rf {pack_root_quoted}
                     raise
 
         finally:
-            self._stop_streaming_threads(
-                stop_streaming=stop_streaming,
-                stream_processes=stream_processes,
-                stream_processes_lock=stream_processes_lock,
-                stream_threads=(stdout_thread, stderr_thread),
-            )
+            log_follower.finish()
             try:
                 existing = getattr(message_reader, "_streamed_lines", {})
                 if not isinstance(existing, dict):
                     existing = {}
-                for key, value in streamed_lines.items():
+                for key, value in log_follower.lines_read.items():
                     existing[key] = existing.get(key, 0) + value
-                setattr(message_reader, "_streamed_lines", existing)
+                message_reader._streamed_lines = existing
             except Exception as exc:  # pragma: no cover - best effort bookkeeping
-                self.logger.debug(f"Failed to record streamed bytes: {exc}")
-
-    def _stop_streaming_threads(
-        self,
-        *,
-        stop_streaming: threading.Event,
-        stream_processes: dict[str, _TerminableProcessT],
-        stream_processes_lock: Any,
-        stream_threads: tuple[_JoinableThread, ...],
-    ) -> None:
-        """Terminate SSH tail processes before joining their reader threads."""
-        stop_streaming.set()
-        with stream_processes_lock:
-            processes = dict(stream_processes)
-            stream_processes.clear()
-
-        self._terminate_stream_processes(processes)
-
-        for thread in stream_threads:
-            thread.join(timeout=5)
-
-    def _terminate_stream_processes(
-        self,
-        processes: Mapping[str, _TerminableProcess],
-    ) -> None:
-        """Stop and reap SSH tail processes without masking the job outcome."""
-        for stream_key, proc in processes.items():
-            try:
-                if proc.poll() is not None:
-                    continue
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-            except OSError as exc:
                 self.logger.debug(
-                    "Could not terminate SSH %s log stream: %s",
-                    stream_key,
-                    exc,
+                    f"Failed to record streamed bytes: {exc}", exc_info=True
                 )
 
-        for stream_key, proc in processes.items():
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                except OSError as exc:
-                    self.logger.debug(
-                        "Could not kill SSH %s log stream: %s",
-                        stream_key,
-                        exc,
-                    )
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self.logger.warning(
-                        "SSH %s log stream did not exit after being killed",
-                        stream_key,
-                    )
-                except OSError as exc:
-                    self.logger.debug(
-                        "Could not reap killed SSH %s log stream: %s",
-                        stream_key,
-                        exc,
-                    )
-            except OSError as exc:
-                self.logger.debug(
-                    "Could not reap SSH %s log stream: %s",
-                    stream_key,
-                    exc,
-                )
+    def _get_job_state(
+        self,
+        job_id: int,
+        ssh_pool: SSHConnectionPool,
+        log_follower: _SlurmLogFollower | None = None,
+    ) -> str:
+        """Query job state from Slurm.
 
-    def _build_tail_command(self, remote_path: str) -> list[str] | None:
-        """Build SSH tail command for streaming logs.
-
-        Args:
-            remote_path: Remote file path to tail
-
-        Returns:
-            Command list for subprocess.Popen
-
+        With ``log_follower``, the squeue round trip also reads new log output.
         """
-        control_path = self._control_path
-        cmd = [
-            "ssh",
-            *self.slurm.ssh.get_multiplexing_opts(control_path=control_path),
-            # A `tail -F` connection idles between log lines; without keepalives
-            # a firewall can drop it and force an endless reconnect loop.
-            *self.slurm.ssh.get_common_ssh_opts(
-                server_alive_interval=30,
-                server_alive_count_max=6,
-            ),
-            "-p",
-            str(self.slurm.ssh.port),
-        ]
-
-        # ControlMaster options are already set above; only auth is left.
-        cmd.extend(self.slurm.ssh.get_auth_opts())
-
-        cmd.append(f"{self.slurm.ssh.user}@{self.slurm.ssh.host}")
-
-        # Tail command - wait for file to appear, then follow
-        cmd.append(
-            f"tail -F --retry -n +1 {remote_path} 2>/dev/null || "
-            f"tail -f {remote_path} 2>/dev/null || "
-            f"sleep infinity"
-        )
-
-        return cmd
-
-    def _get_job_state(self, job_id: int, ssh_pool: SSHConnectionPool) -> str:
-        """Query job state from Slurm."""
         try:
             # Try squeue first (for running jobs)
-            output = ssh_pool.run(f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true")
+            squeue = f"squeue -h -j {job_id} -o '%T' 2>/dev/null || true"
+            if log_follower is None:
+                output = ssh_pool.run(squeue)
+            else:
+                output = log_follower.consume(
+                    ssh_pool.run(f"{squeue}; {log_follower.script()}")
+                )
             state = normalize_slurm_state(output)
             if state:
                 return state
@@ -4123,7 +3952,7 @@ rm -rf {pack_root_quoted}
             state = output.strip()
             return normalize_slurm_state(state.split()[0]) if state else ""
 
-        except Exception as e:
+        except SSH_ERRORS as e:
             self.logger.warning(f"Error querying job state: {e}")
             return ""
 

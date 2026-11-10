@@ -11,19 +11,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import dagster_slurm.resources.session as session_module
 import pytest
 from dagster import build_init_resource_context
-import dagster_slurm.resources.session as session_module
 from dagster_slurm import (
-    SlurmQueueConfig,
-    SlurmResource,
-    SSHConnectionResource,
     BashLauncher,
     ComputeResource,
     RayLauncher,
     RayPortConfig,
     SlurmAllocationScope,
+    SlurmQueueConfig,
+    SlurmResource,
     SlurmRunAllocationConfig,
+    SSHConnectionResource,
 )
 from dagster_slurm.config.environment import ExecutionMode
 from dagster_slurm.config.runtime import RuntimeVariant
@@ -94,9 +94,9 @@ def _render_allocation_script(
 ) -> tuple[str, _RecordingAllocationSSHPool]:
     ssh_pool = _RecordingAllocationSSHPool(job_id)
     object.__setattr__(session, "_ssh_pool", cast(SSHConnectionPool, ssh_pool))
-    monkeypatch.setattr(session, "_resolve_run_id", lambda context: run_id)
-    monkeypatch.setattr(session, "_log_estimated_start_time", lambda job_id: None)
-    monkeypatch.setattr(
+    object.__setattr__(session, "_resolve_run_id", lambda context: run_id)
+    object.__setattr__(session, "_log_estimated_start_time", lambda job_id: None)
+    object.__setattr__(
         session,
         "_wait_for_allocation_start",
         lambda job_id, working_dir, timeout: None,
@@ -792,7 +792,7 @@ def test_allocation_lock_timeout_reports_existing_owner(monkeypatch):
     session = SlurmSessionResource(slurm=_mock_slurm_resource(remote_base="/remote"))
     fake_ssh_pool = FakeSSHPool()
     object.__setattr__(session, "_ssh_pool", cast(SSHConnectionPool, fake_ssh_pool))
-    monkeypatch.setattr(session, "_resolve_run_id", lambda context: "wait")
+    object.__setattr__(session, "_resolve_run_id", lambda context: "wait")
     monkeypatch.setattr(session_module, "_REMOTE_LOCK_WAIT_TIMEOUT_SECONDS", 0)
 
     with pytest.raises(TimeoutError) as exc_info:
@@ -1250,7 +1250,7 @@ def test_session_teardown_preserves_allocation_for_reattach(monkeypatch):
     allocation = SimpleNamespace(slurm_job_id=42, cancel=lambda _pool: None)
     ssh_pool = SimpleNamespace(__exit__=lambda *_args: None)
     cleanup_calls: list[int] = []
-    monkeypatch.setattr(
+    object.__setattr__(
         session,
         "_schedule_shared_allocation_cleanup",
         lambda: cleanup_calls.append(42),
@@ -1700,8 +1700,6 @@ def test_status_polling_stops_backing_off_once_pipes_reports_closed(monkeypatch)
     monkeypatch.setattr(
         client, "_interruptible_sleep", lambda seconds, job_id: sleeps.append(seconds)
     )
-    # Stream-drain sampling also sleeps; it is not what this test measures.
-    monkeypatch.setattr(client, "_await_stream_quiescence", lambda *a, **k: None)
 
     # The payload reports 'closed' after the third status poll.
     class Reader:
@@ -1722,12 +1720,6 @@ def test_status_polling_stops_backing_off_once_pipes_reports_closed(monkeypatch)
         return real_state(*a, **k)
 
     monkeypatch.setattr(client, "_get_job_state", counting_state)
-    monkeypatch.setattr(
-        "dagster_slurm.pipes_clients.slurm_pipes_client.threading.Thread",
-        lambda *a, **k: SimpleNamespace(
-            start=lambda: None, join=lambda timeout=None: None, is_alive=lambda: False
-        ),
-    )
 
     client._wait_for_job_with_streaming(
         1,

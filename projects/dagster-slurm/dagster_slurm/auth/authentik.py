@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-
 
 TOKEN_API_MISCONFIG_MESSAGE = (
     "Ensure ASC_AUTHENTIK_API_TOKEN is an authentik *Token* (not an App "
@@ -114,8 +113,8 @@ class AuthentikCredentialRotator:
     def rotate(self) -> AuthentikCredentials:
         base_url = self.base_url.rstrip("/")
         user_id = self._lookup_current_user_id(base_url)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=self.expires_days)
-        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        expires_at = datetime.now(UTC) + timedelta(days=self.expires_days)
+        suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         app_password_id = f"{self.identifier_prefix}-app-{suffix}"
         api_token_id = f"{self.identifier_prefix}-api-{suffix}"
 
@@ -278,7 +277,7 @@ def _parse_timestamp(value: str | None) -> datetime | None:
     normalized = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -286,5 +285,5 @@ def _format_timestamp(value: datetime | None) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value.isoformat()

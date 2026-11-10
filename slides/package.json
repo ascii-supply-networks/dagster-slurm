@@ -16,12 +16,15 @@
     "export-scipy2026": "slidev export slides_scipy2026.md --with-clicks --timeout 120000 --output slides_scipy2026-export.pdf"
   },
   "dependencies": {
-    "@slidev/cli": "^52.14.2",
+    "@slidev/cli": "^52.20.1",
     "@slidev/theme-default": "^0.25.0",
     "@slidev/theme-seriph": "^0.25.0",
-    "vue": "^3.5.32"
+    "vue": "^3.5.44"
   },
   "devDependencies": {
-    "playwright-chromium": "^1.59.1"
+    "playwright-chromium": "^1.64.1"
+  },
+  "overrides": {
+    "dompurify": "^3.4.17"
   }
 }

@@ -1,7 +1,7 @@
 """Apache Spark launcher."""
 
 import shlex
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import Field
 
@@ -22,14 +22,14 @@ class SparkLauncher(ComputeLauncher):
     spark_home: str = Field(
         default="/opt/spark", description="Path to Spark installation"
     )
-    master_url: Optional[str] = Field(
+    master_url: str | None = Field(
         default=None,
         description="Connect to existing cluster (e.g., spark://host:7077)",
     )
     executor_memory: str = Field(default="4g", description="Memory per executor")
     executor_cores: int = Field(default=2, description="Cores per executor")
     driver_memory: str = Field(default="2g", description="Driver memory")
-    num_executors: Optional[int] = Field(
+    num_executors: int | None = Field(
         default=None, description="Number of executors (None = auto from allocation)"
     )
 
@@ -38,10 +38,10 @@ class SparkLauncher(ComputeLauncher):
         payload_path: str,
         python_executable: str,
         working_dir: str,
-        pipes_context: Dict[str, str],
-        extra_env: Optional[Dict[str, str]] = None,
-        allocation_context: Optional[Dict[str, Any]] = None,
-        activation_script: Optional[str] = None,
+        pipes_context: dict[str, str],
+        extra_env: dict[str, str] | None = None,
+        allocation_context: dict[str, Any] | None = None,
+        activation_script: str | None = None,
     ) -> ExecutionPlan:
         """Generate Spark execution plan."""
         messages_path = f"{working_dir}/messages.jsonl"
@@ -152,7 +152,7 @@ exit $exit_code
 
     def _generate_cluster_startup(
         self,
-        allocation_context: Dict[str, Any],
+        allocation_context: dict[str, Any],
         working_dir: str,
         date_fmt: str,
     ) -> str:

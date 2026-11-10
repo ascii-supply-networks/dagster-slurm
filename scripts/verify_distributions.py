@@ -10,10 +10,7 @@ from pathlib import Path
 
 from packaging.version import Version
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
+import tomllib
 
 
 IMPORT_CHECK = """

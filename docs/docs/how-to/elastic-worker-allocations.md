@@ -66,7 +66,7 @@ Unset Slurm fields inherit the session's first worker allocation or, without one
 
 If the Ray worker on one node ends while its head is live, for example after a raylet crash, that node starts again after a delay while the other nodes keep working. The delay grows each time, and a node that ends three more times stays out until the allocation joins another head.
 
-Payload code sees new nodes as extra Ray capacity. Ray Data actor pools with a `(min, max)` concurrency grow onto them. To launch work once enough capacity has joined, see `wait_for_stable_ray_resources` in `dagster_slurm.ray`. Choosing which allocations to add, and when, stays in your application. For example, you can probe start times with `sbatch --test-only`.
+Payload code sees new nodes as extra Ray capacity. Ray Data actor pools with a `(min, max)` concurrency grow onto them. To launch work once enough capacity has joined, see `wait_for_stable_ray_resources` in `dagster_slurm.ray`. Choosing which allocations to add, and when, stays in your application. [Scale worker allocations from your application](application-driven-scaling.md) shows the hooks for that: a snapshot of every allocation, start-time estimates for candidate shapes, and reconciliation of a desired worker count across step processes.
 
 ## Remove a worker allocation
 
