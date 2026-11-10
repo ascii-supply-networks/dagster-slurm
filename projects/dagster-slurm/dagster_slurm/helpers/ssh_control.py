@@ -22,8 +22,9 @@ Environment overrides:
 
 import hashlib
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
 
 from dagster import get_dagster_logger
 
@@ -42,8 +43,6 @@ MAX_CONTROL_PATH_LENGTH = 100
 #: a shorter name leaves more headroom for deep control directories.
 DIGEST_LENGTH = 12
 
-_control_dir_ready: set[str] = set()
-
 
 def control_persist_value() -> str:
     """Return the configured ``ControlPersist`` value."""
@@ -57,7 +56,7 @@ def control_dir() -> Path:
     return Path(configured or DEFAULT_CONTROL_DIR).expanduser()
 
 
-def ensure_control_dir() -> Optional[Path]:
+def ensure_control_dir() -> Path | None:
     """Create the control socket directory with private permissions.
 
     Returns:
@@ -65,21 +64,29 @@ def ensure_control_dir() -> Optional[Path]:
 
     """
     directory = control_dir()
-    key = str(directory)
-    if key in _control_dir_ready:
-        return directory
-
     try:
         directory.mkdir(parents=True, exist_ok=True)
         os.chmod(directory, 0o700)
     except OSError:
         return None
 
-    _control_dir_ready.add(key)
     return directory
 
 
-def control_socket_path(user: str, host: str, port: int) -> Optional[str]:
+@contextmanager
+def master_start_lock(control_path: str) -> Iterator[None]:
+    """Serialize cold starts across workers without opening SSH connections."""
+    import fcntl
+
+    with open(f"{control_path}.lock", "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def control_socket_path(user: str, host: str, port: int) -> str | None:
     """Return the deterministic control socket path for a connection target.
 
     The same target always maps to the same socket, so a master started by one
@@ -121,26 +128,22 @@ def control_socket_path(user: str, host: str, port: int) -> Optional[str]:
     return str(path)
 
 
-def multiplexing_opts(control_path: Optional[str], *, create: bool) -> list[str]:
-    """Build OpenSSH options that attach a command to the shared control socket.
+def multiplexing_opts(control_path: str | None) -> list[str]:
+    """Attach to an existing master, refusing any direct network fallback.
 
-    Args:
-        control_path: Socket path, or None to disable multiplexing.
-        create: When True the command may promote itself to master if no master
-            is running yet (``ControlMaster=auto``). Use False for commands
-            issued by :class:`~dagster_slurm.helpers.ssh_pool.SSHConnectionPool`,
-            which manages the master explicitly.
-
+    Only SSHConnectionPool creates masters, under its cross-process lock.
     """
     if not control_path:
-        return []
-
-    opts = [
+        raise RuntimeError(
+            "SSH ControlMaster socket is unavailable; refusing unpooled SSH"
+        )
+    return [
         "-o",
         f"ControlPath={control_path}",
         "-o",
-        f"ControlMaster={'auto' if create else 'no'}",
+        "ControlMaster=no",
+        # A live master bypasses ProxyCommand. If its socket disappears between
+        # health check and exec, OpenSSH must not reconnect directly.
+        "-o",
+        "ProxyCommand=false",
     ]
-    if create:
-        opts.extend(["-o", f"ControlPersist={control_persist_value()}"])
-    return opts

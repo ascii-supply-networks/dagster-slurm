@@ -8,11 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 from dagster_slurm.helpers import ssh_pool as ssh_pool_module
 from dagster_slurm.helpers.ssh_control import control_socket_path
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.resources.ssh import SSHConnectionResource
+from pydantic import ValidationError
 
 
 class DummyResult:
@@ -126,8 +126,9 @@ def test_jump_host_policy_is_applied_by_openssh(tmp_path):
         jump_host=jump,
     )
 
-    target_config = _resolved_ssh_config(target.get_ssh_base_command())
-    jump_command = shlex.split(target_config["proxycommand"])
+    jump_command = shlex.split(
+        target.get_proxy_command_opts()[1].removeprefix("ProxyCommand=")
+    )
     jump_command[jump_command.index("%h:%p")] = "target.example.com:22"
     jump_config = _resolved_ssh_config(jump_command)
 
@@ -162,125 +163,48 @@ def test_empty_known_hosts_file_is_rejected():
 
 
 def test_host_key_failures_include_actionable_guidance(monkeypatch):
-    ssh_resource = SSHConnectionResource(
-        host="example.com",
-        user="testuser",
-        password="secret",
-        host_key_checking="strict",
-    )
-
-    def fail_with_host_key_error(*_args, **_kwargs):
-        return DummyResult(returncode=255, stderr="Host key verification failed.")
-
+    ssh = SSHConnectionResource(host="example.com", user="testuser")
+    monkeypatch.setattr(SSHConnectionPool, "_master_is_alive", lambda self: False)
     monkeypatch.setattr(
-        SSHConnectionPool,
-        "_run_with_password",
-        staticmethod(fail_with_host_key_error),
+        subprocess,
+        "run",
+        lambda *args, **kwargs: DummyResult(
+            255, stderr="Host key verification failed."
+        ),
     )
+    with pytest.raises(RuntimeError, match="Add the verified key"):
+        with SSHConnectionPool(ssh):
+            pytest.fail("failed master admitted a command")
 
-    with SSHConnectionPool(ssh_resource) as pool:
-        with pytest.raises(RuntimeError, match="Add the verified key"):
-            pool.run("true")
 
-
-def test_control_master_fallback_key_auth(monkeypatch, tmp_path):
-    """Ensure we gracefully fall back to direct SSH when ControlMaster fails."""
-
-    key_path = tmp_path / "id_test"
-    key_path.write_text("dummy-key")
-    os.chmod(key_path, 0o600)
-
-    ssh_resource = SSHConnectionResource(
-        host="example.com",
-        port=22,
-        user="testuser",
-        key_path=str(key_path),
-    )
-
+def test_control_master_failure_refuses_commands_and_uploads(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_run(cmd, **kwargs):
         commands.append(cmd)
-        if "-O" in cmd:
-            # No live master behind the control socket
-            return DummyResult(returncode=255, stderr="No such file or directory")
-        if "-M" in cmd:
-            # Simulate ControlMaster failure
-            return DummyResult(returncode=255, stderr="ControlMaster not permitted")
-        if cmd[0] == "scp":
-            return DummyResult(returncode=0)
-        if cmd[0] == "ssh":
-            return DummyResult(returncode=0, stdout="ok\n")
-        return DummyResult(returncode=0)
+        return DummyResult(255, stderr="ControlMaster not permitted")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-
-    pool = SSHConnectionPool(ssh_resource)
-
-    with pool:
-        assert pool._fallback_mode is True
-        assert pool.multiplexing_active is False
-        assert "ControlMaster not permitted" in (pool.fallback_reason or "")
-        assert pool.control_path is None
-
-        output = pool.run("echo fallback")
-        assert output == "ok\n"
-
-        local_file = tmp_path / "payload.txt"
-        local_file.write_text("data")
-        pool.upload_file(str(local_file), "/tmp/remote.txt")
-
-    # Ensure fallback commands do not rely on ControlPath
-    fallback_calls = [
-        cmd
-        for cmd in commands
-        if cmd and cmd[0] == "ssh" and "-M" not in cmd and "-O" not in cmd
-    ]
-    assert any("-o" in cmd for cmd in fallback_calls)
-    assert not any("ControlPath" in " ".join(cmd) for cmd in fallback_calls)
+    pool = SSHConnectionPool(_key_auth_resource(tmp_path))
+    with pytest.raises(RuntimeError, match="refusing unpooled SSH"), pool:
+        pytest.fail("failed master admitted a command")
+    with pytest.raises(RuntimeError, match="ControlMaster unavailable"):
+        pool.run("true")
+    with pytest.raises(RuntimeError, match="ControlMaster unavailable"):
+        pool.upload_file("unused", "/tmp/unused")
+    assert all("-O" in cmd or "-M" in cmd for cmd in commands)
+    assert pool._depth == 0
 
 
-def test_control_master_failure_password_fallback(monkeypatch, tmp_path):
-    """Password auth now falls back gracefully when ControlMaster is skipped."""
+def test_password_auth_refuses_unpooled_connections(monkeypatch):
+    def reject(*args, **kwargs):
+        pytest.fail("unsupported authentication opened a connection")
 
-    ssh_resource = SSHConnectionResource(
-        host="example.com",
-        port=22,
-        user="testuser",
-        password="secret",
-    )
-
-    commands = []
-
-    def fake_run_with_password(cmd, *_, **__):
-        commands.append(cmd)
-        # Return stdout for ssh commands, empty for scp
-        if cmd[0] == "ssh":
-            return DummyResult(returncode=0, stdout="ok\n")
-        return DummyResult(returncode=0)
-
-    monkeypatch.setattr(
-        SSHConnectionPool,
-        "_run_with_password",
-        staticmethod(fake_run_with_password),
-    )
-
-    pool = SSHConnectionPool(ssh_resource)
-
-    with pool:
-        assert pool._fallback_mode is True
-        assert pool.multiplexing_active is False
-        assert "password-based authentication" in (pool.fallback_reason or "")
-        output = pool.run("echo hi")
-        assert output == "ok\n"
-
-        local_file = tmp_path / "data.txt"
-        local_file.write_text("payload")
-        pool.upload_file(str(local_file), "/tmp/remote.txt")
-
-    # Ensure all commands were executed without ControlPath
-    assert commands, "No password-based commands executed"
-    assert all("ControlPath" not in " ".join(cmd) for cmd in commands)
+    monkeypatch.setattr(subprocess, "run", reject)
+    ssh = SSHConnectionResource(host="example.com", user="testuser", password="secret")
+    with pytest.raises(RuntimeError, match="password-based authentication"):
+        with SSHConnectionPool(ssh):
+            pytest.fail("unsupported authentication admitted commands")
 
 
 def test_control_master_key_auth_commands_keep_noninteractive_opts(
@@ -557,7 +481,13 @@ def test_unconfigured_jump_host_is_handed_back_to_openssh():
     )
 
     assert jump.defers_to_ssh_config is True
-    assert target.get_proxy_command_opts() == ["-J", "jumpuser@jump.example.com"]
+    command = shlex.split(
+        target.get_proxy_command_opts()[1].removeprefix("ProxyCommand=")
+    )
+    command[command.index("%h:%p")] = "target.example.com:22"
+    resolved = _resolved_ssh_config(command)
+    assert resolved["proxycommand"] == "false"
+    assert resolved["controlpath"].endswith("cm-jumpuser@jump.example.com:22")
 
 
 def test_configured_jump_host_still_uses_an_explicit_proxy_command(tmp_path):
@@ -734,7 +664,8 @@ def test_unrecoverable_master_loss_is_reported_loudly(monkeypatch, tmp_path):
         state["alive"] = False
         state["spawn_ok"] = False
 
-        assert pool.run("true") == "ok\n"
+        with pytest.raises(RuntimeError, match="refusing unpooled SSH"):
+            pool.run("true")
 
     assert pool.multiplexing_active is False
     assert pool.multiplexing_unsupported is False
@@ -742,7 +673,7 @@ def test_unrecoverable_master_loss_is_reported_loudly(monkeypatch, tmp_path):
     level, message = reported[0]
     assert level == "error"
     assert "SSH MULTIPLEXING FAILED" in message
-    assert "could cause the account to be blocked" in message
+    assert "Refusing unpooled SSH" in message
 
 
 def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
@@ -751,11 +682,12 @@ def test_one_off_commands_attach_to_the_shared_socket(monkeypatch, tmp_path):
 
     resolved = _resolved_ssh_config(resource.get_ssh_base_command())
 
-    assert resolved["controlmaster"] == "auto"
+    assert resolved["controlmaster"] == "false"
+    assert resolved["proxycommand"] == "false"
     assert resolved["controlpath"].endswith("cm-testuser@example.com:22")
 
     scp_command = resource.get_scp_base_command()
-    assert "ControlMaster=auto" in " ".join(scp_command)
+    assert "ProxyCommand=false" in scp_command
 
 
 def test_pooled_commands_never_promote_themselves_to_master(monkeypatch, tmp_path):
@@ -790,7 +722,7 @@ def test_password_auth_is_reported_as_unsupported_not_failed():
 
     pool = SSHConnectionPool(ssh_resource)
     pool.reporter = lambda level, message: reports.append((level, message))
-    with pool:
+    with pytest.raises(RuntimeError, match="password-based authentication"), pool:
         pass
 
     assert pool.multiplexing_unsupported is True
@@ -814,8 +746,9 @@ def test_pool_reports_its_own_state_without_a_reporter(caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        with SSHConnectionPool(ssh_resource):
-            pass
+        with pytest.raises(RuntimeError, match="refusing unpooled SSH"):
+            with SSHConnectionPool(ssh_resource):
+                pass
 
     assert any(
         "SSH multiplexing is unavailable" in record.message for record in caplog.records
@@ -867,3 +800,26 @@ def test_long_but_usable_control_dir_falls_back_to_a_digest(monkeypatch):
         assert "@" not in path
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["-S", "none"],
+        ["-Snone"],
+        ["-M"],
+        ["-Jjump"],
+        ["-o", "ControlPath=none"],
+        ["-oControlMaster=auto"],
+        ["-o", "ProxyCommand=ssh jump -W %h:%p"],
+    ],
+)
+def test_extra_options_cannot_bypass_shared_transport(options):
+    with pytest.raises(ValidationError, match="managed by SSHConnectionPool"):
+        SSHConnectionResource(host="example.com", user="user", extra_opts=options)
+
+
+def test_jump_cannot_lock_its_own_target():
+    jump = SSHConnectionResource(host="example.com", user="user")
+    with pytest.raises(ValidationError, match="Jump host must differ"):
+        SSHConnectionResource(host="example.com", user="user", jump_host=jump)

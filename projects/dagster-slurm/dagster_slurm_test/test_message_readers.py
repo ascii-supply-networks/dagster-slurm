@@ -289,7 +289,8 @@ def test_ssh_message_reader_tail_multiplexes_and_keeps_proxy_jump(
     assert cmd is not None
     joined = " ".join(cmd)
     assert "ProxyCommand=" in joined
-    assert "ControlMaster=auto" in joined
+    assert "ControlMaster=no" in joined
+    assert "ProxyCommand=false" in joined
     assert f"ControlPath={isolated_ssh_control_dir}/cm-" in joined
 
 

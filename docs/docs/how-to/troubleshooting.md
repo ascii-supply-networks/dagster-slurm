@@ -21,24 +21,29 @@ Note that these command-line options take precedence over `~/.ssh/config`, so a 
 
 ### When multiplexing is unavailable
 
-Password-based authentication (on the target or on a jump host) cannot be multiplexed, because a shared connection has nowhere to answer a prompt. In that case Dagster falls back to one-off connections and polls the remote log files instead of tailing them, printing a debug line such as:
+The transport stops when the master cannot start or recover. It never falls
+back to one connection per command, transfer, sensor tick or log stream:
 
 ```
-Streaming ... via polling fallback (ControlMaster unavailable)
+SSH MULTIPLEXING FAILED for <host>. Refusing unpooled SSH commands and transfers.
 ```
 
-Use key-based authentication wherever possible. If the master fails to start, or dies mid-run and cannot be restarted, Dagster logs a run-level error:
+Commands attach with `ControlMaster=no` and `ProxyCommand=false`. The latter
+blocks OpenSSH's own direct-connection fallback if the socket disappears
+between a health check and command execution. A live master bypasses the proxy
+command. Master creation is serialized across processes for each target.
 
-```
-SSH MULTIPLEXING FAILED for <host>. Dagster is falling back to one-off SSH connections. ...
-```
+**Breaking change:** configurations with an explicit target or jump-host
+password are rejected before connecting. Use a key or inherited ssh-agent
+authentication. This implementation does not authenticate a background master
+through interactive prompts. A cluster that forbids multiplexing cannot use
+this transport safely.
 
-Treat that as actionable: stop the run and fix the SSH configuration before the connection rate becomes a problem for the site.
-
-Other tips:
-
-- Leave `SLURM_EDGE_NODE_FORCE_TTY=false` unless your cluster explicitly requires a TTY. Password-based sessions request one automatically.
-- If you rely on jump hosts or OTP prompts, prefer a local `~/.ssh/config` entry. The same configuration is reused by the Pipes log tailer.
+Raw commands returned by `get_ssh_base_command()` and
+`get_scp_base_command()` require an existing master. Use
+`SSHConnectionPool` to establish it first; the legacy `ssh_run` helper does
+this automatically. Jump-host connections have their own shared master and
+are established before the target master.
 
 ## Slurm status polling cadence
 
@@ -63,13 +68,18 @@ Where that is not what you want, each setting can be handed back to OpenSSH:
 | Setting         | Explicit (default)                                                                  | Deferred                                                         |
 | --------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | Host-key policy | `host_key_checking="strict"` emits `StrictHostKeyChecking` and `UserKnownHostsFile` | `host_key_checking="inherit"` emits neither                      |
-| Authentication  | `key_path=...` or `password=...`                                                    | leave both unset — `ssh-agent`, `IdentityFile` and friends apply |
+| Authentication  | `key_path=...`                                                                      | leave both unset — `ssh-agent`, `IdentityFile` and friends apply |
 | Prompting       | `batch_mode=True` emits `BatchMode=yes`                                             | `batch_mode=None` emits nothing                                  |
-| Jump host       | a `jump_host` with any of the above set becomes an explicit `ProxyCommand`          | a `jump_host` with none of them set becomes plain `ssh -J`       |
+| Jump host       | a `jump_host` uses an attach-only `ProxyCommand`                                    | unspecified jump-host options remain inherited                   |
 
-A jump host is only rebuilt as an explicit `ProxyCommand` when the resource actually configures something for it — that is what makes the bastion's own key and host-key policy apply. If you configure nothing beyond host, user and port, it falls back to `-J` and your own bastion settings keep working.
+Each explicit jump host has its own shared master. The target master attaches
+to it through `ProxyCommand`; commands and streams attach to the target master.
 
-`extra_opts` is applied *before* the generated options, and OpenSSH takes the first value it sees, so it overrides anything above.
+`extra_opts` overrides authentication and host-key defaults. Transport options
+(`ControlPath`, `ControlMaster`, `ControlPersist`, `ProxyCommand`, `ProxyJump`
+and their command-line flags) are reserved for the pool and rejected there.
+The `create` argument is removed from the multiplexing option builders: master
+creation belongs to the pool's serialized startup.
 
 :::caution BatchMode and key passphrases
 The default `batch_mode=True` refuses every interactive prompt, which is what a non-interactive daemon needs — otherwise a hidden passphrase prompt would hang the run forever. A passphrase-protected key therefore fails with `Permission denied` unless it is loaded into `ssh-agent`. Set `batch_mode=None` if you need OpenSSH to ask.

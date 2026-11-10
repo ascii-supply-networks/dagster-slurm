@@ -48,10 +48,9 @@ def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
     """Run a one-off SSH command, returning (stdout, stderr, returncode).
 
     The command joins the shared ControlMaster socket via
-    ``get_ssh_base_command``, so it reuses an existing master and starts one if
-    none is running. Note: this is a legacy helper kept for compatibility. New
-    code should use SSHConnectionPool directly, which also health-checks the
-    master.
+    ``get_ssh_base_command``, after the pool establishes or reuses its master.
+    This legacy helper preserves its tuple result; new code should use
+    SSHConnectionPool directly.
     """
     import shlex
     import subprocess
@@ -60,7 +59,10 @@ def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
 
     ssh_cmd = [*ssh_resource.get_ssh_base_command(), remote_cmd]
 
-    result = subprocess.run(ssh_cmd, capture_output=True, text=True)
+    from .ssh_pool import SSHConnectionPool
+
+    with SSHConnectionPool(ssh_resource):
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True)
     return result.stdout, result.stderr, result.returncode
 
 

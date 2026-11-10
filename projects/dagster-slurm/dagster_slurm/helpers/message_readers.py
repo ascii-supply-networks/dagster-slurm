@@ -696,7 +696,7 @@ class SSHMessageReader(PipesMessageReader):
 
         return True, reconnect_count, total_message_count, False
 
-    def _build_ssh_tail_command(self) -> Optional[list[str]]:
+    def _build_ssh_tail_command(self) -> list[str] | None:
         """Build SSH command to tail the remote messages file.
 
         Returns:
@@ -705,30 +705,16 @@ class SSHMessageReader(PipesMessageReader):
         """
         control_path = self.control_path
 
-        # Without a master, password auth would need an interactive prompt per
-        # reconnect; polling through the pool is cheaper and non-interactive.
-        if not control_path and self._requires_password_auth() and self._ssh_pool:
-            return None
-
         base_cmd = [
             "ssh",
+            *self.ssh_config.get_multiplexing_opts(control_path=control_path),
             *self.ssh_config.get_common_ssh_opts(
                 server_alive_interval=15,
                 server_alive_count_max=3,
             ),
             "-p",
             str(self.ssh_config.port),
-            # Reuse the pool's master when healthy, otherwise attach to (or
-            # start) the shared socket instead of opening a private connection.
-            *self.ssh_config.get_multiplexing_opts(
-                create=control_path is None,
-                control_path=control_path,
-            ),
         ]
-
-        # ProxyJump options were previously omitted here, so jump-host setups
-        # bypassed the bastion entirely once the master was unavailable.
-        base_cmd.extend(self.ssh_config.get_proxy_command_opts())
 
         # Covers key, password and inherited auth, and honours batch_mode.
         base_cmd.extend(self.ssh_config.get_auth_opts())

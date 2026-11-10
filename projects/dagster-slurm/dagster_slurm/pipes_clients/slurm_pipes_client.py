@@ -4069,7 +4069,7 @@ rm -rf {pack_root_quoted}
                     exc,
                 )
 
-    def _build_tail_command(self, remote_path: str) -> Optional[list[str]]:
+    def _build_tail_command(self, remote_path: str) -> list[str] | None:
         """Build SSH tail command for streaming logs.
 
         Args:
@@ -4079,18 +4079,10 @@ rm -rf {pack_root_quoted}
             Command list for subprocess.Popen
 
         """
-        if not self._control_path:
-            requires_password = self.slurm.ssh.uses_password_auth
-            jump_host = self.slurm.ssh.jump_host
-            jump_requires_password = (
-                jump_host is not None and jump_host.uses_password_auth
-            )
-            if requires_password or jump_requires_password:
-                return None
-
         control_path = self._control_path
         cmd = [
             "ssh",
+            *self.slurm.ssh.get_multiplexing_opts(control_path=control_path),
             # A `tail -F` connection idles between log lines; without keepalives
             # a firewall can drop it and force an endless reconnect loop.
             *self.slurm.ssh.get_common_ssh_opts(
@@ -4099,16 +4091,7 @@ rm -rf {pack_root_quoted}
             ),
             "-p",
             str(self.slurm.ssh.port),
-            # Share the pool's master when it is healthy, otherwise attach to
-            # (or start) the shared socket rather than opening a private one.
-            *self.slurm.ssh.get_multiplexing_opts(
-                create=control_path is None,
-                control_path=control_path,
-            ),
         ]
-
-        # Include proxy jump options if configured
-        cmd.extend(self.slurm.ssh.get_proxy_command_opts())
 
         # ControlMaster options are already set above; only auth is left.
         cmd.extend(self.slurm.ssh.get_auth_opts())

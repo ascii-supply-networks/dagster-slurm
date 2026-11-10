@@ -89,6 +89,7 @@ in {
     ghStack
     git
     just
+    openssh
     pixi
     ripgrep
     stax
