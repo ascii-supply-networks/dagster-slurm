@@ -163,7 +163,6 @@ jobs:
       packages: read
     env:
       DEVENV_PYTHON_VERSION: "3.11"
-      SLURM_EDGE_NODE_KEY_PATH: ${{ runner.temp }}/dagster-slurm-ci/id_ed25519
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
@@ -229,6 +228,8 @@ jobs:
         if: needs.changes.outputs.run-expensive == 'true'
         run: |
           set -euo pipefail
+          SLURM_EDGE_NODE_KEY_PATH="$RUNNER_TEMP/dagster-slurm-ci/id_ed25519"
+          printf 'SLURM_EDGE_NODE_KEY_PATH=%s\n' "$SLURM_EDGE_NODE_KEY_PATH" >> "$GITHUB_ENV"
           install -d -m 0700 "$(dirname "$SLURM_EDGE_NODE_KEY_PATH")"
           ssh-keygen -q -t ed25519 -N '' -f "$SLURM_EDGE_NODE_KEY_PATH"
           docker exec -i --user submitter slurmctld sh -c \
@@ -273,15 +274,15 @@ jobs:
           echo "---"
 
           echo "--> Effective sshd config (checking auth-related directives):"
-          docker exec slurmctld sshd -T | egrep '^(passwordauthentication|pubkeyauthentication|usepam|permit.*login|allowusers|denyusers|allowgroups|denygroups|permitemptypasswords)' | sed 's/^/    /'
+          docker exec slurmctld sshd -T | grep -E '^(passwordauthentication|pubkeyauthentication|usepam|permit.*login|allowusers|denyusers|allowgroups|denygroups|permitemptypasswords)' | sed 's/^/    /'
 
           echo "--> 'submitter' user status:"
-          docker exec slurmctld id $SSH_USER
-          docker exec slurmctld passwd -S $SSH_USER
+          docker exec slurmctld id "$SSH_USER"
+          docker exec slurmctld passwd -S "$SSH_USER"
 
           echo "--> 'submitter' user shell validity:"
-          docker exec slurmctld getent passwd $SSH_USER
-          docker exec slurmctld grep "$(getent passwd $SSH_USER | cut -d: -f7)" /etc/shells || echo "WARNING: User's shell may not be in /etc/shells"
+          docker exec slurmctld getent passwd "$SSH_USER"
+          docker exec slurmctld grep "$(getent passwd "$SSH_USER" | cut -d: -f7)" /etc/shells || echo "WARNING: User's shell may not be in /etc/shells"
 
           echo "--> Network listener INSIDE container:"
           docker exec slurmctld ss -ltn | grep ':22 '
@@ -291,7 +292,7 @@ jobs:
           echo "### STEP 2: Network Connectivity (Verifying Host State)"
           echo "---"
           echo "--> Basic TCP connection test:"
-          nc -zv $SSH_HOST $SSH_PORT
+          nc -zv "$SSH_HOST" "$SSH_PORT"
 
           echo
           echo "---"
