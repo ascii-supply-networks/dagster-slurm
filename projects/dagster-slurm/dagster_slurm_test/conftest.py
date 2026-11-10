@@ -43,14 +43,14 @@ def isolate_integration_dagster_home(request, monkeypatch) -> None:
     monkeypatch.setenv("DAGSTER_HOME", str(INTEGRATION_DAGSTER_HOME))
 
 
-def _docker_slurm_env(key_path: Path | None = None) -> dict[str, str]:
+def _docker_slurm_env(key_path: Path) -> dict[str, str]:
     """Return a hermetic Slurm Docker environment for subprocess-based tests."""
     env = {
         "SLURM_EDGE_NODE_HOST": "127.0.0.1",
         "SLURM_EDGE_NODE_PORT": "2223",
         "SLURM_EDGE_NODE_USER": "submitter",
-        "SLURM_EDGE_NODE_PASSWORD": "submitter",
-        "SLURM_EDGE_NODE_KEY_PATH": "",
+        "SLURM_EDGE_NODE_PASSWORD": "",
+        "SLURM_EDGE_NODE_KEY_PATH": str(key_path),
         "SLURM_EDGE_NODE_JUMP_HOST": "",
         "SLURM_EDGE_NODE_JUMP_USER": "",
         "SLURM_EDGE_NODE_JUMP_PASSWORD": "",
@@ -66,9 +66,6 @@ def _docker_slurm_env(key_path: Path | None = None) -> dict[str, str]:
         "SLURM_PACK_PLATFORM": "",
         "PYTHON_DOTENV_DISABLED": "1",
     }
-    if key_path is not None:
-        env["SLURM_EDGE_NODE_KEY_PATH"] = str(key_path)
-        env["SLURM_EDGE_NODE_PASSWORD"] = ""
     return env
 
 
@@ -209,16 +206,16 @@ def slurm_compute_resource() -> ComputeResource:
 # This fixture provides the base SlurmResource. It's marked as "session" scope
 # so it only runs once for the entire test session, which is efficient.
 @pytest.fixture(scope="session")
-def slurm_resource_for_testing() -> SlurmResource:
+def slurm_resource_for_testing(docker_ssh_key: Path) -> SlurmResource:
     """
     Provides a base SlurmResource configured for the Docker test cluster.
-    Skips tests if connection details are not available in environment variables.
+    Uses the temporary key provisioned for the Docker cluster.
     """
     ssh = SSHConnectionResource(
         host="localhost",
         port=2223,
         user="submitter",
-        password="submitter",
+        key_path=str(docker_ssh_key),
         host_key_checking="off",
     )
 
@@ -385,6 +382,13 @@ def cleanup_ray_between_tests(request):
 @pytest.fixture(scope="session")
 def docker_ssh_key(tmp_path_factory, slurm_cluster_ready):
     """Provision a temporary SSH key for the Docker SLURM cluster."""
+
+    configured_key = os.environ.get("SLURM_EDGE_NODE_KEY_PATH")
+    if configured_key:
+        key_path = Path(configured_key).expanduser()
+        if not key_path.is_file():
+            pytest.fail(f"Configured Docker SSH key does not exist: {key_path}")
+        return key_path
 
     key_dir = tmp_path_factory.mktemp("slurm_ssh")
     key_path = key_dir / "id_ed25519"

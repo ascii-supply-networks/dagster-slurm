@@ -10,7 +10,6 @@ title: HPC - Leonardo
 SLURM_EDGE_NODE_HOST=login01-ext.leonardo.cineca.it  # valid login nodes are login01-ext, login02-ext, login05-ext, login07-ext
 SLURM_EDGE_NODE_PORT=22
 SLURM_EDGE_NODE_USER=your_leonardo_username
-# SLURM_EDGE_NODE_PASSWORD=password            # specify either password or ssh key path
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
 
 # Deployment settings

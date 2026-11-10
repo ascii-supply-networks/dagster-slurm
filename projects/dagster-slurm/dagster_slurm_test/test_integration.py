@@ -120,14 +120,14 @@ def _run_partitioned_slurm_invocation(
     ssh_host: str,
     ssh_port: int,
     ssh_user: str,
-    ssh_password: str | None,
+    ssh_key_path: str | None,
 ) -> str:
     """Submit one partitioned Slurm invocation from a child process."""
     ssh = SSHConnectionResource(
         host=ssh_host,
         port=ssh_port,
         user=ssh_user,
-        password=ssh_password,
+        key_path=ssh_key_path,
     )
     slurm = SlurmResource(
         ssh=ssh,
@@ -176,14 +176,14 @@ def _run_shared_session_srun_invocation(
     ssh_host: str,
     ssh_port: int,
     ssh_user: str,
-    ssh_password: str | None,
+    ssh_key_path: str | None,
 ) -> dict[str, str]:
     """Execute one shared-allocation srun step from a child process."""
     ssh = SSHConnectionResource(
         host=ssh_host,
         port=ssh_port,
         user=ssh_user,
-        password=ssh_password,
+        key_path=ssh_key_path,
     )
     slurm = SlurmResource(
         ssh=ssh,
@@ -535,7 +535,7 @@ _write_message("closed", {})
                     ssh_host=slurm_resource_for_testing.ssh.host,
                     ssh_port=slurm_resource_for_testing.ssh.port,
                     ssh_user=slurm_resource_for_testing.ssh.user,
-                    ssh_password=slurm_resource_for_testing.ssh.password,
+                    ssh_key_path=slurm_resource_for_testing.ssh.key_path,
                 )
                 for partition_key in partitions
             ]
@@ -607,7 +607,7 @@ def test_run_scoped_allocation_is_shared_across_parallel_processes(
                     ssh_host=slurm_resource_for_testing.ssh.host,
                     ssh_port=slurm_resource_for_testing.ssh.port,
                     ssh_user=slurm_resource_for_testing.ssh.user,
-                    ssh_password=slurm_resource_for_testing.ssh.password,
+                    ssh_key_path=slurm_resource_for_testing.ssh.key_path,
                 )
                 for worker_name in workers
             ]

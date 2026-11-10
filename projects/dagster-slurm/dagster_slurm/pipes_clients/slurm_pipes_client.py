@@ -115,9 +115,7 @@ class _SlurmLogFollower:
     status query instead, so reading the logs costs neither.
 
     The output travels hex-encoded. Byte offsets stay exact, invalid UTF-8
-    cannot break decoding, and the content can contain neither the CRLF line
-    endings a pty adds nor the prompts that password authentication answers
-    (``SSHConnectionPool._run_with_password`` watches all output for them).
+    cannot break decoding, and log text cannot collide with protocol markers.
     """
 
     #: Bytes read per file and poll; anything beyond follows on the next poll.

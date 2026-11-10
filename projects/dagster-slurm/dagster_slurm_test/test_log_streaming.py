@@ -18,7 +18,6 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import (
     SlurmPipesClient,
     _SlurmLogFollower,
 )
-from dagster_slurm.resources.ssh import SSHConnectionResource
 
 
 class _LocalShellPool:
@@ -41,29 +40,6 @@ class _LocalShellPool:
             env=self.env,
             check=True,
         ).stdout
-
-
-class _PasswordShellPool(_LocalShellPool):
-    """Run pooled commands like password authentication does: under a pty.
-
-    The pty turns every newline into CRLF, and ``_run_with_password`` answers
-    anything in the output that looks like a password or OTP prompt.
-    """
-
-    def run(self, cmd: str, timeout=None) -> str:
-        self.commands.append(cmd)
-        pool = SSHConnectionPool(
-            SSHConnectionResource(host="localhost", user="nobody", password="unused")
-        )
-        command = [
-            "env",
-            f"PATH={self.env['PATH']}",
-            f"FAKE_SLURM_STATE={self.env['FAKE_SLURM_STATE']}",
-            *["bash", "--noprofile", "--norc", "-c", cmd],
-        ]
-        result = pool._run_with_password(command, "unused", timeout=30)
-        assert result.returncode == 0, result.stdout
-        return result.stdout
 
 
 def _fake_slurm(tmp_path: Path) -> tuple[Path, Path]:
@@ -127,13 +103,11 @@ def _forwarded(captured: str, prefix: str) -> list[str]:
     return [line for line in captured.splitlines() if line.startswith(prefix)]
 
 
-@pytest.mark.parametrize("pool_class", [_LocalShellPool, _PasswordShellPool])
 def test_job_logs_are_read_with_the_status_poll(
     slurm_pipes_client: SlurmPipesClient,
     monkeypatch,
     tmp_path,
     capsys,
-    pool_class: type[_LocalShellPool],
 ):
     spawned: list[list[str]] = []
     real_popen = subprocess.Popen
@@ -148,10 +122,9 @@ def test_job_logs_are_read_with_the_status_poll(
         slurm_pipes_client,
         monkeypatch,
         tmp_path,
-        pool_class,
+        _LocalShellPool,
         [
-            # The job is mid-way through a line; "OTP" would trip a naive
-            # password-prompt matcher.
+            # Preserve partial lines and authentication-like text verbatim.
             {"out": b"line1\n\nOTP line2\npart", "err": b"e1\n"},
             {"out": b"ial\nline3\n", "state": "COMPLETED"},
         ],

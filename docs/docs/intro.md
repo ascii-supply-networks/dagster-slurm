@@ -123,7 +123,7 @@ sacct -u submitter
 | `SLURM_EDGE_NODE_PASSWORD` / `SLURM_EDGE_NODE_KEY_PATH` (optional)       | Authentication method.                                                                        | Prefer key-based auth. Leave both unset to let `ssh-agent` and `~/.ssh/config` decide.               |
 | `SLURM_EDGE_NODE_FORCE_TTY` (optional)                                   | Request a pseudo-terminal (`-tt`).                                                            | Set to `true` on clusters that insist on interactive sessions. Leave `false` when using a jump host. |
 | `SLURM_EDGE_NODE_POST_LOGIN_COMMAND` (optional)                          | Command prefix run immediately after login.                                                   | Supports `{cmd}` placeholder; useful when you cannot use `ProxyJump`.                                |
-| `SLURM_EDGE_NODE_JUMP_HOST` / `_USER` / `_PORT` / `_PASSWORD` (optional) | Configure an SSH jump host (uses `ssh -J`).                                                   | Lets you hop via `vmos`/bastion nodes; password-based auth is supported.                             |
+| `SLURM_EDGE_NODE_JUMP_HOST` / `_USER` / `_PORT` / `_PASSWORD` (optional) | Configure an SSH jump host with its own shared master.                                        | Lets you hop via `vmos`/bastion nodes; use key or ssh-agent authentication.                          |
 | `SLURM_EDGE_NODE_HOST_KEY_CHECKING` (optional)                           | `strict` (default), `accept-new`, `off`, or `inherit`.                                        | Use `off` only for disposable test clusters; `inherit` defers to `~/.ssh/config`.                    |
 | `SLURM_EDGE_NODE_KNOWN_HOSTS_FILE` (optional)                            | SSH/SCP known-hosts file.                                                                     | Defaults to `~/.ssh/known_hosts`; `off` uses `/dev/null`.                                            |
 | `SLURM_EDGE_NODE_BATCH_MODE` (optional)                                  | `true` (default), `false`, or `inherit`.                                                      | `inherit` lets OpenSSH prompt, e.g. for a key passphrase.                                            |
@@ -137,7 +137,7 @@ sacct -u submitter
 | `CI_DEPLOYED_ENVIRONMENT_PATH` (production only)                         | Path to a pre-built environment bundle on the cluster.                                        | Required when using `production_supercomputer`.                                                      |
 | `DAGSTER_SLURM_SSH_CONTROL_DIR` (optional)                               | Directory for SSH ControlMaster sockets.                                                      | Override when `/tmp` is not writable; defaults to `~/.ssh/dagster-slurm`.                            |
 
-> **Note:** Some clusters (including VSC-5) forbid SSH ControlMaster sockets. When that happens `dagster-slurm` automatically switches to one-off SSH connections so jobs keep running—there’s no extra configuration needed, although log streaming may be slightly slower. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` if your security policy restricts where control sockets can live.
+> **SSH requirement:** A working shared ControlMaster and key or ssh-agent authentication are required. Failed master startup or recovery stops execution before unpooled commands or transfers. Explicit password-based target and jump-host authentication is rejected. Set `DAGSTER_SLURM_SSH_CONTROL_DIR` when your site restricts socket paths.
 
 ## Execution modes
 

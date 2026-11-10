@@ -49,7 +49,7 @@ The two ecosystems rarely meet in practice: Dagster projects often target cloud 
 This paper introduces **dagster-slurm**, an open-source integration that allows the same Dagster assets to run unchanged across laptops, CI pipelines, containerised Slurm clusters, and Tier-0 supercomputers.
 The project packages dependencies with Pixi [@pixi], submits workloads through Slurm using Dagster Pipes [@dagsterpipes], and streams logs plus scheduler metrics back to the Dagster UI.
 
-The key contribution is a unified compute resource (`ComputeResource`) that hides SSH transport (including password-only jump hosts and OTP prompts), dependency packaging, and queue configuration while still respecting Slurm’s scheduling semantics.
+The key contribution is a unified compute resource (`ComputeResource`) that hides SSH transport through shared ControlMaster connections, dependency packaging, and queue configuration while still respecting Slurm’s scheduling semantics.
 The project ships two production-ready execution modes—`local` for laptop/CI development and `slurm` for one-job-per-asset submissions—and two stable launchers: Bash for script-based workloads and Ray for multi-node distributed computing.
 Experimental support for Spark, session-based allocation reuse, and heterogeneous jobs is under active development.
 
@@ -91,7 +91,7 @@ This lowers the entry barrier to sovereign AI infrastructure: data engineering a
 
 The integration is composed of three layers:
 
-1. **Resource definitions** – `ComputeResource`, `SlurmResource`, `SlurmSessionResource`, and `SSHConnectionResource` are Dagster `ConfigurableResource` objects. They encapsulate queue defaults, SSH authentication (including ControlMaster fallback, password-based jump hosts, and interactive OTP prompts), and execution modes.
+1. **Resource definitions** – `ComputeResource`, `SlurmResource`, `SlurmSessionResource`, and `SSHConnectionResource` are Dagster `ConfigurableResource` objects. They encapsulate queue defaults, SSH authentication through shared key- or agent-authenticated ControlMaster connections, and execution modes.
 2. **Launchers and Pipes clients** – Launchers (Bash, Ray) translate payloads into execution plans.
    The Slurm Pipes client handles environment packaging (on demand or via pre-deployed bundles), transfers scripts, triggers `sbatch` or session jobs, and streams logs/metrics back through Dagster Pipes [@dagsterpipes]. Custom launchers can be added by extending the `ComputeLauncher` base class.
 3. **Operational helpers** – Environment deployment scripts, heterogeneous job managers, metrics collectors, and SSH pooling utilities target HPC constraints such as login-node sandboxes, session allocations, and queue observability.
@@ -163,7 +163,7 @@ We validate the approach along three dimensions:
   The pipeline provisions the environment with Pixi, deploys it once via `pixi run deploy-prod-docker`, and then runs Dagster assets through all four execution modes.
   This continuous integration approach aligns with emerging best practices for reproducible HPC workflows [@hayotsasson2025address].
 - **HPC readiness** – The project has been exercised on academic clusters such as VSC-5 (Austria) and Leonardo (Italy).
-  SSH ControlMaster fallbacks, password-based jump hosts, `.bashrc` hygiene, queue/QoS/reservation overrides, and verification snippets (`squeue`, `scontrol`) are documented for both sites.
+  SSH ControlMaster requirements, key- or agent-authenticated jump hosts, `.bashrc` hygiene, queue/QoS/reservation overrides, and verification snippets (`squeue`, `scontrol`) are documented for both sites.
 - **Observability** – Slurm job IDs, CPU efficiency, memory, and node-hours are exposed as Dagster metadata entries, while Ray clusters stream their stdout/stderr back through Pipes.
   This enables conventional Dagster asset checks and alerting to operate unchanged.
 

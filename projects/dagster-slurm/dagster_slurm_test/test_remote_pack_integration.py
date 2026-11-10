@@ -1,6 +1,5 @@
 """Docker-backed integration coverage for remote environment packaging."""
 
-import os
 import shlex
 import uuid
 from pathlib import Path
@@ -11,7 +10,6 @@ from dagster_slurm import (
     BashLauncher,
     SlurmQueueConfig,
     SlurmResource,
-    SSHConnectionResource,
 )
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
 from dagster_slurm.pipes_clients.slurm_pipes_client import SlurmPipesClient
@@ -22,6 +20,7 @@ pytestmark = pytest.mark.needs_slurm_docker
 def test_remote_pack_on_docker_edge_node(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    slurm_resource_for_testing: SlurmResource,
 ):
     """Exercise remote packaging over real SSH into the Docker Slurm edge node."""
     project_dir = tmp_path / "project"
@@ -65,12 +64,7 @@ chmod +x environment.sh
     env_base_dir = f"{remote_root}/env-cache/docker123"
     env_dir = f"{env_base_dir}/env"
 
-    ssh = SSHConnectionResource(
-        host=os.environ.get("SLURM_EDGE_NODE_HOST", "127.0.0.1"),
-        port=int(os.environ.get("SLURM_EDGE_NODE_PORT", "2223")),
-        user=os.environ.get("SLURM_EDGE_NODE_USER", "submitter"),
-        password=os.environ.get("SLURM_EDGE_NODE_PASSWORD", "submitter"),
-    )
+    ssh = slurm_resource_for_testing.ssh
     slurm = SlurmResource(ssh=ssh, queue=SlurmQueueConfig(), remote_base=remote_root)
     client = SlurmPipesClient(
         slurm_resource=slurm,
@@ -117,6 +111,7 @@ chmod +x environment.sh
 def test_project_setup_on_docker_edge_node(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    slurm_resource_for_testing: SlurmResource,
 ):
     """Install, activate, execute, reuse, and refresh two real Pixi environments."""
     project_dir = tmp_path / "project"
@@ -163,12 +158,7 @@ printf 'setup-ran\n' >> "$DAGSTER_SLURM_ENV_BASE_DIR/setup-count"
     )
 
     remote_root = f"/home/submitter/dagster_ci_runs/project-setup-{uuid.uuid4().hex}"
-    ssh = SSHConnectionResource(
-        host=os.environ.get("SLURM_EDGE_NODE_HOST", "127.0.0.1"),
-        port=int(os.environ.get("SLURM_EDGE_NODE_PORT", "2223")),
-        user=os.environ.get("SLURM_EDGE_NODE_USER", "submitter"),
-        password=os.environ.get("SLURM_EDGE_NODE_PASSWORD", "submitter"),
-    )
+    ssh = slurm_resource_for_testing.ssh
     slurm = SlurmResource(ssh=ssh, queue=SlurmQueueConfig(), remote_base=remote_root)
     client = SlurmPipesClient(
         slurm_resource=slurm,

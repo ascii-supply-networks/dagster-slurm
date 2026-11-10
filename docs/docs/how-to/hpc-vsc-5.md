@@ -8,13 +8,9 @@ title: HPC - VSC-5
 ```dotenv title=".env.vsc5"
 # SSH / cluster login node access
 SLURM_EDGE_NODE_HOST=vsc5.vsc.ac.at
-SLURM_EDGE_NODE_PORT=27                        # use port 22 for password-based auth and port 27 for key-based auth on VSC5
+SLURM_EDGE_NODE_PORT=27                        # key-based auth on VSC5
 SLURM_EDGE_NODE_USER=your_vsc_username
-# SLURM_EDGE_NODE_PASSWORD=password            # specify either password or ssh key path
 SLURM_EDGE_NODE_KEY_PATH=/Users/you/.ssh/id_ed25519_vsc5
-SLURM_EDGE_NODE_JUMP_HOST=vmos.vsc.ac.at       # optional, may be necessary if outside of university network / VPN
-SLURM_EDGE_NODE_JUMP_USER=your_vsc_username
-SLURM_EDGE_NODE_JUMP_PASSWORD=...              # required: VMOS bastion only accepts password auth
 
 # Deployment settings
 SLURM_DEPLOYMENT_BASE_PATH=/home/your_vsc_username/dagster-slurm
@@ -31,8 +27,13 @@ SLURM_SUPERCOMPUTER_SITE=vsc5
 DAGSTER_DEPLOYMENT=production_supercomputer
 ```
 
-VSC-5 prefers key-based authentication; ensure your SSH config allows agent forwarding or provide the key path above. Replace the queue/QoS/reservation values with the combinations granted to your project (for example `batch`, `short`, or a project-specific reservation).\
-VMOS currently rejects key-only authentication, so always provide `SLURM_EDGE_NODE_JUMP_PASSWORD` (and be ready to type the time-based OTP on the first prompt). The final hop to `vsc5.vsc.ac.at` can still use your SSH key. If your policies require password-only access end-to-end, set `SLURM_EDGE_NODE_PASSWORD`; Dagster prints `Enter … for vsc5.vsc.ac.at:` on your terminal—type the OTP there to continue. Password-based sessions automatically request a pseudo-TTY, so you only need `SLURM_EDGE_NODE_FORCE_TTY=true` if your site mandates it even for key-based authentication.
+Use a network or VPN route that permits key-based access to VSC-5. The
+password/OTP-only VMOS bastion configuration is unsupported by the required
+background ControlMaster startup. Explicit target or jump passwords now fail
+before connecting; they no longer open a separate connection for each command.
+See [SSH multiplexing](troubleshooting.md#ssh-connection-multiplexing).
+
+Replace the queue/QoS/reservation values with those granted to your project.
 
 > **Cleanup behaviour:** Completed runs trigger an asynchronous `rm -rf` of the run directory on the edge node. This keeps quotas tidy without delaying Dagster shutdown. Set `debug_mode=True` on the relevant `ComputeResource` while debugging to keep run folders around for manual inspection.
 

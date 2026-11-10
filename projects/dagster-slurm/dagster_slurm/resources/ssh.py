@@ -29,13 +29,12 @@ class SSHConnectionResource(ConfigurableResource):
     """SSH connection settings.
 
     This resource configures a connection to a remote host via SSH. It supports
-    key-based or password-based authentication, pseudo-terminal allocation (`-t`),
+    key or inherited agent authentication, pseudo-terminal allocation (`-t`),
     and connections through a proxy jump host.
 
-    Supports three authentication modes:
-    1. SSH key (recommended for automation) - set ``key_path``
-    2. Password (when keys are unavailable) - set ``password``
-    3. Inherited - set neither, and ``ssh-agent`` plus ``~/.ssh/config`` decide
+    Set ``key_path`` for an explicit SSH key, or leave both authentication
+    fields unset to use ``ssh-agent`` and ``~/.ssh/config``. Explicit passwords
+    are rejected when establishing the required background ControlMaster.
 
     ``key_path`` and ``password`` are mutually exclusive.
 
@@ -56,7 +55,7 @@ class SSHConnectionResource(ConfigurableResource):
 
             # With a proxy jump host
             jump_box = SSHConnectionResource(
-                host="jump.example.com", user="jumpuser", password="jump_password"
+                host="jump.example.com", user="jumpuser", key_path="~/.ssh/jump_key"
             )
             ssh_via_jump = SSHConnectionResource(
                 host="private-cluster",
@@ -148,6 +147,30 @@ class SSHConnectionResource(ConfigurableResource):
             raise ValueError(f"SSH key not found at path: {expanded_path}")
         return str(expanded_path)
 
+    @field_validator("extra_opts")
+    @classmethod
+    def _reserve_transport_options(cls, options: list[str]) -> list[str]:
+        """Keep socket ownership and jump transport under the pool's control."""
+        reserved = {
+            "controlmaster",
+            "controlpath",
+            "controlpersist",
+            "proxycommand",
+            "proxyjump",
+        }
+        for option in options:
+            if option.startswith(("-M", "-S", "-O", "-J", "-W")):
+                raise ValueError(
+                    "SSH transport flags are managed by SSHConnectionPool."
+                )
+            value = option.removeprefix("-o")
+            name = value.strip().replace("=", " ", 1).split(maxsplit=1)
+            if name and name[0].lower() in reserved:
+                raise ValueError(
+                    "SSH transport options are managed by SSHConnectionPool."
+                )
+        return options
+
     @field_validator("known_hosts_file")
     @classmethod
     def _expand_known_hosts_file(cls, v: str | None) -> str | None:
@@ -167,6 +190,12 @@ class SSHConnectionResource(ConfigurableResource):
 
         if self.jump_host and self.jump_host.jump_host:
             raise ValueError("Multi-level proxy jumps are not supported.")
+        if self.jump_host and (self.user, self.host, self.port) == (
+            self.jump_host.user,
+            self.jump_host.host,
+            self.jump_host.port,
+        ):
+            raise ValueError("Jump host must differ from the connection target.")
         return self
 
     @property
@@ -192,8 +221,8 @@ class SSHConnectionResource(ConfigurableResource):
     def defers_to_ssh_config(self) -> bool:
         """Whether this connection adds nothing OpenSSH cannot work out itself.
 
-        Used to hand a jump host back to ``-J`` instead of rebuilding it as an
-        explicit ProxyCommand, which would bypass ``~/.ssh/config`` entirely.
+        Shared jump connections still use an explicit attach-only ProxyCommand.
+        Unspecified authentication and host-key options remain inherited.
         """
         return (
             self.uses_inherited_auth
@@ -209,9 +238,8 @@ class SSHConnectionResource(ConfigurableResource):
     def supports_multiplexing(self) -> bool:
         """Whether SSH ControlMaster can be used for this connection.
 
-        Password prompts cannot be answered by a multiplexed client, so
-        interactive authentication (on the target or on the jump host) forces
-        one-off connections.
+        This library's background master startup does not handle explicit
+        passwords for the target or jump host.
         """
         if self.uses_password_auth:
             return False
@@ -233,19 +261,16 @@ class SSHConnectionResource(ConfigurableResource):
     def get_multiplexing_opts(
         self,
         *,
-        create: bool = True,
         control_path: str | None = None,
     ) -> list[str]:
         """Build ControlMaster options pointing at the shared control socket.
 
         Args:
-            create: Allow the command to become the master when none exists.
-                Callers that manage the master themselves pass False.
             control_path: Override the socket path (used by the connection pool).
 
         """
         path = control_path if control_path is not None else self.control_socket_path()
-        return multiplexing_opts(path, create=create)
+        return multiplexing_opts(path)
 
     @property
     def requires_tty(self) -> bool:
@@ -346,22 +371,10 @@ class SSHConnectionResource(ConfigurableResource):
 
         jump = self.jump_host
 
-        # An explicit ProxyCommand is what makes the jump host's own key and
-        # host-key policy apply, but it also bypasses ~/.ssh/config for the
-        # bastion. When the resource configures nothing extra, hand it back to
-        # OpenSSH so the operator's own bastion settings still work.
-        if jump.defers_to_ssh_config:
-            target = f"{jump.user}@{jump.host}"
-            if jump.port != 22:
-                target = f"{target}:{jump.port}"
-            return ["-J", target]
-
         command = [
             "ssh",
+            *jump.get_multiplexing_opts(),
             *jump.get_common_ssh_opts(),
-            # Multiplex the jump hop as well, otherwise every fallback command
-            # re-authenticates against the bastion.
-            *jump.get_multiplexing_opts(create=True),
             "-p",
             str(jump.port),
             *jump.get_key_auth_opts(),
@@ -543,8 +556,7 @@ class SSHConnectionResource(ConfigurableResource):
         return f"\n{action}"
 
     def get_ssh_base_command(self) -> list[str]:
-        """Build base SSH command, including proxy and auth options."""
-        proxy_opts = self.get_proxy_command_opts()
+        """Build an attach-only SSH command; establish SSHConnectionPool first."""
         base_opts = self.get_common_ssh_opts(
             server_alive_interval=30,
             server_alive_count_max=6,
@@ -552,11 +564,8 @@ class SSHConnectionResource(ConfigurableResource):
 
         return [
             "ssh",
+            *self.get_multiplexing_opts(),
             *base_opts,
-            # Attach to (or create) the shared control socket so one-off
-            # commands never pay a full handshake of their own.
-            *self.get_multiplexing_opts(create=True),
-            *proxy_opts,
             "-p",
             str(self.port),
             *self.get_auth_opts(),
@@ -564,15 +573,13 @@ class SSHConnectionResource(ConfigurableResource):
         ]
 
     def get_scp_base_command(self) -> list[str]:
-        """Build base SCP command, including proxy and auth options."""
-        proxy_opts = self.get_proxy_command_opts()
+        """Build an attach-only SCP command; establish SSHConnectionPool first."""
         base_opts = self.get_common_ssh_opts()
 
         return [
             "scp",
+            *self.get_multiplexing_opts(),
             *base_opts,
-            *self.get_multiplexing_opts(create=True),
-            *proxy_opts,
             "-P",
             str(self.port),
             *self.get_auth_opts(),
