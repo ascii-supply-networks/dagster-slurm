@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import getpass
 import io
+import json
 import os
 import shutil
 import socket
@@ -232,6 +233,61 @@ def test_cold_start_is_shared_across_independent_processes(local_ssh):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(command, range(4)))
+    assert log.read_text().count("Accepted publickey") == 1
+
+
+_REFUSED_WORKER = """
+import sys
+from dagster_slurm.helpers import SSHConnectionPool
+from dagster_slurm.resources.ssh import SSHConnectionResource
+
+pool = SSHConnectionPool(SSHConnectionResource.model_validate_json(sys.argv[1]))
+try:
+    pool.__enter__()
+except RuntimeError as exc:
+    print(type(exc).__name__)
+else:
+    print("connected")
+"""
+
+
+def test_refused_login_backoff_is_shared_across_processes(local_ssh):
+    ssh, log = local_ssh
+    stranger = log.parent / "stranger"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(stranger)],
+        check=True,
+    )
+    refused = SSHConnectionResource(**{**ssh.model_dump(), "key_path": str(stranger)})
+
+    def attempt(_=None) -> str:
+        return subprocess.run(
+            [sys.executable, "-c", _REFUSED_WORKER, refused.model_dump_json()],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=os.environ.copy(),
+        ).stdout.strip()
+
+    assert attempt() == "RuntimeError"
+    assert log.read_text().count("Connection from") == 1
+
+    # Other processes in the backoff window do not connect at all.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        assert list(executor.map(attempt, range(3))) == ["SSHMasterBackoffError"] * 3
+    assert log.read_text().count("Connection from") == 1
+
+    # After the window, one login with a valid key succeeds and clears it.
+    control_path = SSHConnectionPool(ssh).control_path
+    marker = Path(f"{control_path}.failed")
+    data = json.loads(marker.read_text())
+    data["failed_at"] -= 61
+    marker.write_text(json.dumps(data))
+    with SSHConnectionPool(ssh) as pool:
+        assert pool.run("printf back", timeout=5) == "back"
+    assert not marker.exists()
+    assert log.read_text().count("Connection from") == 2
     assert log.read_text().count("Accepted publickey") == 1
 
 

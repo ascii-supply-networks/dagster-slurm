@@ -203,16 +203,23 @@ def reconcile_orphaned_slurm_runs(
         limit=limit,
     )
 
+    candidates: list[tuple[dg.DagsterRun, int, str]] = []
+    for run in runs:
+        if run.tags.get(_TAG_ORPHAN_RECONCILED_AT):
+            continue
+        job_id = _parse_job_id(run.tags.get(_TAG_JOB_ID))
+        run_dir = run.tags.get(_TAG_RUN_DIR)
+        if job_id is None or not run_dir:
+            continue
+        candidates.append((run, job_id, run_dir))
+
+    # Most ticks have nothing to check. Entering the pool would then start an
+    # SSH master, which is one login per tick when no master is alive.
+    if not candidates:
+        return retry_requests
+
     with SSHConnectionPool(slurm_resource.ssh) as ssh_pool:
-        for run in runs:
-            if run.tags.get(_TAG_ORPHAN_RECONCILED_AT):
-                continue
-
-            job_id = _parse_job_id(run.tags.get(_TAG_JOB_ID))
-            run_dir = run.tags.get(_TAG_RUN_DIR)
-            if job_id is None or not run_dir:
-                continue
-
+        for run, job_id, run_dir in candidates:
             slurm_state = _get_slurm_job_state(job_id, ssh_pool)
             if not slurm_state:
                 continue
