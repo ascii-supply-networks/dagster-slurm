@@ -1070,7 +1070,7 @@ def test_backoff_window_is_logged_once(fake_ssh, tmp_path, caplog):
     assert "Next SSH login attempt" in reports[0]
 
 
-def test_backoff_doubles_up_to_the_configured_limit(monkeypatch):
+def test_backoff_doubles_up_to_the_configured_limit(fake_ssh, tmp_path, monkeypatch):
     from dagster_slurm.helpers import ssh_control
 
     monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE", "10")
@@ -1091,12 +1091,9 @@ def test_backoff_doubles_up_to_the_configured_limit(monkeypatch):
         1800,
     ]
 
+    # 0 turns the backoff off: every entry tries one login again.
     monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE", "0")
     assert ssh_control.failure_backoff_seconds(3) == 0
-
-
-def test_disabled_backoff_retries_every_entry(fake_ssh, tmp_path, monkeypatch):
-    monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE", "0")
     resource = _key_auth_resource(tmp_path)
     fake_ssh.refuse_logins()
     for _ in range(3):
