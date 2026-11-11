@@ -16,6 +16,8 @@ The socket lives at `~/.ssh/dagster-slurm/cm-<user>@<host>:<port>` and is delibe
 | `DAGSTER_SLURM_SSH_CONTROL_DIR`          | `~/.ssh/dagster-slurm` | Where control sockets are stored. Point it at a writable directory if your site restricts socket paths. |
 | `DAGSTER_SLURM_SSH_CONTROL_PERSIST`      | `10m`                  | How long an idle master stays alive after the last command.                                             |
 | `DAGSTER_SLURM_SSH_CLOSE_MASTER_ON_EXIT` | unset                  | Set to `1` to tear the master down when a run ends instead of leaving it for reuse.                     |
+| `DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE` | `60`                   | Seconds to wait after a failed master start before the next login. `0` disables the backoff.            |
+| `DAGSTER_SLURM_SSH_FAILURE_BACKOFF_MAX`  | `1800`                 | Upper limit in seconds for that wait. The wait doubles for each consecutive failure.                    |
 
 Note that these command-line options take precedence over `~/.ssh/config`, so a `ControlPath` entry there will not change what `dagster-slurm` does — it only affects SSH commands you run yourself.
 
@@ -38,6 +40,26 @@ password are rejected before connecting. Use a key or inherited ssh-agent
 authentication. This implementation does not authenticate a background master
 through interactive prompts. A cluster that forbids multiplexing cannot use
 this transport safely.
+
+### Backoff after a refused login
+
+Some login nodes ban accounts that log in too often, and each refused login
+can extend the ban. When a master start fails, `dagster-slurm` writes the time,
+the count of consecutive failures and the reason to
+`<control socket>.failed`. Until the backoff window ends, every new master start
+for that `user@host:port` stops at once with `SSHMasterBackoffError` (a
+`RuntimeError`) and does not run `ssh`. The error names the time of the next
+attempt. All processes that use the same control directory share the marker, so
+sensors, run workers and helpers make one login attempt per window together.
+
+The window is 1 minute after the first failure and doubles for each consecutive
+failure, up to 30 minutes. A successful master start removes the marker. A
+master that is already alive is used, whatever the marker says. To try again at
+once after you fix the cause, delete the `.failed` file.
+
+The orphan-reconcile sensor (`build_slurm_orphan_reconcile_sensor`) opens the
+SSH connection only when a started run has a Slurm job ID and a run directory.
+A tick without such runs does not log in.
 
 Raw commands returned by `get_ssh_base_command()` and
 `get_scp_base_command()` require an existing master. Use

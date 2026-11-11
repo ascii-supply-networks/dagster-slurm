@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -952,3 +953,154 @@ def test_jump_cannot_lock_its_own_target():
     jump = SSHConnectionResource(host="example.com", user="user")
     with pytest.raises(ValidationError, match="Jump host must differ"):
         SSHConnectionResource(host="example.com", user="user", jump_host=jump)
+
+
+def _age_failure_marker(control_path: str, seconds: float) -> None:
+    """Move the recorded failure back in time, as if ``seconds`` had passed."""
+    marker = Path(f"{control_path}.failed")
+    data = json.loads(marker.read_text())
+    data["failed_at"] -= seconds
+    marker.write_text(json.dumps(data))
+
+
+def _failure_marker(control_path: str) -> dict | None:
+    marker = Path(f"{control_path}.failed")
+    return json.loads(marker.read_text()) if marker.exists() else None
+
+
+def _enter_pool(resource: SSHConnectionResource) -> RuntimeError | None:
+    try:
+        with SSHConnectionPool(resource):
+            return None
+    except RuntimeError as exc:
+        return exc
+
+
+def test_refused_login_backs_off_then_retries_once(fake_ssh, tmp_path):
+    resource = _key_auth_resource(tmp_path)
+    control_path = SSHConnectionPool(resource).control_path
+    assert control_path is not None
+    fake_ssh.refuse_logins()
+
+    first = _enter_pool(resource)
+    assert first is not None
+    assert "Connection closed by remote host" in str(first)
+    assert len(fake_ssh.logins()) == 1
+
+    # Inside the window: no ssh process at all, and a clear error.
+    fake_ssh.reset_calls()
+    for _ in range(5):
+        blocked = _enter_pool(resource)
+        assert blocked is not None
+        assert type(blocked).__name__ == "SSHMasterBackoffError"
+        assert "refusing unpooled SSH" in str(blocked)
+        assert "Next attempt at" in str(blocked)
+        assert "Connection closed by remote host" in str(blocked)
+    assert fake_ssh.calls() == []
+
+    # After the window: exactly one new login, and the wait doubles.
+    _age_failure_marker(control_path, 61)
+    second = _enter_pool(resource)
+    assert second is not None
+    assert type(second).__name__ != "SSHMasterBackoffError"
+    assert len(fake_ssh.logins()) == 1
+    marker = _failure_marker(control_path)
+    assert marker is not None
+    assert marker["failures"] == 2
+    _age_failure_marker(control_path, 61)
+    assert _enter_pool(resource) is not None
+    assert len(fake_ssh.logins()) == 1
+
+    # A successful start removes the marker.
+    _age_failure_marker(control_path, 60)
+    fake_ssh.refuse_logins(False)
+    assert _enter_pool(resource) is None
+    assert len(fake_ssh.logins()) == 2
+    assert _failure_marker(control_path) is None
+
+
+def test_live_master_is_used_even_with_a_failure_marker(fake_ssh, tmp_path):
+    resource = _key_auth_resource(tmp_path)
+    control_path = SSHConnectionPool(resource).control_path
+    assert control_path is not None
+    fake_ssh.refuse_logins()
+    assert _enter_pool(resource) is not None
+    assert _failure_marker(control_path) is not None
+
+    # A master that was started elsewhere, for example by hand.
+    fake_ssh.refuse_logins(False)
+    subprocess.run(
+        ["ssh", "-M", "-o", f"ControlPath={control_path}", "example.com"], check=True
+    )
+    fake_ssh.reset_calls()
+    with SSHConnectionPool(resource) as pool:
+        assert pool.run("true") == "ok\n"
+    assert fake_ssh.logins() == []
+
+
+def test_pools_for_the_same_target_share_the_backoff(fake_ssh, tmp_path):
+    fake_ssh.refuse_logins()
+    assert _enter_pool(_key_auth_resource(tmp_path)) is not None
+    fake_ssh.reset_calls()
+
+    # New pool objects and a new resource for the same target are blocked too.
+    other = SSHConnectionPool(_key_auth_resource(tmp_path))
+    with pytest.raises(RuntimeError, match="Next attempt at"), other:
+        pytest.fail("backoff admitted a command")
+    assert fake_ssh.calls() == []
+
+    # Another target has its own marker.
+    assert _enter_pool(_key_auth_resource(tmp_path, port=2222)) is not None
+    assert len(fake_ssh.logins()) == 1
+
+
+def test_backoff_window_is_logged_once(fake_ssh, tmp_path, caplog):
+    resource = _key_auth_resource(tmp_path)
+    fake_ssh.refuse_logins()
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            assert _enter_pool(resource) is not None
+
+    reports = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+    assert len(reports) == 1
+    assert "Next SSH login attempt" in reports[0]
+
+
+def test_backoff_doubles_up_to_the_configured_limit(monkeypatch):
+    from dagster_slurm.helpers import ssh_control
+
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE", "10")
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_MAX", "25")
+    assert [ssh_control.failure_backoff_seconds(n) for n in range(1, 5)] == [
+        10,
+        20,
+        25,
+        25,
+    ]
+
+    monkeypatch.delenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE")
+    monkeypatch.delenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_MAX")
+    assert [ssh_control.failure_backoff_seconds(n) for n in (1, 2, 6, 50)] == [
+        60,
+        120,
+        1800,
+        1800,
+    ]
+
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE", "0")
+    assert ssh_control.failure_backoff_seconds(3) == 0
+
+
+def test_disabled_backoff_retries_every_entry(fake_ssh, tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE", "0")
+    resource = _key_auth_resource(tmp_path)
+    fake_ssh.refuse_logins()
+    for _ in range(3):
+        failure = _enter_pool(resource)
+        assert failure is not None
+        assert "Next attempt at" not in str(failure)
+    assert len(fake_ssh.logins()) == 3

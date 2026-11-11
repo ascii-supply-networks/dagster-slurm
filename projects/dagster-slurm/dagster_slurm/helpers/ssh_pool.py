@@ -7,12 +7,21 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dagster import get_dagster_logger
 
-from .ssh_control import control_persist_value, control_socket_path, master_start_lock
+from .ssh_control import (
+    clear_master_start_failure,
+    control_persist_value,
+    control_socket_path,
+    failure_marker_path,
+    master_start_lock,
+    read_master_start_failure,
+    record_master_start_failure,
+)
 
 if TYPE_CHECKING:
     from ..resources.ssh import SSHConnectionResource
@@ -38,6 +47,18 @@ SSH_ERRORS: tuple[type[Exception], ...] = (
     OSError,
     subprocess.SubprocessError,
 )
+
+
+class SSHMasterBackoffError(RuntimeError):
+    """A new ControlMaster login is refused while the failure backoff runs.
+
+    A subclass of ``RuntimeError``, so callers that handle a failed master
+    start keep working without changes.
+    """
+
+
+def _utc_time(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat(timespec="seconds")
 
 
 class SSHConnectionPool:
@@ -147,6 +168,59 @@ class SSHConnectionPool:
             self.logger.info("Removing stale SSH control socket %s", self.control_path)
             Path(self.control_path).unlink(missing_ok=True)
 
+    @property
+    def _target(self) -> str:
+        return f"{self.config.user}@{self.config.host}:{self.config.port}"
+
+    def _raise_if_backing_off(self) -> None:
+        """Refuse a new login while the target's failure backoff runs.
+
+        Call this while holding :func:`master_start_lock`.
+        """
+        assert self.control_path
+        failure = read_master_start_failure(self.control_path)
+        if failure is None or not failure.blocks():
+            return
+        wait = max(0.0, failure.retry_at - time.time())
+        self.logger.debug(
+            "SSH login to %s skipped: failure backoff runs until %s.",
+            self._target,
+            _utc_time(failure.retry_at),
+        )
+        raise SSHMasterBackoffError(
+            f"SSH login to {self._target} is paused after {failure.failures} "
+            f"consecutive failed master start(s). Next attempt at "
+            f"{_utc_time(failure.retry_at)} (in {wait:.0f}s). "
+            f"Last failure: {failure.reason}"
+        )
+
+    def _check_backoff_without_ssh(self) -> None:
+        """Refuse a cold start in the backoff window without running ssh.
+
+        Without a socket file no master can be alive, so the ``ssh -O check``
+        probes are not necessary either. A live master is never refused.
+        """
+        assert self.control_path
+        if os.path.lexists(self.control_path):
+            return
+        if not failure_marker_path(self.control_path).exists():
+            return
+        with master_start_lock(self.control_path):
+            if not os.path.lexists(self.control_path):
+                self._raise_if_backing_off()
+
+    def _record_start_failure(self, reason: str) -> str:
+        """Store a failed login for all processes; return the reason with the retry time."""
+        assert self.control_path
+        failure = record_master_start_failure(self.control_path, reason)
+        if not failure.blocks():
+            return reason
+        return (
+            f"{reason} Next SSH login attempt to {self._target} not before "
+            f"{_utc_time(failure.retry_at)} (consecutive failures: "
+            f"{failure.failures})."
+        )
+
     def _spawn_master(self) -> None:
         """Start a background ControlMaster, raising on failure."""
         if not self.control_path:
@@ -160,6 +234,7 @@ class SSHConnectionPool:
             if self._master_is_alive():
                 self._owns_master = False
                 return
+            self._raise_if_backing_off()
             self._remove_stale_socket()
             self._spawn_master_locked()
 
@@ -187,23 +262,39 @@ class SSHConnectionPool:
         cmd.extend(self.config.get_key_auth_opts())
         cmd.append(f"{self.config.user}@{self.config.host}")
 
-        completed = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30, check=False
-        )
+        assert self.control_path
+        try:
+            completed = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, check=False
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                self._record_start_failure(
+                    f"Failed to start SSH master: no answer after {exc.timeout}s."
+                )
+            ) from exc
         if completed.returncode != 0:
             # Another client outside the lock may have started a master.
             if self._master_is_alive():
                 self._owns_master = False
+                clear_master_start_failure(self.control_path)
                 return
             stderr = completed.stderr
             raise RuntimeError(
-                "Failed to start SSH master: "
-                f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}"
-                f"{self.config.auth_error_hint(stderr)}"
+                self._record_start_failure(
+                    "Failed to start SSH master: "
+                    f"{stderr.strip()}{self.config.host_key_error_hint(stderr)}"
+                    f"{self.config.auth_error_hint(stderr)}"
+                )
             )
 
         if not self._master_is_alive():
-            raise RuntimeError("SSH master did not publish a usable shared socket")
+            raise RuntimeError(
+                self._record_start_failure(
+                    "SSH master did not publish a usable shared socket."
+                )
+            )
+        clear_master_start_failure(self.control_path)
         self._owns_master = True
 
     @property
@@ -246,14 +337,22 @@ class SSHConnectionPool:
         else:
             self.logger.warning(message)
 
-    def _fail_multiplexing(self, reason: str, *, unsupported: bool = False) -> None:
+    def _fail_multiplexing(
+        self,
+        reason: str,
+        *,
+        unsupported: bool = False,
+        report: bool = True,
+        error: type[RuntimeError] = RuntimeError,
+    ) -> None:
         """Record a transport failure and stop before any unpooled command."""
         self._fallback_mode = True
         self._fallback_reason = reason
         self._fallback_unsupported = unsupported
         self.control_path = None
-        self._report_multiplexing_state()
-        raise RuntimeError(
+        if report:
+            self._report_multiplexing_state()
+        raise error(
             f"SSH ControlMaster required for {self.config.host}; "
             f"refusing unpooled SSH: {reason}"
         )
@@ -276,17 +375,22 @@ class SSHConnectionPool:
             self._fail_multiplexing("SSH control socket path is unavailable")
             return
 
-        if self._master_is_alive():
-            self._master_started = True
-            self._owns_master = False
-            self._last_master_check = time.monotonic()
-            self.logger.debug(
-                "Reusing existing SSH ControlMaster at %s", self.control_path
-            )
-            return
-
         try:
+            self._check_backoff_without_ssh()
+            if self._master_is_alive():
+                self._master_started = True
+                self._owns_master = False
+                self._last_master_check = time.monotonic()
+                self.logger.debug(
+                    "Reusing existing SSH ControlMaster at %s", self.control_path
+                )
+                return
             self._spawn_master()
+        except SSHMasterBackoffError as exc:
+            # The failed attempt that opened this window already logged it;
+            # a report per sensor tick would only repeat it.
+            self._fail_multiplexing(str(exc), report=False, error=SSHMasterBackoffError)
+            return
         except SSH_ERRORS as exc:
             self._fail_multiplexing(str(exc))
             return
@@ -324,7 +428,12 @@ class SSHConnectionPool:
             self._spawn_master()
         except SSH_ERRORS as exc:
             self._fail_multiplexing(
-                f"ControlMaster died mid-run and could not be restarted: {exc}"
+                f"ControlMaster died mid-run and could not be restarted: {exc}",
+                error=(
+                    SSHMasterBackoffError
+                    if isinstance(exc, SSHMasterBackoffError)
+                    else RuntimeError
+                ),
             )
             return
 

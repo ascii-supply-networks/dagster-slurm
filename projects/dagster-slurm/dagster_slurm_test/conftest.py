@@ -117,6 +117,68 @@ def isolated_ssh_control_dir(monkeypatch) -> Iterator[Path]:
         shutil.rmtree(directory, ignore_errors=True)
 
 
+_FAKE_SSH_SCRIPT = """#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_SSH_DIR/calls"
+case " $* " in
+  *" -O check "*) [ -e "$FAKE_SSH_DIR/alive" ] && exit 0; exit 255 ;;
+  *" -O exit "*) rm -f "$FAKE_SSH_DIR/alive"; exit 0 ;;
+  *" -M "*)
+    if [ -e "$FAKE_SSH_DIR/refuse" ]; then
+      echo "Connection closed by remote host" >&2
+      exit 255
+    fi
+    for arg in "$@"; do
+      case "$arg" in ControlPath=*) : > "${arg#ControlPath=}" ;; esac
+    done
+    : > "$FAKE_SSH_DIR/alive"
+    exit 0 ;;
+esac
+echo ok
+"""
+
+
+class FakeSSH:
+    """An ``ssh`` executable on PATH that records every invocation.
+
+    ``ssh -M`` starts a pretend master unless ``refuse_logins`` is set, and
+    ``ssh -O check`` reports whether that master is alive. Real subprocesses
+    find it on PATH too, so it also counts calls from other processes.
+    """
+
+    def __init__(self, directory: Path):
+        self.directory = directory
+
+    def calls(self) -> list[str]:
+        log = self.directory / "calls"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def logins(self) -> list[str]:
+        return [call for call in self.calls() if " -M " in f" {call} "]
+
+    def reset_calls(self) -> None:
+        (self.directory / "calls").unlink(missing_ok=True)
+
+    def refuse_logins(self, refuse: bool = True) -> None:
+        flag = self.directory / "refuse"
+        if refuse:
+            flag.touch()
+        else:
+            flag.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def fake_ssh(monkeypatch, tmp_path: Path) -> FakeSSH:
+    """Put a recording fake ``ssh`` first on PATH. It never opens a connection."""
+    directory = tmp_path / "fake-ssh"
+    directory.mkdir()
+    script = directory / "ssh"
+    script.write_text(_FAKE_SSH_SCRIPT)
+    script.chmod(0o755)
+    monkeypatch.setenv("FAKE_SSH_DIR", str(directory))
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    return FakeSSH(directory)
+
+
 @pytest.fixture
 def temp_dir():
     """Temporary directory for test files."""

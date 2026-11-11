@@ -8,6 +8,7 @@ from dagster_slurm.pipes_clients.slurm_pipes_client import (
     _TAG_ASSET_KEY,
     _TAG_JOB_ID,
     _TAG_LAST_SUPERVISOR_HEARTBEAT,
+    _TAG_ORPHAN_RECONCILED_AT,
     _TAG_ORPHAN_RETRY_OF,
     _TAG_RUN_DIR,
     _TAG_SESSION_ALLOCATION_DIR,
@@ -167,6 +168,35 @@ def test_reconcile_active_run_with_stale_heartbeat_requests_reattach():
         assert stored_run is not None
         assert stored_run.status == dg.DagsterRunStatus.FAILURE
         assert requests[0].tags[_TAG_ORPHAN_RETRY_OF] == run.run_id
+
+
+def test_reconcile_without_candidates_makes_no_ssh_call(fake_ssh, tmp_path):
+    """A sensor tick with nothing to check must not log in to the cluster."""
+    key_path = tmp_path / "id_test"
+    key_path.write_text("dummy-key")
+    key_path.chmod(0o600)
+    slurm = SlurmResource(
+        ssh=SSHConnectionResource(
+            host="login.example.com", user="submitter", key_path=str(key_path)
+        ),
+        queue=SlurmQueueConfig(partition="normal"),
+        remote_base="/home/submitter/dagster_ci_runs",
+    )
+    with dg.DagsterInstance.ephemeral() as instance:
+        for _ in range(5):
+            assert reconcile_orphaned_slurm_runs(instance, slurm) == []
+
+        # STARTED runs that are not candidates must not open the pool either.
+        _add_started_run(instance, run_id="already-reconciled")
+        instance.add_run_tags("already-reconciled", {_TAG_ORPHAN_RECONCILED_AT: "900"})
+        _add_started_run(instance, run_id="bad-job-id")
+        instance.add_run_tags("bad-job-id", {_TAG_JOB_ID: "not-a-number"})
+        _add_started_run(instance, run_id="no-run-dir")
+        instance.add_run_tags("no-run-dir", {_TAG_RUN_DIR: ""})
+        for _ in range(5):
+            assert reconcile_orphaned_slurm_runs(instance, slurm) == []
+
+    assert fake_ssh.calls() == []
 
 
 def test_find_reattachable_job_from_current_retry_tags():

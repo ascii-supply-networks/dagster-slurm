@@ -9,12 +9,13 @@ from .metrics import (
     SlurmMetricsContext,
 )
 from .ssh_helpers import TERMINAL_STATES, normalize_slurm_state, ssh_check, ssh_run
-from .ssh_pool import SSHConnectionPool
+from .ssh_pool import SSHConnectionPool, SSHMasterBackoffError
 
 __all__ = [
     "TERMINAL_STATES",
     "LocalMessageReader",
     "SSHConnectionPool",
+    "SSHMasterBackoffError",
     "SSHMessageReader",
     "SlurmJobMetrics",
     "SlurmMetricsCallback",
