@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v1.24.1-rc.1 (2026-11-11)
+
+### Bug Fixes
+
+- Ssh reconcile lazy pool backoff
+  ([#236](https://github.com/ascii-supply-networks/dagster-slurm/pull/236),
+  [`f567e9e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f567e9e70eb14da1c4512758c806159dbe94819d))
+
+- **ssh**: Back off after a refused master login and skip idle reconcile logins
+  ([#236](https://github.com/ascii-supply-networks/dagster-slurm/pull/236),
+  [`f567e9e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f567e9e70eb14da1c4512758c806159dbe94819d))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`c38bc5b`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c38bc5b907719d01d2c1c6bc5e9e6c5058fb3266))
+
+### Testing
+
+- **ssh**: Check the disabled backoff in the env configuration test
+  ([#236](https://github.com/ascii-supply-networks/dagster-slurm/pull/236),
+  [`f567e9e`](https://github.com/ascii-supply-networks/dagster-slurm/commit/f567e9e70eb14da1c4512758c806159dbe94819d))
+
+
 ## v1.24.1 (2026-11-10)
 
 ### Chores
