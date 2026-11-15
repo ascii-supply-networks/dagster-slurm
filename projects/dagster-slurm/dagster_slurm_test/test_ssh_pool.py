@@ -5,11 +5,14 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from dagster_slurm.helpers import ssh_control
 from dagster_slurm.helpers import ssh_pool as ssh_pool_module
 from dagster_slurm.helpers.ssh_control import control_socket_path
 from dagster_slurm.helpers.ssh_pool import SSHConnectionPool
@@ -1101,3 +1104,183 @@ def test_backoff_doubles_up_to_the_configured_limit(fake_ssh, tmp_path, monkeypa
         assert failure is not None
         assert "Next attempt at" not in str(failure)
     assert len(fake_ssh.logins()) == 3
+
+
+# --- Cross-process session slots (MaxSessions) -------------------------------
+
+_SLOT_HOLDER = """
+import sys, time
+from dagster_slurm.helpers.ssh_control import session_slot
+
+with session_slot(sys.argv[1], int(sys.argv[2])):
+    print("held", flush=True)
+    time.sleep(60)
+"""
+
+
+def _slot_control_path(isolated_ssh_control_dir) -> str:
+    return str(isolated_ssh_control_dir / "cm-testuser@example.com:22")
+
+
+def test_session_slots_bound_concurrency_across_threads(isolated_ssh_control_dir):
+    control_path = _slot_control_path(isolated_ssh_control_dir)
+    active = 0
+    peak = 0
+    guard = threading.Lock()
+
+    def session():
+        nonlocal active, peak
+        with ssh_control.session_slot(control_path, 2, timeout=10):
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with guard:
+                active -= 1
+
+    threads = [threading.Thread(target=session) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+
+    assert peak == 2
+
+
+def test_session_slot_is_reused_by_nested_calls_in_one_thread(
+    isolated_ssh_control_dir,
+):
+    control_path = _slot_control_path(isolated_ssh_control_dir)
+
+    with ssh_control.session_slot(control_path, 1, timeout=0.2):
+        with ssh_control.session_slot(control_path, 1, timeout=0.2):
+            pass
+        # The outer slot is still held after the nested call returns.
+        with pytest.raises(ssh_control.SSHSessionSlotTimeoutError):
+            _acquire_in_other_thread(control_path, limit=1, timeout=0.1)
+
+    _acquire_in_other_thread(control_path, limit=1, timeout=0.5)
+
+
+def _acquire_in_other_thread(control_path: str, *, limit: int, timeout: float):
+    errors: list[BaseException] = []
+
+    def acquire():
+        try:
+            with ssh_control.session_slot(control_path, limit, timeout=timeout):
+                pass
+        except BaseException as exc:  # noqa: BLE001 - re-raised below
+            errors.append(exc)
+
+    thread = threading.Thread(target=acquire)
+    thread.start()
+    thread.join(timeout=10)
+    if errors:
+        raise errors[0]
+
+
+def test_session_slot_is_shared_across_processes_and_freed_by_a_crash(
+    isolated_ssh_control_dir,
+):
+    control_path = _slot_control_path(isolated_ssh_control_dir)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _SLOT_HOLDER, control_path, "1"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
+        with (
+            pytest.raises(ssh_control.SSHSessionSlotTimeoutError, match="1 SSH"),
+            ssh_control.session_slot(control_path, 1, timeout=0.2),
+        ):
+            pass
+        # A killed holder cannot leak its slot: the kernel drops the flock.
+        holder.kill()
+        holder.wait(timeout=5)
+        with ssh_control.session_slot(control_path, 1, timeout=2):
+            pass
+    finally:
+        holder.kill()
+        holder.wait(timeout=5)
+
+
+def test_session_slot_waits_for_a_free_slot_instead_of_failing(
+    isolated_ssh_control_dir,
+):
+    control_path = _slot_control_path(isolated_ssh_control_dir)
+    released = threading.Event()
+
+    def hold_briefly():
+        with ssh_control.session_slot(control_path, 1, timeout=1):
+            time.sleep(0.3)
+        released.set()
+
+    thread = threading.Thread(target=hold_briefly)
+    thread.start()
+    time.sleep(0.05)
+    with ssh_control.session_slot(control_path, 1, timeout=5):
+        assert released.is_set()
+    thread.join(timeout=5)
+
+
+def test_resolve_max_sessions(monkeypatch):
+    monkeypatch.delenv(ssh_control.MAX_SESSIONS_ENV, raising=False)
+    assert ssh_control.resolve_max_sessions() == ssh_control.DEFAULT_MAX_SESSIONS == 4
+    monkeypatch.setenv(ssh_control.MAX_SESSIONS_ENV, "2")
+    assert ssh_control.resolve_max_sessions() == 2
+    # The resource field wins over the environment.
+    assert ssh_control.resolve_max_sessions(7) == 7
+    for invalid in ("0", "-1", "many"):
+        monkeypatch.setenv(ssh_control.MAX_SESSIONS_ENV, invalid)
+        assert ssh_control.resolve_max_sessions() == 4
+
+
+def test_max_sessions_field_is_validated():
+    with pytest.raises(ValidationError):
+        SSHConnectionResource(
+            host="example.com",
+            user="testuser",
+            max_sessions=0,
+        )
+
+
+@pytest.mark.parametrize("operation", ["run", "run_bytes", "upload"])
+def test_every_pooled_session_holds_a_slot(monkeypatch, tmp_path, operation):
+    """Commands and transfers run only while holding a cross-process slot."""
+    resource = SSHConnectionResource(
+        **{**_key_auth_resource(tmp_path).model_dump(), "max_sessions": 1}
+    )
+    state = {"alive": True}
+    held_during: list[bool] = []
+    lifecycle = _master_lifecycle_stub([], state)
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] in {"ssh", "scp"} and "-O" not in cmd and "-M" not in cmd:
+            try:
+                _acquire_in_other_thread(pool.control_path, limit=1, timeout=0.05)
+            except ssh_control.SSHSessionSlotTimeoutError:
+                held_during.append(True)
+            else:
+                held_during.append(False)
+            if kwargs.get("text"):
+                return DummyResult(returncode=0, stdout="ok\n")
+            return DummyResult(returncode=0, stdout=b"ok\n")
+        return lifecycle(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    source = tmp_path / "payload"
+    source.write_text("x")
+    with SSHConnectionPool(resource) as pool:
+        assert pool.max_sessions == 1
+        if operation == "run":
+            assert pool.run("true") == "ok\n"
+        elif operation == "run_bytes":
+            assert pool.run_bytes("true") == b"ok\n"
+        else:
+            pool.upload_file(str(source), "/remote/dir/payload")
+
+    assert held_during and all(held_during)
+    # The slot is free again afterwards.
+    _acquire_in_other_thread(pool.control_path, limit=1, timeout=0.5)

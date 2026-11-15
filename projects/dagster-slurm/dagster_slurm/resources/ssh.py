@@ -135,6 +135,17 @@ class SSHConnectionResource(ConfigurableResource):
             "decides - use it when a key passphrase must be typed."
         ),
     )
+    max_sessions: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Sessions (commands, transfers and Pipes message reads) that all "
+            "processes together may open on the shared ControlMaster at once. "
+            "Keep it below sshd's MaxSessions (default 10). Unset uses "
+            "DAGSTER_SLURM_SSH_MAX_SESSIONS, else 4. Further callers wait for "
+            "a free slot."
+        ),
+    )
 
     @field_validator("key_path")
     @classmethod

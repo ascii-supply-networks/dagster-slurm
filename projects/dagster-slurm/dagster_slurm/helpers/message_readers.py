@@ -3,24 +3,24 @@
 import json
 import os
 import shlex
-import subprocess
 import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 from dagster import PipesMessageReader, get_dagster_logger
 from dagster_pipes import PipesDefaultMessageWriter
 
-from .ssh_pool import SSH_ERRORS
+from .ssh_pool import SSHConnectionPool
 
-if TYPE_CHECKING:  # pragma: no cover
-    from .ssh_pool import SSHConnectionPool
+#: Bytes of ``messages.jsonl`` fetched per read. A larger backlog is read in
+#: several back-to-back rounds, so one read never holds a session for long.
+READ_CHUNK_BYTES = 4 * 1024 * 1024
 
-#: Upper bound for the degraded polling fallback, which pays a full SSH
-#: connection per round. Keeps log latency bounded without hammering SSH.
-MAX_FALLBACK_POLL_SECONDS = 15.0
+#: Printed before the file content, so output a ``post_login_command`` or a
+#: login banner writes to stdout is not taken for messages.
+_READ_MARKER = "__DAGSTER_SLURM_PIPES_MESSAGES__"
 
 
 class _ClosedMessageTracker:
@@ -189,10 +189,19 @@ class LocalMessageReader(PipesMessageReader):
 
 
 class SSHMessageReader(PipesMessageReader):
-    """Read Pipes messages from remote file via SSH tail with auto-reconnect.
+    """Read Pipes messages from a remote file by polling it over SSH.
 
-    Uses SSH ControlMaster connection for efficient tailing.
-    Automatically reconnects if the tail process dies.
+    Each poll reads ``messages.jsonl`` from the last byte offset in one short
+    command on the shared ControlMaster. The command holds one of the master's
+    session slots only while it runs (see
+    :meth:`SSHConnectionPool.session_slot`), so the reader never keeps an SSH
+    session open for the lifetime of a step. Many concurrent steps therefore
+    cannot exhaust sshd's ``MaxSessions`` on the shared master.
+
+    The reader polls every ``poll_interval`` seconds and backs off to
+    ``max_poll_interval`` while the file does not grow. When the step ends it
+    reads once more, so no message written before the end is lost. A partial
+    last line is kept until the rest of it arrives.
     """
 
     def __init__(
@@ -205,17 +214,31 @@ class SSHMessageReader(PipesMessageReader):
         ssh_pool: Optional["SSHConnectionPool"] = None,
         max_reconnect_interval: float = 60.0,
         healthy_session_seconds: float = 30.0,
+        poll_interval: float = 1.0,
+        max_poll_interval: float = 5.0,
+        read_timeout: float = 60.0,
+        final_read_timeout: float = 2.0,
     ):
         """Args:
         remote_path: Path to messages.jsonl on remote host
         ssh_config: SSHConnectionResource instance
-        control_path: Path to ControlMaster socket (required for password auth)
-        reconnect_interval: Seconds to wait before the first reconnect
-        max_reconnect_attempts: Maximum consecutive failed reconnection attempts.
-        max_reconnect_interval: Upper bound for the exponential reconnect backoff.
-        healthy_session_seconds: Minimum lifetime for a tail session to count as
-            healthy. Shorter sessions keep incrementing the failure counter so a
-            flapping connection backs off instead of reconnecting forever.
+        control_path: ControlMaster socket, shown in diagnostics. The attached
+            pool's socket takes precedence.
+        reconnect_interval: Seconds to wait after the first failed read.
+        max_reconnect_attempts: Consecutive failed reads after which the
+            reader logs an error. It keeps polling at the capped interval.
+        ssh_pool: Pool whose master the reads use. Without one the reader
+            opens its own pool for the duration of ``read_messages``.
+        max_reconnect_interval: Upper bound for the backoff after failed reads.
+        healthy_session_seconds: Ignored. Kept for backwards compatibility with
+            the former ``tail -F`` reader.
+        poll_interval: Seconds between reads while messages arrive.
+        max_poll_interval: Upper bound for the wait between reads while the
+            file does not grow.
+        read_timeout: Seconds one read may take before it counts as failed.
+        final_read_timeout: Seconds the final read keeps retrying until the
+            payload's 'closed' message is visible, for shared file systems
+            that publish the last bytes late.
 
         """
         self.remote_path = remote_path
@@ -225,15 +248,21 @@ class SSHMessageReader(PipesMessageReader):
         self.max_reconnect_attempts = max_reconnect_attempts
         self.max_reconnect_interval = max_reconnect_interval
         self.healthy_session_seconds = healthy_session_seconds
+        self.poll_interval = poll_interval
+        self.max_poll_interval = max(max_poll_interval, poll_interval)
+        self.read_timeout = read_timeout
+        self.final_read_timeout = final_read_timeout
         self.logger = get_dagster_logger()
-        self._proc: subprocess.Popen[str] | None = None
-        self._pexpect_child: Any | None = None
         self._stop_flag = threading.Event()
+        self._wake = threading.Event()
+        self._read_lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self.total_messages = 0
         self._ssh_pool = ssh_pool
-        self._fallback_next_line = 1
-        self._ssh_next_line = 1
+        #: Bytes of the remote file already read, including ``_partial``.
+        self._offset = 0
+        #: Start of a line whose newline has not been read yet.
+        self._partial = b""
         self._forwarded_lines: dict[str, int] = {"stdout": 0, "stderr": 0}
         self._stdio_messages: dict[str, int] = {"stdout": 0, "stderr": 0}
         self._stdio_bytes: dict[str, int] = {"stdout": 0, "stderr": 0}
@@ -242,12 +271,7 @@ class SSHMessageReader(PipesMessageReader):
 
     @property
     def control_path(self) -> str | None:
-        """Current ControlMaster socket, tracking the pool when one is attached.
-
-        The pool drops its socket when the master dies, and a reader still
-        pointing at the stale path would reconnect over a private connection
-        on every retry.
-        """
+        """Current ControlMaster socket, tracking the pool when one is attached."""
         pool = self._ssh_pool
         if pool is not None:
             return getattr(pool, "control_path", self._control_path)
@@ -255,7 +279,7 @@ class SSHMessageReader(PipesMessageReader):
 
     @contextmanager
     def read_messages(self, handler) -> Generator[dict, None, None]:
-        """Context manager that tails remote messages file with auto-reconnect.
+        """Poll the remote messages file in the background while the step runs.
 
         Yields:
             Params dict with message file path for remote process
@@ -263,12 +287,20 @@ class SSHMessageReader(PipesMessageReader):
         """
         self.logger.debug(f"Starting SSH message reader for {self.remote_path}")
 
-        # Start reader thread with auto-reconnect
+        owned_pool: SSHConnectionPool | None = None
+        if self._ssh_pool is None:
+            owned_pool = SSHConnectionPool(self.ssh_config)
+            owned_pool.__enter__()
+            self._ssh_pool = owned_pool
+
         self._closed_tracker = _ClosedMessageTracker()
+        self._stop_flag.clear()
+        self._wake.clear()
         self._reader_thread = threading.Thread(
-            target=self._read_loop_with_reconnect,
+            target=self._read_loop,
             args=(handler,),
             daemon=True,
+            name="ssh-pipes-reader",
         )
         self._reader_thread.start()
 
@@ -278,43 +310,19 @@ class SSHMessageReader(PipesMessageReader):
                 "path": self.remote_path,
                 PipesDefaultMessageWriter.INCLUDE_STDIO_IN_MESSAGES_KEY: True,
             }
-
-            # Keep the reader alive until the payload says it is done. Once
-            # 'closed' has been parsed there is nothing further to wait for,
-            # so this returns immediately in the normal case instead of
-            # spending a flat second on every single job.
-            self._await_closed(timeout=1.0)
-
         finally:
-            # Drain before signalling stop, again bounded rather than flat.
-            self._await_closed(timeout=1.0)
             self._stop_flag.set()
-
-            # Terminate tail process
-            if self._proc:
-                try:
-                    self._proc.terminate()
-                    self._proc.wait(timeout=5)
-                except (OSError, subprocess.SubprocessError) as e:
-                    self.logger.debug(f"Error terminating tail process: {e}")
-                    try:
-                        self._proc.kill()
-                    except OSError:
-                        pass
-            if self._pexpect_child is not None:
-                try:
-                    self._pexpect_child.close(force=True)
-                except Exception as e:  # pragma: no cover - best effort cleanup
-                    self.logger.debug(f"Error closing tail session: {e}", exc_info=True)
-                finally:
-                    self._pexpect_child = None
-
-            # Wait for reader thread to finish
-            if self._reader_thread and self._reader_thread.is_alive():
+            self._wake.set()
+            if self._reader_thread.is_alive():
                 self._reader_thread.join(timeout=5)
 
-            if hasattr(self, "_closed_tracker"):
-                self._closed_tracker.maybe_flush(handler, force=True)
+            # The step is over: read everything it wrote since the last poll.
+            self._final_read(handler)
+            self._closed_tracker.maybe_flush(handler, force=True)
+
+            if owned_pool is not None:
+                owned_pool.__exit__(None, None, None)
+                self._ssh_pool = None
 
             self.logger.debug(
                 "SSHMessageReader summary: total_messages=%d; "
@@ -327,23 +335,6 @@ class SSHMessageReader(PipesMessageReader):
                 self._stdio_bytes["stderr"],
             )
             self.logger.debug("Message reader stopped")
-
-    def _await_closed(self, timeout: float, interval: float = 0.02) -> bool:
-        """Wait until the reader has parsed the payload's 'closed' message.
-
-        Returns True as soon as it lands, so a job whose payload already
-        finished does not pay a fixed shutdown delay. Falls through after
-        `timeout` for payloads that never open a Pipes session.
-        """
-        if self._closed_message is not None:
-            return True
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self._closed_message is not None:
-                return True
-            if self._stop_flag.wait(interval):
-                break
-        return self._closed_message is not None
 
     @property
     def closed_message(self) -> dict[str, Any] | None:
@@ -396,353 +387,151 @@ class SSHMessageReader(PipesMessageReader):
         handler.handle_message(message)
         return True
 
-    def _reconnect_delay(self, reconnect_count: int) -> float:
-        """Exponentially back off reconnects so a flapping tail cannot storm SSH."""
-        if reconnect_count <= 0:
+    def _reconnect_delay(self, failures: int) -> float:
+        """Exponentially back off after failed reads so a broken link is not stormed."""
+        if failures <= 0:
             return self.reconnect_interval
-        delay = self.reconnect_interval * (2 ** min(reconnect_count - 1, 6))
+        delay = self.reconnect_interval * (2 ** min(failures - 1, 6))
         return min(delay, self.max_reconnect_interval)
 
-    def _read_loop_with_reconnect(self, handler):
-        """Read loop that automatically reconnects on failure.
+    def _poll_delay(self, idle_rounds: int) -> float:
+        """Wait before the next read: short while messages arrive, longer when idle."""
+        delay = self.poll_interval * (2 ** min(max(0, idle_rounds - 4), 16))
+        return min(delay, self.max_poll_interval)
 
-        Args:
-            handler: Dagster message handler
+    def _read_command(self) -> str:
+        """Shell command printing the file from the current offset, if it exists."""
+        quoted = shlex.quote(self.remote_path)
+        return (
+            f"[ -f {quoted} ] || exit 0; printf '%s\\n' {_READ_MARKER}; "
+            f"tail -c +{self._offset + 1} {quoted} | head -c {READ_CHUNK_BYTES}"
+        )
 
+    def _payload(self, output: bytes) -> bytes | None:
+        """Return the file bytes from a read's output, or None without a file."""
+        if self.ssh_config.requires_tty:
+            # A pseudo-terminal turns every newline into CRLF. JSON lines never
+            # contain a raw carriage return, so this restores the exact bytes.
+            output = output.replace(b"\r\n", b"\n")
+        marker = _READ_MARKER.encode() + b"\n"
+        start = output.find(marker)
+        if start < 0:
+            return None
+        return output[start + len(marker) :]
+
+    def _read_once(self, handler, tracker: _ClosedMessageTracker) -> tuple[int, bool]:
+        """Read new bytes once and forward every complete line.
+
+        Returns the number of new bytes and whether more may be waiting.
         """
-        reconnect_count = 0
-        total_message_count = 0
-        return_code: int = 0
-        tracker = getattr(self, "_closed_tracker", _ClosedMessageTracker())
-
-        while not self._stop_flag.is_set():
-            attempt_started = time.monotonic()
-            try:
-                # Start tail process
-                ssh_cmd_optional = self._build_ssh_tail_command()
-
-                if ssh_cmd_optional is None:
-                    handled, reconnect_count, total_message_count, stop_loop = (
-                        self._poll_messages_with_pool(
-                            handler,
-                            reconnect_count,
-                            total_message_count,
-                            tracker,
-                        )
-                    )
-                    if stop_loop:
-                        break
-                    if handled:
-                        continue
-
-                assert ssh_cmd_optional is not None
-                ssh_cmd: list[str] = ssh_cmd_optional
-
-                self.logger.debug(
-                    f"Starting tail (attempt {reconnect_count + 1}): "
-                    f"{' '.join(str(x) for x in ssh_cmd)}"
-                )
-
-                self._proc = None
-                if self._requires_password_auth() and not self.control_path:
-                    child = self._spawn_tail_with_password(ssh_cmd)
-                    self._pexpect_child = child
-                    message_count = 0
-
-                    for line in self._iter_pexpect_lines(child):
-                        if self._stop_flag.is_set():
-                            break
-
-                        self._ssh_next_line += 1
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        try:
-                            message = json.loads(line)
-                            if not self._forward_message(message, handler, tracker):
-                                continue
-                            message_count += 1
-                            total_message_count += 1
-                            self.total_messages = total_message_count
-                        except json.JSONDecodeError as je:
-                            self.logger.warning(
-                                f"Malformed JSON message: {line[:100]}... Error: {je}"
-                            )
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Error handling message: {e}", exc_info=True
-                            )
-
-                    if child.isalive():
-                        child.close(force=True)
-
-                    self._pexpect_child = None
-                    return_code = (
-                        child.exitstatus if child.exitstatus is not None else 0
-                    )
-                    stderr = ""
-                else:
-                    self._proc = subprocess.Popen(
-                        ssh_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        bufsize=1,
-                    )
-
-                message_count = 0
-
-                if self._proc and self._proc.stdout:
-                    for line in self._proc.stdout:
-                        if self._stop_flag.is_set():
-                            break
-
-                        self._ssh_next_line += 1
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        try:
-                            message = json.loads(line)
-                            if not self._forward_message(message, handler, tracker):
-                                continue
-                            message_count += 1
-                            total_message_count += 1
-                            self.total_messages = total_message_count
-                        except json.JSONDecodeError as je:
-                            self.logger.warning(
-                                f"Malformed JSON message: {line[:100]}... Error: {je}"
-                            )
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Error handling message: {e}", exc_info=True
-                            )
-
-                    return_code = self._proc.wait()
-                    stderr = self._proc.stderr.read() if self._proc.stderr else ""
-                else:
-                    stderr = ""
-
-                if self._stop_flag.is_set():
-                    # Normal shutdown
-                    # self.logger.debug(
-                    #     f"Tail process stopped normally "
-                    #     f"(read {message_count} messages this session, "
-                    #     f"{total_message_count} total)"
-                    # )
-                    break
-
-                # Unexpected exit - try to reconnect.  Progress alone is not
-                # enough to clear the failure counter: a tail that dies right
-                # after emitting a line would otherwise reconnect forever, and
-                # each reconnect is a full SSH handshake when the master is gone.
-                session_seconds = time.monotonic() - attempt_started
-                if (
-                    message_count > 0
-                    and session_seconds >= self.healthy_session_seconds
-                ):
-                    self.logger.info(
-                        f"Tail process exited (code {return_code}) after "
-                        f"{session_seconds:.0f}s. Read {message_count} messages. "
-                        "Reconnecting..."
-                    )
-                    reconnect_count = 0
-                elif message_count > 0:
-                    self.logger.warning(
-                        f"Tail process exited (code {return_code}) after only "
-                        f"{session_seconds:.0f}s. Read {message_count} messages. "
-                        "Treating the connection as unstable."
-                    )
-                    reconnect_count += 1
-                else:
-                    # No messages received
-                    self.logger.warning(
-                        f"Tail process exited unexpectedly (code {return_code}). "
-                        f"No messages received. stderr: {stderr}"
-                    )
-                    reconnect_count += 1
-
-                if reconnect_count >= self.max_reconnect_attempts:
-                    self.logger.error(
-                        f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. "
-                        f"Total messages received: {total_message_count}"
-                    )
-                    break
-
-                # Wait before reconnecting
-                if not self._stop_flag.is_set():
-                    delay = self._reconnect_delay(reconnect_count)
-                    self.logger.debug(f"Reconnecting in {delay}s...")
-                    self._stop_flag.wait(delay)
-
-                if tracker.maybe_flush(handler):
-                    self._stop_flag.set()
-                    break
-
-            except Exception:
-                if self._stop_flag.is_set():
-                    break
-
-                self.logger.exception("Error in tail process")
-                reconnect_count += 1
-
-                if reconnect_count >= self.max_reconnect_attempts:
-                    self.logger.error(
-                        f"Max reconnect attempts reached. "
-                        f"Total messages received: {total_message_count}"
-                    )
-                    break
-
-                if not self._stop_flag.is_set():
-                    self._stop_flag.wait(self._reconnect_delay(reconnect_count))
-
-                if tracker.maybe_flush(handler):
-                    self._stop_flag.set()
-                    break
-
-        # self.logger.info(
-        #     f"Message reader finished. Total messages received: {total_message_count}"
-        # )
-
-    def _poll_messages_with_pool(
-        self,
-        handler,
-        reconnect_count: int,
-        total_message_count: int,
-        tracker: _ClosedMessageTracker,
-    ) -> tuple[bool, int, int, bool]:
-        """Poll messages.jsonl via SSH pool when ControlMaster is unavailable."""
-        if not self._ssh_pool:
-            self.logger.error(
-                "SSHMessageReader fallback requires an SSHConnectionPool "
-                "when ControlMaster is unavailable."
+        with self._read_lock:
+            pool = self._ssh_pool
+            if pool is None:
+                raise RuntimeError("SSHMessageReader has no SSH connection pool")
+            data = self._payload(
+                pool.run_bytes(self._read_command(), timeout=self.read_timeout)
             )
-            self._stop_flag.wait(self.reconnect_interval)
-            return True, reconnect_count, total_message_count, self._stop_flag.is_set()
+            if not data:
+                return 0, False
+            self._offset += len(data)
+            lines = (self._partial + data).split(b"\n")
+            self._partial = lines.pop()
+            for line in lines:
+                self._handle_line(line, handler, tracker)
+            return len(data), len(data) >= READ_CHUNK_BYTES
 
-        quoted_path = shlex.quote(self.remote_path)
-        next_line = self._fallback_next_line
-        message_count = 0
-        # Each poll is a full SSH connection while the master is unavailable,
-        # so idle polling backs off instead of hammering the login node.
+    def _handle_line(self, raw: bytes, handler, tracker: _ClosedMessageTracker) -> None:
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            return
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as je:
+            self.logger.warning(f"Malformed JSON message: {line[:100]}... Error: {je}")
+            return
+        try:
+            if self._forward_message(message, handler, tracker):
+                self.total_messages += 1
+        except Exception as e:
+            self.logger.warning(f"Error handling message: {e}", exc_info=True)
+
+    def _read_loop(self, handler) -> None:
+        """Poll the messages file until the step ends."""
+        tracker = self._closed_tracker
+        failures = 0
         idle_rounds = 0
-
         self.logger.debug(
-            "Polling %s for Pipes messages via SSH pool fallback",
+            "Polling %s for Pipes messages over the shared SSH master",
             self.remote_path,
         )
 
         while not self._stop_flag.is_set():
             try:
-                output = self._ssh_pool.run(
-                    f"tail -n +{next_line} {quoted_path} 2>/dev/null || true"
-                )
-            except SSH_ERRORS as exc:
-                if not self._stop_flag.is_set():
-                    self.logger.debug("Polling messages file failed: %s", exc)
-                break
-
-            if output:
-                lines = [line.strip() for line in output.splitlines()]
-                lines = [line for line in lines if line]
-                if lines:
-                    processed_lines = 0
-                    for line in lines:
-                        processed_lines += 1
-                        try:
-                            message = json.loads(line)
-                            if not self._forward_message(message, handler, tracker):
-                                continue
-                            message_count += 1
-                            total_message_count += 1
-                            self.total_messages = total_message_count
-                        except json.JSONDecodeError as je:
-                            self.logger.warning(
-                                f"Malformed JSON message: {line[:100]}... Error: {je}"
-                            )
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Error handling message: {e}", exc_info=True
-                            )
-                    next_line += processed_lines
-                    idle_rounds = 0
+                new_bytes, more = self._read_once(handler, tracker)
+            except Exception as exc:  # noqa: BLE001 - logged below
+                # The reader thread must survive anything and keep polling.
+                if self._stop_flag.is_set():
+                    break
+                failures += 1
+                if failures == self.max_reconnect_attempts:
+                    self.logger.error(
+                        f"Reading Pipes messages from {self.remote_path} failed "
+                        f"{failures} times in a row; retrying every "
+                        f"{self._reconnect_delay(failures):.0f}s. Last error: {exc}"
+                    )
+                elif failures == 1:
+                    self.logger.warning(
+                        f"Reading Pipes messages from {self.remote_path} failed; "
+                        f"retrying. Error: {exc}"
+                    )
                 else:
-                    idle_rounds += 1
+                    self.logger.debug(f"Reading Pipes messages failed again: {exc}")
+                delay = self._reconnect_delay(failures)
             else:
-                idle_rounds += 1
+                if failures:
+                    self.logger.info(
+                        f"Reading Pipes messages from {self.remote_path} recovered."
+                    )
+                failures = 0
+                idle_rounds = 0 if new_bytes else idle_rounds + 1
+                delay = 0.0 if more else self._poll_delay(idle_rounds)
 
-            self._stop_flag.wait(
-                min(self._reconnect_delay(idle_rounds), MAX_FALLBACK_POLL_SECONDS)
-            )
+            with self._read_lock:
+                if tracker.maybe_flush(handler):
+                    self._stop_flag.set()
+                    break
 
-            if tracker.maybe_flush(handler):
-                self._stop_flag.set()
-                break
+            if delay > 0 and self._wake.wait(delay):
+                self._wake.clear()
 
-        self._fallback_next_line = next_line
+    def _final_read(self, handler) -> None:
+        """Read what the step wrote since the last poll.
 
-        if tracker.maybe_flush(handler):
-            self._stop_flag.set()
-            return True, reconnect_count, total_message_count, True
-
-        if message_count == 0:
-            reconnect_count += 1
-            if reconnect_count >= self.max_reconnect_attempts:
-                self.logger.error(
-                    f"Max reconnect attempts ({self.max_reconnect_attempts}) reached. "
-                    f"Total messages received: {total_message_count}"
-                )
-                return True, reconnect_count, total_message_count, True
-        else:
-            reconnect_count = 0
-
-        if self._stop_flag.is_set():
-            return True, reconnect_count, total_message_count, True
-
-        return True, reconnect_count, total_message_count, False
-
-    def _build_ssh_tail_command(self) -> list[str] | None:
-        """Build SSH command to tail the remote messages file.
-
-        Returns:
-            List of command arguments for subprocess.Popen
-
+        Retries briefly until the 'closed' message is visible, because a
+        shared file system may show the last bytes on the login node late.
         """
-        control_path = self.control_path
+        tracker = self._closed_tracker
+        deadline = time.monotonic() + self.final_read_timeout
+        while True:
+            try:
+                while self._read_once(handler, tracker)[1]:
+                    pass
+            except Exception as exc:  # noqa: BLE001 - logged, must not mask the step
+                self.logger.warning(
+                    f"Final read of Pipes messages from {self.remote_path} "
+                    f"failed: {exc}"
+                )
+                break
+            if self._closed_message is not None or time.monotonic() >= deadline:
+                break
+            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
-        base_cmd = [
-            "ssh",
-            *self.ssh_config.get_multiplexing_opts(control_path=control_path),
-            *self.ssh_config.get_common_ssh_opts(
-                server_alive_interval=15,
-                server_alive_count_max=3,
-            ),
-            "-p",
-            str(self.ssh_config.port),
-        ]
-
-        # Covers key, password and inherited auth, and honours batch_mode.
-        base_cmd.extend(self.ssh_config.get_auth_opts())
-
-        if control_path:
-            self.logger.debug(f"Using ControlMaster: {control_path}")
-
-        # Add target
-        base_cmd.append(f"{self.ssh_config.user}@{self.ssh_config.host}")
-
-        # Tail command with retry logic
-        # -F: follow by name (handles log rotation)
-        # --retry: keep trying if file doesn't exist yet
-        # -n +1: start from beginning of file
-        tail_start_line = max(self._ssh_next_line, 1)
-        tail_cmd = (
-            f"tail -F --retry -n +{tail_start_line} {self.remote_path} 2>/dev/null "
-            f"|| tail -f {self.remote_path}"
-        )
-        base_cmd.append(tail_cmd)
-
-        return base_cmd
+        with self._read_lock:
+            partial, self._partial = self._partial, b""
+            if partial.strip():
+                # The writer ends every message with a newline; a complete
+                # message without one is still worth forwarding.
+                self._handle_line(partial, handler, tracker)
 
     def no_messages_debug_text(self) -> str:
         """Return debug text shown when no messages received."""
@@ -762,111 +551,3 @@ class SSHMessageReader(PipesMessageReader):
         if self.ssh_config.uses_password_auth:
             return "password"
         return "inherited from ~/.ssh/config"
-
-    def _requires_password_auth(self) -> bool:
-        if self.ssh_config.uses_password_auth:
-            return True
-        return bool(
-            self.ssh_config.jump_host and self.ssh_config.jump_host.uses_password_auth
-        )
-
-    def _collect_passwords(self) -> list[str]:
-        passwords: list[str] = []
-        if self.ssh_config.jump_host and self.ssh_config.jump_host.password:
-            passwords.append(self.ssh_config.jump_host.password)
-        if self.ssh_config.password:
-            passwords.append(self.ssh_config.password)
-        return passwords
-
-    def _spawn_tail_with_password(self, ssh_cmd: list[str]):
-        try:
-            import pexpect
-        except ImportError as exc:  # pragma: no cover - dependency guard
-            raise RuntimeError(
-                "Password-based log tailing requires the 'pexpect' package. "
-                "Install it with 'pip install pexpect'."
-            ) from exc
-
-        cmd_str = " ".join(shlex.quote(part) for part in ssh_cmd)
-        self.logger.debug(f"Spawning password-based tail: {cmd_str}")
-        child = pexpect.spawn(cmd_str, timeout=120, encoding="utf-8")
-        child.delaybeforesend = 0
-        passwords = self._collect_passwords()
-        if not passwords:
-            child.close(force=True)
-            raise RuntimeError(
-                "Password authentication requested but no password provided."
-            )
-
-        pw_index = 0
-        fallback_password = passwords[-1]
-        fallback_attempts = 0
-        prompt_timeout = 120
-
-        while True:
-            index = child.expect(
-                [
-                    r"(?i)password:",
-                    r"(?i)passphrase",
-                    r"(?i)verification code",
-                    r"(?i)otp",
-                    pexpect.EOF,
-                    pexpect.TIMEOUT,
-                ],
-                timeout=prompt_timeout,
-            )
-
-            if index in (0, 1):
-                if pw_index < len(passwords):
-                    child.sendline(passwords[pw_index])
-                    pw_index += 1
-                    continue
-                if fallback_password and fallback_attempts < 3:
-                    child.sendline(fallback_password)
-                    fallback_attempts += 1
-                    continue
-                child.close(force=True)
-                raise RuntimeError("Authentication failed: no password remaining")
-            if index in (2, 3):  # OTP or verification code
-                # Prompt user interactively via /dev/tty if possible.
-                try:
-                    with (
-                        open("/dev/tty", "w", encoding="utf-8", buffering=1) as tty_out,
-                        open("/dev/tty", "r", encoding="utf-8", buffering=1) as tty_in,
-                    ):
-                        tty_out.write(
-                            f"Enter verification code for {self.ssh_config.host}: "
-                        )
-                        tty_out.flush()
-                        code = tty_in.readline().strip()
-                except OSError:
-                    child.close(force=True)
-                    raise RuntimeError(
-                        "OTP required but no interactive TTY is available."
-                    )
-                if not code:
-                    child.close(force=True)
-                    raise RuntimeError("Empty OTP provided; aborting tail session")
-                child.sendline(code)
-                continue
-            if index == 4:  # EOF
-                break
-            if index == 5:  # TIMEOUT -> assume command started
-                break
-
-        child.timeout = 5
-        return child
-
-    def _iter_pexpect_lines(self, child):
-        import pexpect
-
-        while not self._stop_flag.is_set():
-            try:
-                chunk = child.readline()
-                if not chunk:
-                    continue
-                yield chunk
-            except pexpect.TIMEOUT:
-                continue
-            except pexpect.EOF:
-                break

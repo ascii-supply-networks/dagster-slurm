@@ -18,6 +18,8 @@ The socket lives at `~/.ssh/dagster-slurm/cm-<user>@<host>:<port>` and is delibe
 | `DAGSTER_SLURM_SSH_CLOSE_MASTER_ON_EXIT` | unset                  | Set to `1` to tear the master down when a run ends instead of leaving it for reuse.                     |
 | `DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE` | `60`                   | Seconds to wait after a failed master start before the next login. `0` disables the backoff.            |
 | `DAGSTER_SLURM_SSH_FAILURE_BACKOFF_MAX`  | `1800`                 | Upper limit in seconds for that wait. The wait doubles for each consecutive failure.                    |
+| `DAGSTER_SLURM_SSH_MAX_SESSIONS`         | `4`                    | Sessions all processes together may open on one master at once. Keep it below sshd's `MaxSessions`.     |
+| `DAGSTER_SLURM_SSH_SESSION_WAIT_TIMEOUT` | `1800`                 | Seconds a command waits for a free session slot before it fails with `SSHSessionSlotTimeoutError`.      |
 
 Note that these command-line options take precedence over `~/.ssh/config`, so a `ControlPath` entry there will not change what `dagster-slurm` does — it only affects SSH commands you run yourself.
 
@@ -66,6 +68,33 @@ Raw commands returned by `get_ssh_base_command()` and
 `SSHConnectionPool` to establish it first; the legacy `ssh_run` helper does
 this automatically. Jump-host connections have their own shared master and
 are established before the target master.
+
+### Concurrent steps and sshd `MaxSessions`
+
+sshd allows at most `MaxSessions` (default 10, lower on some sites) open
+sessions per connection. Every command, `scp` transfer and Pipes message read
+is one session, and with Dagster's multiprocess executor all step processes,
+sensors and the run worker share the same master. Without a shared limit, many
+steps that start at once fail with:
+
+```
+mux_client_request_session: session request failed: Session open refused by peer
+```
+
+Each session therefore first takes one of `max_sessions` slots on the master:
+an `flock` on `<control socket>.slot<N>`, shared by all processes that use the
+same control directory. A caller waits for a free slot instead of failing. The
+kernel releases the lock when its process exits, so a crashed step cannot leak
+a slot. Nested calls in one thread reuse the slot they hold.
+
+The limit defaults to 4. Set `SSHConnectionResource(max_sessions=...)` or
+`DAGSTER_SLURM_SSH_MAX_SESSIONS` to change it, and keep it below the site's
+`MaxSessions`.
+
+The Pipes message reader holds no session while a step runs. It reads
+`messages.jsonl` from the last byte offset in one short command about once a
+second, backs off to every 5 seconds while the file does not grow, and reads
+once more when the step ends.
 
 ## Slurm status polling cadence
 

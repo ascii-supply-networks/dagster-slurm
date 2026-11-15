@@ -8,6 +8,7 @@ from .metrics import (
     SlurmMetricsCollector,
     SlurmMetricsContext,
 )
+from .ssh_control import SSHSessionSlotTimeoutError
 from .ssh_helpers import TERMINAL_STATES, normalize_slurm_state, ssh_check, ssh_run
 from .ssh_pool import SSHConnectionPool, SSHMasterBackoffError
 
@@ -17,6 +18,7 @@ __all__ = [
     "SSHConnectionPool",
     "SSHMasterBackoffError",
     "SSHMessageReader",
+    "SSHSessionSlotTimeoutError",
     "SlurmJobMetrics",
     "SlurmMetricsCallback",
     "SlurmMetricsCollector",
