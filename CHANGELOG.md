@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.24.3 (2026-11-15)
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`4bf1ff2`](https://github.com/ascii-supply-networks/dagster-slurm/commit/4bf1ff2aeca47640bc21bf660865ba0ed833e854))
+
+
 ## v1.24.2-rc.1 (2026-11-15)
 
 ### Bug Fixes
