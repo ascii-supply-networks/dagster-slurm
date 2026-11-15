@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v1.24.2-rc.1 (2026-11-15)
+
+### Bug Fixes
+
+- Ssh session slots 237 ([#238](https://github.com/ascii-supply-networks/dagster-slurm/pull/238),
+  [`c9e8bc7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9e8bc7bb1004734251a01b72ee0a83847b527d1))
+
+- **ssh**: Bound concurrent sessions on the shared ControlMaster
+  ([#238](https://github.com/ascii-supply-networks/dagster-slurm/pull/238),
+  [`c9e8bc7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9e8bc7bb1004734251a01b72ee0a83847b527d1))
+
+### Chores
+
+- Update uv lockfile version [skip ci]
+  ([`5520750`](https://github.com/ascii-supply-networks/dagster-slurm/commit/5520750196b581ccd9701909b4ca432f68aedb78))
+
+### Testing
+
+- Wait for the election claim refresh instead of a fixed window
+  ([#238](https://github.com/ascii-supply-networks/dagster-slurm/pull/238),
+  [`c9e8bc7`](https://github.com/ascii-supply-networks/dagster-slurm/commit/c9e8bc7bb1004734251a01b72ee0a83847b527d1))
+
+
 ## v1.24.2 (2026-11-11)
 
 ### Chores
