@@ -1194,9 +1194,14 @@ def test_the_election_claim_is_refreshed_while_ray_starts(tmp_path, monkeypatch)
     claims: list[float] = []
 
     def slow_start(self, **kwargs):
-        for _ in range(3):
+        # Wait for a refresh instead of sampling a fixed window: each refresh
+        # runs several shell commands, which a loaded CI runner can make slower
+        # than the claim interval.
+        deadline = time.monotonic() + 10
+        claims.append(json.loads(metadata_path.read_text())["election"]["since"])
+        while claims[-1] <= claims[0] and time.monotonic() < deadline:
+            time.sleep(0.05)
             claims.append(json.loads(metadata_path.read_text())["election"]["since"])
-            time.sleep(0.25)
 
     monkeypatch.setattr(
         SlurmAllocation,
