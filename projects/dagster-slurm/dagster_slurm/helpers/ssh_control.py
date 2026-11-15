@@ -23,17 +23,30 @@ Environment overrides:
   doubles for each consecutive failure. ``0`` disables the backoff.
 - ``DAGSTER_SLURM_SSH_FAILURE_BACKOFF_MAX``: upper limit in seconds for that
   wait (default ``1800``).
+- ``DAGSTER_SLURM_SSH_MAX_SESSIONS``: sessions (commands, transfers, reads)
+  that all processes together may open on one master at the same time
+  (default ``4``). ``SSHConnectionResource.max_sessions`` takes precedence.
+- ``DAGSTER_SLURM_SSH_SESSION_WAIT_TIMEOUT``: seconds to wait for a free
+  session slot before failing (default ``1800``).
 
 Failed master starts are recorded in ``<control path>.failed`` next to the
 socket. Every process that uses the same target reads this marker under the
 target's start lock, so a refused login is not retried by each sensor tick,
 run worker or helper until the backoff window ends.
+
+sshd refuses more than ``MaxSessions`` (default 10) concurrent sessions per
+connection, and every Dagster step process, sensor and run worker shares the
+same master. Each session therefore first takes one of ``max_sessions`` slots,
+an ``flock`` on ``<control path>.slot<N>``. The kernel releases the lock when
+its holder exits, so a crashed process cannot leak a slot.
 """
 
 import hashlib
 import json
 import math
 import os
+import random
+import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -46,11 +59,22 @@ CONTROL_DIR_ENV = "DAGSTER_SLURM_SSH_CONTROL_DIR"
 CONTROL_PERSIST_ENV = "DAGSTER_SLURM_SSH_CONTROL_PERSIST"
 FAILURE_BACKOFF_BASE_ENV = "DAGSTER_SLURM_SSH_FAILURE_BACKOFF_BASE"
 FAILURE_BACKOFF_MAX_ENV = "DAGSTER_SLURM_SSH_FAILURE_BACKOFF_MAX"
+MAX_SESSIONS_ENV = "DAGSTER_SLURM_SSH_MAX_SESSIONS"
+SESSION_WAIT_TIMEOUT_ENV = "DAGSTER_SLURM_SSH_SESSION_WAIT_TIMEOUT"
 
 DEFAULT_CONTROL_DIR = "~/.ssh/dagster-slurm"
 DEFAULT_CONTROL_PERSIST = "10m"
 DEFAULT_FAILURE_BACKOFF_BASE_SECONDS = 60.0
 DEFAULT_FAILURE_BACKOFF_MAX_SECONDS = 1800.0
+#: Below OpenSSH's default ``MaxSessions`` of 10, and safe on sites that lower it.
+DEFAULT_MAX_SESSIONS = 4
+DEFAULT_SESSION_WAIT_TIMEOUT_SECONDS = 1800.0
+
+#: Wait between two scans of the session slots, doubled up to the maximum.
+_SLOT_RETRY_INITIAL_SECONDS = 0.02
+_SLOT_RETRY_MAX_SECONDS = 0.5
+#: Waits longer than this are logged, so a saturated master is visible.
+_SLOT_WAIT_LOG_AFTER_SECONDS = 5.0
 
 #: Characters of the failure reason kept in the marker file.
 MAX_FAILURE_REASON_LENGTH = 500
@@ -105,6 +129,154 @@ def master_start_lock(control_path: str) -> Generator[None, None, None]:
             yield
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+class SSHSessionSlotTimeoutError(RuntimeError):
+    """No session slot on the shared master became free in time.
+
+    A subclass of ``RuntimeError``, like every other failed SSH command.
+    """
+
+
+def resolve_max_sessions(configured: int | None = None) -> int:
+    """Return the session limit per master: configured, from env, or default."""
+    if configured is not None:
+        return max(1, int(configured))
+    raw = os.getenv(MAX_SESSIONS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MAX_SESSIONS
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        get_dagster_logger().warning(
+            "Ignoring %s=%r: expected a positive integer. Using %s.",
+            MAX_SESSIONS_ENV,
+            raw,
+            DEFAULT_MAX_SESSIONS,
+        )
+        return DEFAULT_MAX_SESSIONS
+    return value
+
+
+def session_wait_timeout() -> float:
+    """Return how long a caller waits for a free session slot."""
+    return _seconds_from_env(
+        SESSION_WAIT_TIMEOUT_ENV, DEFAULT_SESSION_WAIT_TIMEOUT_SECONDS
+    )
+
+
+def session_slot_path(control_path: str, index: int) -> Path:
+    """Return the lock file of one session slot on a master."""
+    return Path(f"{control_path}.slot{index}")
+
+
+#: Slots held by the current thread: control path -> [fd, nesting depth].
+_held_slots = threading.local()
+
+
+def _slots_held_by_thread() -> dict[str, list[int]]:
+    held = getattr(_held_slots, "slots", None)
+    if held is None:
+        held = {}
+        _held_slots.slots = held
+    return held
+
+
+def _try_lock_slot(control_path: str, index: int) -> int | None:
+    """Lock one slot without waiting; return its descriptor, or None if busy."""
+    import fcntl
+
+    # O_CLOEXEC keeps the lock out of the ssh/scp children, so it is released
+    # exactly when this process lets go of it or dies.
+    fd = os.open(
+        session_slot_path(control_path, index),
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _acquire_slot(control_path: str, limit: int, timeout: float | None) -> int:
+    """Wait for any free slot of ``limit`` and return its locked descriptor."""
+    wait_limit = session_wait_timeout() if timeout is None else timeout
+    started = time.monotonic()
+    deadline = started + wait_limit
+    # Start the scan at a process-specific slot so concurrent processes do not
+    # all contend for slot 0 first.
+    first = os.getpid() % limit
+    delay = _SLOT_RETRY_INITIAL_SECONDS
+    logged = False
+    while True:
+        for step in range(limit):
+            fd = _try_lock_slot(control_path, (first + step) % limit)
+            if fd is not None:
+                if logged:
+                    get_dagster_logger().debug(
+                        "Got an SSH session slot for %s after %.1fs.",
+                        control_path,
+                        time.monotonic() - started,
+                    )
+                return fd
+        now = time.monotonic()
+        if now >= deadline:
+            raise SSHSessionSlotTimeoutError(
+                f"All {limit} SSH session slots for {control_path} stayed busy "
+                f"for {wait_limit:.0f}s. Raise {MAX_SESSIONS_ENV} (keep it below "
+                f"sshd's MaxSessions) or {SESSION_WAIT_TIMEOUT_ENV}."
+            )
+        if not logged and now - started >= _SLOT_WAIT_LOG_AFTER_SECONDS:
+            logged = True
+            get_dagster_logger().info(
+                "Waiting for a free SSH session slot for %s: all %s are in use.",
+                control_path,
+                limit,
+            )
+        time.sleep(min(delay * random.uniform(0.5, 1.5), max(0.0, deadline - now)))
+        delay = min(delay * 2, _SLOT_RETRY_MAX_SECONDS)
+
+
+@contextmanager
+def session_slot(
+    control_path: str, limit: int, *, timeout: float | None = None
+) -> Generator[None, None, None]:
+    """Hold one of ``limit`` session slots on a master, across processes.
+
+    Wraps every SSH session (command, transfer or read) on the shared master,
+    so all processes together never open more than ``limit`` sessions and so
+    never hit sshd's ``MaxSessions``. A caller waits for a free slot instead of
+    failing; after ``timeout`` (default from
+    ``DAGSTER_SLURM_SSH_SESSION_WAIT_TIMEOUT``) it raises
+    :class:`SSHSessionSlotTimeoutError`.
+
+    Nested calls in one thread reuse the slot the thread already holds.
+    """
+    held = _slots_held_by_thread()
+    entry = held.get(control_path)
+    if entry is not None:
+        entry[1] += 1
+        try:
+            yield
+        finally:
+            entry[1] -= 1
+        return
+
+    fd = _acquire_slot(control_path, max(1, limit), timeout)
+    held[control_path] = [fd, 1]
+    try:
+        yield
+    finally:
+        held.pop(control_path, None)
+        os.close(fd)  # Closing the last descriptor releases the flock.
 
 
 def control_socket_path(user: str, host: str, port: int) -> str | None:

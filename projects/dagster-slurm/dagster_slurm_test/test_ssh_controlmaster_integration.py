@@ -19,7 +19,6 @@ from unittest.mock import Mock
 
 import pytest
 from dagster_slurm.helpers import SSHConnectionPool
-from dagster_slurm.helpers.message_readers import SSHMessageReader
 from dagster_slurm.helpers.ssh_helpers import ssh_run
 from dagster_slurm.pipes_clients.slurm_pipes_client import _SlurmLogFollower
 from dagster_slurm.resources.ssh import SSHConnectionResource
@@ -110,12 +109,7 @@ def local_ssh(
 def _commands(ssh: SSHConnectionResource, root: Path) -> list[list[str]]:
     local_file = root / "upload"
     local_file.write_text("payload")
-    tails = [
-        SSHMessageReader(
-            remote_path="/unused", ssh_config=ssh
-        )._build_ssh_tail_command(),
-    ]
-    commands = [
+    return [
         [*ssh.get_ssh_base_command(), "true"],
         [
             *ssh.get_scp_base_command(),
@@ -123,11 +117,6 @@ def _commands(ssh: SSHConnectionResource, root: Path) -> list[list[str]]:
             f"{ssh.user}@{ssh.host}:{root / 'received'}",
         ],
     ]
-    for tail in tails:
-        assert tail is not None
-        tail[-1] = "true"
-        commands.append(tail)
-    return commands
 
 
 def test_commands_transfers_streams_and_legacy_helper_share_one_connection(local_ssh):
@@ -318,6 +307,86 @@ def test_session_exhaustion_does_not_open_another_connection(local_ssh):
         finally:
             for holder in holders:
                 holder.communicate(timeout=5)
+
+
+_CONCURRENT_STEP = """
+import json, sys, time
+from dagster_slurm.helpers import SSHConnectionPool
+from dagster_slurm.helpers.message_readers import SSHMessageReader
+from dagster_slurm.resources.ssh import SSHConnectionResource
+
+ssh = SSHConnectionResource.model_validate_json(sys.argv[1])
+root, index = sys.argv[2], sys.argv[3]
+messages = f"{root}/step-{index}.jsonl"
+
+
+class Handler:
+    def __init__(self):
+        self.methods = []
+
+    def handle_message(self, message):
+        self.methods.append(message["method"])
+
+
+handler = Handler()
+with SSHConnectionPool(ssh) as pool:
+    reader = SSHMessageReader(messages, ssh, ssh_pool=pool, poll_interval=0.05)
+    with reader.read_messages(handler):
+        with open(messages, "w") as file:
+            file.write(json.dumps({"method": "opened", "params": {}}) + "\\n")
+            file.flush()
+            for round in range(5):
+                assert pool.run(f"printf {round}", timeout=30) == str(round)
+            pool.upload_file(f"{root}/upload", f"{root}/uploaded-{index}")
+            file.write(json.dumps({"method": "closed", "params": {}}) + "\\n")
+assert handler.methods == ["opened", "closed"], handler.methods
+print("ok")
+"""
+
+
+@pytest.mark.parametrize("local_ssh", [2], indirect=True)
+def test_concurrent_steps_stay_within_max_sessions(local_ssh, monkeypatch):
+    """Issue #237: many step processes on one master must not exceed MaxSessions.
+
+    Six processes each stream Pipes messages while running commands and an
+    upload through the shared master of an sshd with ``MaxSessions 2``.
+    """
+    ssh, log = local_ssh
+    root = log.parent
+    (root / "upload").write_text("payload")
+    monkeypatch.setenv("DAGSTER_SLURM_SSH_MAX_SESSIONS", "2")
+
+    def step(index: int) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _CONCURRENT_STEP,
+                ssh.model_dump_json(),
+                str(root),
+                str(index),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=os.environ.copy(),
+            check=False,
+        )
+
+    with (
+        SSHConnectionPool(ssh),
+        concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor,
+    ):
+        results = list(executor.map(step, range(6)))
+
+    server_log = log.read_text()
+    for result in results:
+        assert result.returncode == 0, result.stderr + server_log
+        assert result.stdout.strip() == "ok"
+    assert "refused" not in server_log.lower(), server_log
+    assert server_log.count("Accepted publickey") == 1
+    for index in range(6):
+        assert (root / f"uploaded-{index}").read_text() == "payload"
 
 
 def test_explicit_jump_and_target_share_their_masters(local_ssh):

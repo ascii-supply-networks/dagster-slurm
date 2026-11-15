@@ -61,7 +61,7 @@ def ssh_run(cmd: str, ssh_resource) -> tuple[str, str, int]:
 
     from .ssh_pool import SSHConnectionPool
 
-    with SSHConnectionPool(ssh_resource):
+    with SSHConnectionPool(ssh_resource) as pool, pool.session_slot():
         result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
     return result.stdout, result.stderr, result.returncode
 

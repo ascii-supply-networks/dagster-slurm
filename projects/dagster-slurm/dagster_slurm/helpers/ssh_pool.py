@@ -6,7 +6,8 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,8 @@ from .ssh_control import (
     master_start_lock,
     read_master_start_failure,
     record_master_start_failure,
+    resolve_max_sessions,
+    session_slot,
 )
 
 if TYPE_CHECKING:
@@ -506,6 +509,68 @@ class SSHConnectionPool:
             if self._should_close_master():
                 self.close_master()
 
+    @property
+    def max_sessions(self) -> int:
+        """Sessions all processes together may open on this master at once."""
+        return resolve_max_sessions(getattr(self.config, "max_sessions", None))
+
+    @contextmanager
+    def session_slot(self) -> Generator[None, None, None]:
+        """Hold one cross-process session slot on the shared master.
+
+        Every SSH session through the master - command, transfer or read -
+        runs inside a slot, so concurrent Dagster step processes, sensors and
+        run workers together stay below sshd's ``MaxSessions`` instead of
+        failing with ``Session open refused by peer``. Callers wait for a free
+        slot. Nested calls in one thread reuse the slot the thread holds.
+        """
+        control_path = self.control_path
+        if not control_path:
+            # No master: the command itself is refused before any SSH runs.
+            yield
+            return
+        with session_slot(control_path, self.max_sessions):
+            yield
+
+    def _require_master(self) -> None:
+        if not self._master_started and not self._fallback_mode:
+            raise RuntimeError("SSH pool not started - use context manager")
+        if self._fallback_mode:
+            raise RuntimeError(
+                f"SSH ControlMaster unavailable: {self._fallback_reason}"
+            )
+
+    def _ssh_command(self, cmd: str) -> list[str]:
+        """Build the ssh invocation that runs ``cmd`` over the master."""
+        # Wrap in clean shell
+        remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
+        if self.config.post_login_command:
+            template = self.config.post_login_command
+            if "{cmd}" in template:
+                remote_cmd = template.format(cmd=remote_cmd)
+            else:
+                remote_cmd = f"{template} && {remote_cmd}"
+
+        ssh_cmd = [
+            "ssh",
+            *self._multiplexing_opts(),
+            *self.config.get_common_ssh_opts(),
+            "-p",
+            str(self.config.port),
+            *self.config.get_key_auth_opts(),
+        ]
+        if self.config.requires_tty:
+            ssh_cmd.append("-tt")
+        ssh_cmd.extend([f"{self.config.user}@{self.config.host}", remote_cmd])
+        return ssh_cmd
+
+    def _command_error(self, cmd: str, returncode: int, stdout: str, stderr: str):
+        return RuntimeError(
+            f"SSH command failed (exit {returncode}): {cmd}\n"
+            f"stdout: {stdout}\n"
+            f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
+        )
+
     def run(self, cmd: str, timeout: int | None = None) -> str:
         """Run command using pooled connection.
 
@@ -520,52 +585,50 @@ class SSHConnectionPool:
             RuntimeError: If command fails or pool not started
 
         """
-        with self._lock:
-            if not self._master_started and not self._fallback_mode:
-                raise RuntimeError("SSH pool not started - use context manager")
-
-            if self._fallback_mode:
-                raise RuntimeError(
-                    f"SSH ControlMaster unavailable: {self._fallback_reason}"
-                )
-
+        self._require_master()
+        # Slot before lock: a thread never waits for a slot while it holds the
+        # lock another slot holder of this pool needs.
+        with self.session_slot(), self._lock:
+            self._require_master()
             self._ensure_master_alive()
-
-            # Wrap in clean shell
-            remote_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
-            if self.config.post_login_command:
-                template = self.config.post_login_command
-                if "{cmd}" in template:
-                    remote_cmd = template.format(cmd=remote_cmd)
-                else:
-                    remote_cmd = f"{template} && {remote_cmd}"
-
-            needs_tty = self.config.requires_tty
-
-            ssh_cmd = [
-                "ssh",
-                *self._multiplexing_opts(),
-                *self.config.get_common_ssh_opts(),
-                "-p",
-                str(self.config.port),
-                *self.config.get_key_auth_opts(),
-            ]
-            if needs_tty:
-                ssh_cmd.append("-tt")
-            ssh_cmd.extend([f"{self.config.user}@{self.config.host}", remote_cmd])
             result = subprocess.run(
-                ssh_cmd, capture_output=True, text=True, timeout=timeout, check=False
+                self._ssh_command(cmd),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
             )
             returncode, stdout, stderr = result.returncode, result.stdout, result.stderr
 
-            if returncode != 0:
-                raise RuntimeError(
-                    f"SSH command failed (exit {returncode}): {cmd}\n"
-                    f"stdout: {stdout}\n"
-                    f"stderr: {stderr}{self.config.host_key_error_hint(stderr)}{self.config.auth_error_hint(stderr)}"
-                )
+        if returncode != 0:
+            raise self._command_error(cmd, returncode, stdout, stderr)
 
-            return stdout
+        return stdout
+
+    def run_bytes(self, cmd: str, timeout: float | None = None) -> bytes:
+        """Run a command like :meth:`run` and return its raw stdout bytes.
+
+        For callers that track byte offsets, such as the Pipes message reader.
+        """
+        self._require_master()
+        with self.session_slot(), self._lock:
+            self._require_master()
+            self._ensure_master_alive()
+            result = subprocess.run(
+                self._ssh_command(cmd),
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+
+        if result.returncode != 0:
+            raise self._command_error(
+                cmd,
+                result.returncode,
+                result.stdout.decode("utf-8", errors="replace"),
+                result.stderr.decode("utf-8", errors="replace"),
+            )
+        return result.stdout
 
     def write_file(self, content: str, remote_path: str):
         """Write content to remote file via heredoc."""
@@ -596,7 +659,8 @@ class SSHConnectionPool:
         self.run(f"mkdir -p {shlex.quote(remote_dir)}")
 
         # Build SCP command
-        with self._lock:
+        with self.session_slot(), self._lock:
+            self._require_master()
             self._ensure_master_alive()
 
             scp_cmd = [
